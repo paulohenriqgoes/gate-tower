@@ -1,8 +1,8 @@
 # Dependencies
 node_modules/
 
-# Build output
-dist/
+# Build output liberado devido ao uso do gh-pages
+# dist/
 
 # Logs
 npm-debug.log*
