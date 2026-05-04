@@ -6,7 +6,7 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 
 import { ArenaSystem } from "./arena/ArenaSystem";
-import { XRManager } from "./xr/XRManager";
+// import { XRManager } from "./xr/XRManager";
 
 async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<Scene> {
 	const scene = new Scene(engine);
@@ -30,8 +30,8 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	const arenaSystem = new ArenaSystem(scene);
 	const arena = arenaSystem.buildInitialArena();
 
-	const xrManager = new XRManager(scene, [arena.ground]);
-	await xrManager.initialize();
+	// const xrManager = new XRManager(scene, [arena.ground]);
+	// await xrManager.initialize();
 
 	return scene;
 }
