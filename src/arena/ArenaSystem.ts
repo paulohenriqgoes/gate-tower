@@ -3,10 +3,12 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
 export interface ArenaBuildResult {
+  root: TransformNode;
   ground: Mesh;
   towerMeshes: Mesh[];
 }
@@ -23,6 +25,8 @@ export class ArenaSystem {
   }
 
   public buildInitialArena(): ArenaBuildResult {
+    const arenaRoot = new TransformNode("arena-root", this.scene);
+
     const baseGround = MeshBuilder.CreateGround(
       "arena-ground",
       {
@@ -31,6 +35,7 @@ export class ArenaSystem {
       },
       this.scene
     );
+    baseGround.parent = arenaRoot;
 
     const pathMaterial = this.createPatternMaterial(
       "path-material",
@@ -76,21 +81,24 @@ export class ArenaSystem {
         } else {
           tile.material = grassMaterial;
         }
+
+        tile.parent = arenaRoot;
       }
     }
 
     baseGround.position.y = 0;
     baseGround.isVisible = false;
 
-    const towerMeshes = this.createTowerPlaceholders();
+    const towerMeshes = this.createTowerPlaceholders(arenaRoot);
 
     return {
+      root: arenaRoot,
       ground: baseGround,
       towerMeshes,
     };
   }
 
-  private createTowerPlaceholders(): Mesh[] {
+  private createTowerPlaceholders(arenaRoot: TransformNode): Mesh[] {
     const blueTowerMaterial = new StandardMaterial("blue-tower-material", this.scene);
     blueTowerMaterial.diffuseColor = Color3.FromHexString("#2f6fff");
 
@@ -109,6 +117,7 @@ export class ArenaSystem {
       );
       blueTower.position = new Vector3(xPosition, 1.5, -14);
       blueTower.material = blueTowerMaterial;
+      blueTower.parent = arenaRoot;
       towers.push(blueTower);
 
       const redTower = MeshBuilder.CreateCylinder(
@@ -118,6 +127,7 @@ export class ArenaSystem {
       );
       redTower.position = new Vector3(xPosition, 1.5, 14);
       redTower.material = redTowerMaterial;
+      redTower.parent = arenaRoot;
       towers.push(redTower);
     }
 

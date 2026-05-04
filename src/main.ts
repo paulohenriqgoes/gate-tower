@@ -95,7 +95,7 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	const arenaSystem = new ArenaSystem(scene);
 	const arena = arenaSystem.buildInitialArena();
 
-	const xrManager = new XRManager(scene, [arena.ground]);
+	const xrManager = new XRManager(scene, [arena.ground], arena.root);
 	await xrManager.initialize();
 
 	return scene;
