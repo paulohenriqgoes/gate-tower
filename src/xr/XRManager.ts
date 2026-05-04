@@ -8,6 +8,7 @@ import "@babylonjs/core/Helpers/sceneHelpers";
 import "@babylonjs/core/XR/webXRDefaultExperience";
 import { WebXRFeatureName } from "@babylonjs/core/XR/webXRFeaturesManager";
 import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
+// @ts-ignore - Importação necessária para registrar a feature no FeaturesManager
 import { WebXRHitTest } from "@babylonjs/core/XR/features/WebXRHitTest";
 import { AdvancedDynamicTexture, Button, Control, TextBlock } from "@babylonjs/gui";
 import type { IWebXRHitResult } from "@babylonjs/core/XR/features/WebXRHitTest";
@@ -62,7 +63,7 @@ export class XRManager {
           sessionMode: "immersive-ar",
           referenceSpaceType: "local-floor",
         },
-        optionalFeatures: true,
+        optionalFeatures: ["hit-test", "anchors"],
       });
 
       this.hitTestFeature = this.xrHelper.baseExperience.featuresManager.enableFeature(
@@ -71,7 +72,6 @@ export class XRManager {
         {
           enableTransientHitTest: false,
           disablePermanentHitTest: false,
-          useReferenceSpace: true,
         },
         true,
         false
