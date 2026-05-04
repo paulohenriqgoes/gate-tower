@@ -2,6 +2,7 @@ import { WebXRSessionManager } from "@babylonjs/core/XR/webXRSessionManager";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 import type { WebXRDefaultExperience } from "@babylonjs/core/XR/webXRDefaultExperience";
+import "@babylonjs/core/Helpers/sceneHelpers";
 import "@babylonjs/core/XR/webXRDefaultExperience";
 import { AdvancedDynamicTexture, Button, Control, TextBlock } from "@babylonjs/gui";
 
@@ -22,28 +23,43 @@ export class XRManager {
   }
 
   public async initialize(): Promise<void> {
-    this.isARSupported = await WebXRSessionManager.IsSessionSupportedAsync("immersive-ar");
     this.createBabylonToggleUI();
+
+    try {
+      this.isARSupported = await WebXRSessionManager.IsSessionSupportedAsync("immersive-ar");
+    } catch (error) {
+      this.isARSupported = false;
+      this.updateUI("RA indisponivel", true);
+      this.throwXRManagerError("Falha ao verificar suporte de RA", error);
+      return;
+    }
 
     if (!this.isARSupported) {
       this.updateUI("RA indisponivel", true);
       return;
     }
 
-    this.xrHelper = await this.scene.createDefaultXRExperienceAsync({
-      floorMeshes: this.floorMeshes,
-      uiOptions: {
-        sessionMode: "immersive-ar",
-        referenceSpaceType: "local-floor",
-      },
-      optionalFeatures: true,
-    });
+    try {
+      this.xrHelper = await this.scene.createDefaultXRExperienceAsync({
+        floorMeshes: this.floorMeshes,
+        uiOptions: {
+          sessionMode: "immersive-ar",
+          referenceSpaceType: "local-floor",
+        },
+        optionalFeatures: true,
+      });
 
-    this.xrHelper.baseExperience.onStateChangedObservable.add(() => {
+      this.xrHelper.baseExperience.onStateChangedObservable.add(() => {
+        this.updateUI();
+      });
+
       this.updateUI();
-    });
-
-    this.updateUI();
+    } catch (error) {
+      this.xrHelper = null;
+      this.isARSupported = false;
+      this.updateUI("Falha ao iniciar RA", true);
+      this.throwXRManagerError("Falha ao iniciar createDefaultXRExperienceAsync", error);
+    }
   }
 
   private createBabylonToggleUI(): void {
@@ -89,17 +105,27 @@ export class XRManager {
       if (baseExperience.state === 2) {
         await baseExperience.exitXRAsync();
       } else {
-        await baseExperience.enterXRAsync(
-          "immersive-ar",
-          "local-floor",
-          baseExperience.camera
-        );
+        await baseExperience.enterXRAsync("immersive-ar", "local-floor");
       }
 
       this.updateUI();
-    } catch (_error) {
+    } catch (error) {
       this.updateUI("Falha ao alternar RA", true);
+      this.throwXRManagerError("Falha ao alternar sessao RA", error);
     }
+  }
+
+  private throwXRManagerError(context: string, error: unknown): never {
+    const baseError = error instanceof Error ? error : new Error(String(error));
+    const fullMessage = `${context}: ${baseError.message}`;
+    const wrappedError = new Error(fullMessage);
+
+    if (baseError.stack) {
+      wrappedError.stack = `${wrappedError.name}: ${fullMessage}\n${baseError.stack}`;
+    }
+
+    console.error("[XRManager]", wrappedError);
+    throw wrappedError;
   }
 
   private updateUI(customLabel?: string, warning = false): void {

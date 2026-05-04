@@ -6,7 +6,72 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 
 import { ArenaSystem } from "./arena/ArenaSystem";
-// import { XRManager } from "./xr/XRManager";
+import { XRManager } from "./xr/XRManager";
+
+function formatErrorTrace(error: unknown): string {
+	if (error instanceof Error) {
+		return error.stack ?? `${error.name}: ${error.message}`;
+	}
+
+	if (typeof error === "string") {
+		return error;
+	}
+
+	try {
+		return JSON.stringify(error, null, 2);
+	} catch {
+		return "Erro desconhecido sem serializacao disponivel.";
+	}
+}
+
+function renderFatalErrorModal(error: unknown): void {
+	const trace = formatErrorTrace(error);
+	const canvas = document.getElementById("renderCanvas");
+
+	if (canvas) {
+		canvas.remove();
+	}
+
+	const existing = document.getElementById("app-fatal-error");
+	if (existing) {
+		existing.remove();
+	}
+
+	const container = document.createElement("div");
+	container.id = "app-fatal-error";
+	container.style.position = "fixed";
+	container.style.inset = "0";
+	container.style.background = "#111827";
+	container.style.color = "#f9fafb";
+	container.style.padding = "24px";
+	container.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, monospace";
+	container.style.overflow = "auto";
+
+	const title = document.createElement("h1");
+	title.textContent = "Falha na inicializacao da aplicacao";
+	title.style.margin = "0 0 12px";
+	title.style.fontSize = "20px";
+
+	const hint = document.createElement("p");
+	hint.textContent = "Trace capturado:";
+	hint.style.margin = "0 0 12px";
+	hint.style.opacity = "0.9";
+
+	const pre = document.createElement("pre");
+	pre.textContent = trace;
+	pre.style.margin = "0";
+	pre.style.whiteSpace = "pre-wrap";
+	pre.style.wordBreak = "break-word";
+	pre.style.lineHeight = "1.4";
+	pre.style.background = "#1f2937";
+	pre.style.padding = "14px";
+	pre.style.borderRadius = "8px";
+
+	container.appendChild(title);
+	container.appendChild(hint);
+	container.appendChild(pre);
+	document.body.appendChild(container);
+}
 
 async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<Scene> {
 	const scene = new Scene(engine);
@@ -30,8 +95,8 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	const arenaSystem = new ArenaSystem(scene);
 	const arena = arenaSystem.buildInitialArena();
 
-	// const xrManager = new XRManager(scene, [arena.ground]);
-	// await xrManager.initialize();
+	const xrManager = new XRManager(scene, [arena.ground]);
+	await xrManager.initialize();
 
 	return scene;
 }
@@ -55,4 +120,14 @@ async function bootstrap(): Promise<void> {
 	});
 }
 
-void bootstrap();
+window.addEventListener("error", (event) => {
+	renderFatalErrorModal(event.error ?? event.message);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+	renderFatalErrorModal(event.reason);
+});
+
+void bootstrap().catch((error) => {
+	renderFatalErrorModal(error);
+});
