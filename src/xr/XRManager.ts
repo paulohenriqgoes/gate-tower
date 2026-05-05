@@ -8,10 +8,9 @@ import "@babylonjs/core/Helpers/sceneHelpers";
 import "@babylonjs/core/XR/webXRDefaultExperience";
 import { WebXRFeatureName } from "@babylonjs/core/XR/webXRFeaturesManager";
 import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
-// @ts-ignore - Importação necessária para registrar a feature no FeaturesManager
-import { WebXRHitTest } from "@babylonjs/core/XR/features/WebXRHitTest";
+import "@babylonjs/core/XR/features/WebXRHitTest";
 import { AdvancedDynamicTexture, Button, Control, TextBlock } from "@babylonjs/gui";
-import type { IWebXRHitResult } from "@babylonjs/core/XR/features/WebXRHitTest";
+import type { IWebXRHitResult, WebXRHitTest } from "@babylonjs/core/XR/features/WebXRHitTest";
 
 export class XRManager {
   private readonly scene: Scene;
@@ -28,7 +27,9 @@ export class XRManager {
   private statusText: TextBlock | null = null;
 
   private isARSupported = false;
+  private isHitTestAvailable = false;
   private isPlacementLocked = false;
+  private hasUserPlacedArenaInXR = false;
   private lastHitResult: IWebXRHitResult | null = null;
   private nonARScale = new Vector3(1, 1, 1);
   private arenaScaleInAR = 0.015;
@@ -66,28 +67,7 @@ export class XRManager {
         optionalFeatures: ["hit-test", "anchors"],
       });
 
-      this.hitTestFeature = this.xrHelper.baseExperience.featuresManager.enableFeature(
-        WebXRFeatureName.HIT_TEST,
-        "latest",
-        {
-          enableTransientHitTest: false,
-          disablePermanentHitTest: false,
-        },
-        true,
-        false
-      );
-
-      this.hitTestFeature.onHitTestResultObservable.add((results) => {
-        if (!results.length) {
-          return;
-        }
-
-        this.lastHitResult = results[0];
-
-        if (!this.isPlacementLocked) {
-          this.applyPlacementFromHit(this.lastHitResult);
-        }
-      });
+      this.tryEnableHitTestFeature();
 
       this.xrHelper.baseExperience.onStateChangedObservable.add(() => {
         this.handleXRState();
@@ -100,6 +80,42 @@ export class XRManager {
       this.isARSupported = false;
       this.updateUI("Falha ao iniciar RA", true);
       this.throwXRManagerError("Falha ao iniciar createDefaultXRExperienceAsync", error);
+    }
+  }
+
+  private tryEnableHitTestFeature(): void {
+    if (!this.xrHelper) {
+      this.isHitTestAvailable = false;
+      this.hitTestFeature = null;
+      return;
+    }
+
+    try {
+      this.hitTestFeature = this.xrHelper.baseExperience.featuresManager.enableFeature(
+        WebXRFeatureName.HIT_TEST,
+        "latest",
+        {
+          enableTransientHitTest: false,
+          disablePermanentHitTest: false,
+        },
+        false,
+        false
+      );
+
+      this.isHitTestAvailable = true;
+
+      this.hitTestFeature.onHitTestResultObservable.add((results) => {
+        if (!results.length) {
+          return;
+        }
+
+        this.lastHitResult = results[0];
+      });
+    } catch (error) {
+      this.isHitTestAvailable = false;
+      this.hitTestFeature = null;
+      this.lastHitResult = null;
+      console.warn("[XRManager] Hit-test indisponivel, continuando sem reposicionamento.", error);
     }
   }
 
@@ -196,7 +212,10 @@ export class XRManager {
       } else {
         this.nonARScale.copyFrom(this.arenaRoot.scaling);
         this.applyArenaScale(this.arenaScaleInAR);
+        this.arenaRoot.setEnabled(false);
+        this.hasUserPlacedArenaInXR = false;
         this.isPlacementLocked = false;
+        this.lastHitResult = null;
         await baseExperience.enterXRAsync("immersive-ar", "local-floor");
       }
 
@@ -213,10 +232,15 @@ export class XRManager {
     }
 
     if (this.xrHelper.baseExperience.state === WebXRState.IN_XR) {
+      this.arenaRoot.setEnabled(false);
+      this.hasUserPlacedArenaInXR = false;
       this.isPlacementLocked = false;
+      this.lastHitResult = null;
       return;
     }
 
+    this.arenaRoot.setEnabled(true);
+    this.hasUserPlacedArenaInXR = false;
     this.isPlacementLocked = false;
     this.lastHitResult = null;
     this.arenaRoot.position.set(0, 0, 0);
@@ -240,8 +264,15 @@ export class XRManager {
       return;
     }
 
+    if (!this.isHitTestAvailable) {
+      this.updateUI("Hit-test indisponivel neste dispositivo", true);
+      return;
+    }
+
     if (!this.isPlacementLocked && this.lastHitResult) {
       this.applyPlacementFromHit(this.lastHitResult);
+      this.arenaRoot.setEnabled(true);
+      this.hasUserPlacedArenaInXR = true;
       this.isPlacementLocked = true;
       this.updateUI();
       return;
@@ -253,6 +284,8 @@ export class XRManager {
     }
 
     this.isPlacementLocked = false;
+    this.hasUserPlacedArenaInXR = false;
+    this.arenaRoot.setEnabled(false);
     this.updateUI();
   }
 
@@ -301,6 +334,8 @@ export class XRManager {
       this.statusText.text = "RA: Off";
       this.lockButton.textBlock!.text = "Fixar Arena";
       this.lockButton.background = "#0f766e";
+      this.lockButton.isEnabled = false;
+      this.lockButton.alpha = 0.5;
       this.scaleDownButton.isEnabled = false;
       this.scaleUpButton.isEnabled = false;
       this.scaleDownButton.alpha = 0.5;
@@ -311,11 +346,27 @@ export class XRManager {
 
     const scaleCmWidth = (24 * this.arenaScaleInAR * 100).toFixed(0);
     const scaleCmHeight = (36 * this.arenaScaleInAR * 100).toFixed(0);
-    const placementStatus = this.isPlacementLocked ? "fixada" : "movendo";
+    const placementStatus = this.isHitTestAvailable
+      ? this.hasUserPlacedArenaInXR
+        ? this.isPlacementLocked
+          ? "fixada"
+          : "reposicionando"
+        : "aguardando definicao"
+      : "indefinida";
 
     this.statusText.text = `RA: On | Arena ${placementStatus} | ${scaleCmWidth}x${scaleCmHeight}cm`;
-    this.lockButton.textBlock!.text = this.isPlacementLocked ? "Destravar Arena" : "Fixar Arena";
-    this.lockButton.background = this.isPlacementLocked ? "#7c2d12" : "#0f766e";
+    this.lockButton.textBlock!.text = this.isHitTestAvailable
+      ? this.hasUserPlacedArenaInXR
+        ? "Reposicionar Arena"
+        : "Definir Arena"
+      : "Sem Hit-test";
+    this.lockButton.background = this.isHitTestAvailable
+      ? this.isPlacementLocked
+        ? "#7c2d12"
+        : "#0f766e"
+      : "#6b7280";
+    this.lockButton.isEnabled = this.isHitTestAvailable;
+    this.lockButton.alpha = this.isHitTestAvailable ? 1 : 0.5;
     this.scaleDownButton.isEnabled = true;
     this.scaleUpButton.isEnabled = true;
     this.scaleDownButton.alpha = 1;
