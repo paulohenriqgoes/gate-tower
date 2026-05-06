@@ -33,7 +33,7 @@ export class XRManager {
   private hasUserPlacedArenaInXR = false;
   private lastHitResult: IWebXRHitResult | null = null;
   private nonARScale = new Vector3(1, 1, 1);
-  private arenaScaleInAR = 0.015;
+  private arenaScaleInAR = 0.005;
 
   public constructor(scene: Scene, floorMeshes: Mesh[], arenaRoot: TransformNode) {
     this.scene = scene;
@@ -244,7 +244,7 @@ export class XRManager {
     this.arenaRoot.scaling.copyFrom(this.nonARScale);
   }
 
-  private applyPlacementFromHit(hitResult: IWebXRHitResult): void {
+  private applyPlacementFromHit(hitResult: IWebXRHitResult): void {  
     this.arenaRoot.position.copyFrom(hitResult.position);
 
     if (!this.arenaRoot.rotationQuaternion) {
@@ -252,6 +252,7 @@ export class XRManager {
     }
 
     this.arenaRoot.rotationQuaternion.copyFrom(hitResult.rotationQuaternion);
+    this.applyArenaScale(this.arenaScaleInAR);
   }
 
   private updateHitCursorFromHit(hitResult: IWebXRHitResult): void {
