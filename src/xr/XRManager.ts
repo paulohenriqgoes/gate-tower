@@ -1,7 +1,10 @@
 import { WebXRSessionManager } from "@babylonjs/core/XR/webXRSessionManager";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
+import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Scene } from "@babylonjs/core/scene";
 import type { WebXRDefaultExperience } from "@babylonjs/core/XR/webXRDefaultExperience";
 import "@babylonjs/core/Helpers/sceneHelpers";
@@ -11,6 +14,7 @@ import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
 import "@babylonjs/core/XR/features/WebXRHitTest";
 import { AdvancedDynamicTexture, Button, Control, TextBlock } from "@babylonjs/gui";
 import type { IWebXRHitResult, WebXRHitTest } from "@babylonjs/core/XR/features/WebXRHitTest";
+import { PointerEventTypes } from "@babylonjs/core/Events/pointerEvents";
 
 export class XRManager {
   private readonly scene: Scene;
@@ -21,14 +25,11 @@ export class XRManager {
   private hitTestFeature: WebXRHitTest | null = null;
   private ui: AdvancedDynamicTexture | null = null;
   private toggleButton: Button | null = null;
-  private lockButton: Button | null = null;
-  private scaleUpButton: Button | null = null;
-  private scaleDownButton: Button | null = null;
   private statusText: TextBlock | null = null;
+  private hitCursor: Mesh | null = null;
 
   private isARSupported = false;
   private isHitTestAvailable = false;
-  private isPlacementLocked = false;
   private hasUserPlacedArenaInXR = false;
   private lastHitResult: IWebXRHitResult | null = null;
   private nonARScale = new Vector3(1, 1, 1);
@@ -42,6 +43,8 @@ export class XRManager {
 
   public async initialize(): Promise<void> {
     this.createBabylonToggleUI();
+    this.createHitCursor();
+    this.registerTouchPlacement();
 
     try {
       this.isARSupported = await WebXRSessionManager.IsSessionSupportedAsync("immersive-ar");
@@ -110,6 +113,7 @@ export class XRManager {
         }
 
         this.lastHitResult = results[0];
+        this.updateHitCursorFromHit(this.lastHitResult);
       });
     } catch (error) {
       this.isHitTestAvailable = false;
@@ -133,44 +137,11 @@ export class XRManager {
     this.toggleButton.top = "20px";
     this.toggleButton.left = "-20px";
 
-    this.lockButton = Button.CreateSimpleButton("lock-arena", "Fixar Arena");
-    this.lockButton.width = "220px";
-    this.lockButton.height = "52px";
-    this.lockButton.color = "white";
-    this.lockButton.cornerRadius = 12;
-    this.lockButton.background = "#0f766e";
-    this.lockButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.lockButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    this.lockButton.top = "92px";
-    this.lockButton.left = "-20px";
-
-    this.scaleDownButton = Button.CreateSimpleButton("arena-scale-down", "Escala -");
-    this.scaleDownButton.width = "104px";
-    this.scaleDownButton.height = "46px";
-    this.scaleDownButton.color = "white";
-    this.scaleDownButton.cornerRadius = 12;
-    this.scaleDownButton.background = "#374151";
-    this.scaleDownButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.scaleDownButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    this.scaleDownButton.top = "152px";
-    this.scaleDownButton.left = "-136px";
-
-    this.scaleUpButton = Button.CreateSimpleButton("arena-scale-up", "Escala +");
-    this.scaleUpButton.width = "104px";
-    this.scaleUpButton.height = "46px";
-    this.scaleUpButton.color = "white";
-    this.scaleUpButton.cornerRadius = 12;
-    this.scaleUpButton.background = "#374151";
-    this.scaleUpButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.scaleUpButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    this.scaleUpButton.top = "152px";
-    this.scaleUpButton.left = "-20px";
-
     this.statusText = new TextBlock("ra-status", "RA: Off");
     this.statusText.color = "white";
     this.statusText.fontSize = 20;
     this.statusText.height = "40px";
-    this.statusText.top = "88px";
+    this.statusText.top = "92px";
     this.statusText.left = "-20px";
     this.statusText.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     this.statusText.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
@@ -179,23 +150,56 @@ export class XRManager {
       await this.toggleAR();
     });
 
-    this.lockButton.onPointerClickObservable.add(() => {
-      this.togglePlacementLock();
-    });
-
-    this.scaleDownButton.onPointerClickObservable.add(() => {
-      this.adjustArenaScale(-0.002);
-    });
-
-    this.scaleUpButton.onPointerClickObservable.add(() => {
-      this.adjustArenaScale(0.002);
-    });
-
     this.ui.addControl(this.toggleButton);
-    this.ui.addControl(this.lockButton);
-    this.ui.addControl(this.scaleDownButton);
-    this.ui.addControl(this.scaleUpButton);
     this.ui.addControl(this.statusText);
+  }
+
+  private createHitCursor(): void {
+    const cursor = MeshBuilder.CreateTorus(
+      "hit-cursor",
+      {
+        diameter: 0.26,
+        thickness: 0.02,
+        tessellation: 24,
+      },
+      this.scene
+    );
+
+    const cursorMaterial = new StandardMaterial("hit-cursor-material", this.scene);
+    cursorMaterial.diffuseColor = Color3.FromHexString("#16a34a");
+    cursorMaterial.emissiveColor = Color3.FromHexString("#22c55e");
+    cursor.material = cursorMaterial;
+    cursor.isPickable = false;
+    cursor.isVisible = false;
+
+    this.hitCursor = cursor;
+  }
+
+  private registerTouchPlacement(): void {
+    this.scene.onPointerObservable.add((pointerInfo) => {
+      if (pointerInfo.type !== PointerEventTypes.POINTERDOWN) {
+        return;
+      }
+
+      if (!this.xrHelper || this.xrHelper.baseExperience.state !== WebXRState.IN_XR) {
+        return;
+      }
+
+      if (!this.isHitTestAvailable) {
+        this.updateUI("Hit-test indisponivel neste dispositivo", true);
+        return;
+      }
+
+      if (!this.lastHitResult) {
+        this.updateUI("Procure uma superficie e toque novamente", true);
+        return;
+      }
+
+      this.applyPlacementFromHit(this.lastHitResult);
+      this.arenaRoot.setEnabled(true);
+      this.hasUserPlacedArenaInXR = true;
+      this.updateUI();
+    });
   }
 
   private async toggleAR(): Promise<void> {
@@ -214,8 +218,8 @@ export class XRManager {
         this.applyArenaScale(this.arenaScaleInAR);
         this.arenaRoot.setEnabled(false);
         this.hasUserPlacedArenaInXR = false;
-        this.isPlacementLocked = false;
         this.lastHitResult = null;
+        this.setHitCursorVisible(false);
         await baseExperience.enterXRAsync("immersive-ar", "local-floor");
       }
 
@@ -234,15 +238,15 @@ export class XRManager {
     if (this.xrHelper.baseExperience.state === WebXRState.IN_XR) {
       this.arenaRoot.setEnabled(false);
       this.hasUserPlacedArenaInXR = false;
-      this.isPlacementLocked = false;
       this.lastHitResult = null;
+      this.setHitCursorVisible(false);
       return;
     }
 
     this.arenaRoot.setEnabled(true);
     this.hasUserPlacedArenaInXR = false;
-    this.isPlacementLocked = false;
     this.lastHitResult = null;
+    this.setHitCursorVisible(false);
     this.arenaRoot.position.set(0, 0, 0);
     this.arenaRoot.rotationQuaternion = null;
     this.arenaRoot.scaling.copyFrom(this.nonARScale);
@@ -258,45 +262,27 @@ export class XRManager {
     this.arenaRoot.rotationQuaternion.copyFrom(hitResult.rotationQuaternion);
   }
 
-  private togglePlacementLock(): void {
-    if (!this.xrHelper || this.xrHelper.baseExperience.state !== WebXRState.IN_XR) {
-      this.updateUI("Entre em RA para posicionar", true);
+  private updateHitCursorFromHit(hitResult: IWebXRHitResult): void {
+    if (!this.hitCursor || !this.xrHelper || this.xrHelper.baseExperience.state !== WebXRState.IN_XR) {
       return;
     }
 
-    if (!this.isHitTestAvailable) {
-      this.updateUI("Hit-test indisponivel neste dispositivo", true);
-      return;
+    this.hitCursor.position.copyFrom(hitResult.position);
+
+    if (!this.hitCursor.rotationQuaternion) {
+      this.hitCursor.rotationQuaternion = Quaternion.Identity();
     }
 
-    if (!this.isPlacementLocked && this.lastHitResult) {
-      this.applyPlacementFromHit(this.lastHitResult);
-      this.arenaRoot.setEnabled(true);
-      this.hasUserPlacedArenaInXR = true;
-      this.isPlacementLocked = true;
-      this.updateUI();
-      return;
-    }
-
-    if (!this.isPlacementLocked && !this.lastHitResult) {
-      this.updateUI("Procure uma superficie", true);
-      return;
-    }
-
-    this.isPlacementLocked = false;
-    this.hasUserPlacedArenaInXR = false;
-    this.arenaRoot.setEnabled(false);
-    this.updateUI();
+    this.hitCursor.rotationQuaternion.copyFrom(hitResult.rotationQuaternion);
+    this.setHitCursorVisible(true);
   }
 
-  private adjustArenaScale(delta: number): void {
-    const nextScale = Math.min(0.08, Math.max(0.005, this.arenaScaleInAR + delta));
-    this.arenaScaleInAR = Number(nextScale.toFixed(3));
-
-    if (this.xrHelper?.baseExperience.state === WebXRState.IN_XR) {
-      this.applyArenaScale(this.arenaScaleInAR);
-      this.updateUI();
+  private setHitCursorVisible(value: boolean): void {
+    if (!this.hitCursor) {
+      return;
     }
+
+    this.hitCursor.isVisible = value;
   }
 
   private applyArenaScale(value: number): void {
@@ -317,7 +303,7 @@ export class XRManager {
   }
 
   private updateUI(customLabel?: string, warning = false): void {
-    if (!this.toggleButton || !this.statusText || !this.lockButton || !this.scaleDownButton || !this.scaleUpButton) {
+    if (!this.toggleButton || !this.statusText) {
       return;
     }
 
@@ -332,45 +318,19 @@ export class XRManager {
 
     if (!isInXR) {
       this.statusText.text = "RA: Off";
-      this.lockButton.textBlock!.text = "Fixar Arena";
-      this.lockButton.background = "#0f766e";
-      this.lockButton.isEnabled = false;
-      this.lockButton.alpha = 0.5;
-      this.scaleDownButton.isEnabled = false;
-      this.scaleUpButton.isEnabled = false;
-      this.scaleDownButton.alpha = 0.5;
-      this.scaleUpButton.alpha = 0.5;
       this.toggleButton.background = "#1f3a4d";
       return;
     }
 
-    const scaleCmWidth = (24 * this.arenaScaleInAR * 100).toFixed(0);
-    const scaleCmHeight = (36 * this.arenaScaleInAR * 100).toFixed(0);
-    const placementStatus = this.isHitTestAvailable
-      ? this.hasUserPlacedArenaInXR
-        ? this.isPlacementLocked
-          ? "fixada"
-          : "reposicionando"
-        : "aguardando definicao"
-      : "indefinida";
+    if (!this.isHitTestAvailable) {
+      this.statusText.text = "RA: On | Hit-test indisponivel";
+      this.toggleButton.background = "#216e39";
+      return;
+    }
 
-    this.statusText.text = `RA: On | Arena ${placementStatus} | ${scaleCmWidth}x${scaleCmHeight}cm`;
-    this.lockButton.textBlock!.text = this.isHitTestAvailable
-      ? this.hasUserPlacedArenaInXR
-        ? "Reposicionar Arena"
-        : "Definir Arena"
-      : "Sem Hit-test";
-    this.lockButton.background = this.isHitTestAvailable
-      ? this.isPlacementLocked
-        ? "#7c2d12"
-        : "#0f766e"
-      : "#6b7280";
-    this.lockButton.isEnabled = this.isHitTestAvailable;
-    this.lockButton.alpha = this.isHitTestAvailable ? 1 : 0.5;
-    this.scaleDownButton.isEnabled = true;
-    this.scaleUpButton.isEnabled = true;
-    this.scaleDownButton.alpha = 1;
-    this.scaleUpButton.alpha = 1;
+    this.statusText.text = this.hasUserPlacedArenaInXR
+      ? "RA: On | Arena posicionada"
+      : "RA: On | Toque para posicionar a arena";
     this.toggleButton.background = isInXR ? "#216e39" : "#1f3a4d";
   }
 }
