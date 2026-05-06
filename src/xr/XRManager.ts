@@ -12,9 +12,10 @@ import "@babylonjs/core/XR/webXRDefaultExperience";
 import { WebXRFeatureName } from "@babylonjs/core/XR/webXRFeaturesManager";
 import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
 import "@babylonjs/core/XR/features/WebXRHitTest";
-import { AdvancedDynamicTexture, Button, Control, TextBlock } from "@babylonjs/gui";
+import { AdvancedDynamicTexture, Button, Control, Rectangle, Slider, StackPanel, TextBlock } from "@babylonjs/gui";
 import type { IWebXRHitResult, WebXRHitTest } from "@babylonjs/core/XR/features/WebXRHitTest";
 import { PointerEventTypes } from "@babylonjs/core/Events/pointerEvents";
+import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 
 export class XRManager {
   private readonly scene: Scene;
@@ -27,6 +28,10 @@ export class XRManager {
   private toggleButton: Button | null = null;
   private statusText: TextBlock | null = null;
   private hitCursor: Mesh | null = null;
+  private scalePanel: Rectangle | null = null;
+  private scaleSlider: Slider | null = null;
+  private scaleValueText: TextBlock | null = null;
+  private isScalePanelVisible = false;
 
   private isARSupported = false;
   private isHitTestAvailable = false;
@@ -145,6 +150,73 @@ export class XRManager {
 
     this.ui.addControl(this.toggleButton);
     this.ui.addControl(this.statusText);
+    this.createScaleSliderUI();
+  }
+
+  private createScaleSliderUI(): void {
+    if (!this.ui) {
+      return;
+    }
+
+    const panel = new Rectangle("arena-scale-panel");
+    panel.width = "260px";
+    panel.height = "120px";
+    panel.cornerRadius = 12;
+    panel.color = "#4b5563";
+    panel.thickness = 1;
+    panel.background = "#111827d9";
+    panel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    panel.left = "-20px";
+    panel.top = "-20px";
+    panel.isVisible = false;
+
+    const stack = new StackPanel("arena-scale-stack");
+    stack.isVertical = true;
+    stack.paddingTop = "10px";
+    stack.paddingLeft = "12px";
+    stack.paddingRight = "12px";
+    stack.paddingBottom = "10px";
+
+    const title = new TextBlock("arena-scale-title", "Escala da arena");
+    title.height = "26px";
+    title.color = "white";
+    title.fontSize = 18;
+    title.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+
+    const slider = new Slider("arena-scale-slider");
+    slider.minimum = 0.005;
+    slider.maximum = 0.015;
+    slider.value = this.arenaScaleInAR;
+    slider.height = "20px";
+    slider.width = "100%";
+    slider.background = "#374151";
+    slider.color = "#22c55e";
+
+    const valueText = new TextBlock("arena-scale-value", `Escala: ${this.arenaScaleInAR.toFixed(3)}`);
+    valueText.height = "22px";
+    valueText.color = "#d1d5db";
+    valueText.fontSize = 15;
+    valueText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+
+    slider.onValueChangedObservable.add((value) => {
+      this.arenaScaleInAR = Number(value.toFixed(3));
+      valueText.text = `Escala: ${this.arenaScaleInAR.toFixed(3)}`;
+
+      if (this.xrHelper?.baseExperience.state === WebXRState.IN_XR && this.hasUserPlacedArenaInXR) {
+        this.applyArenaScale(this.arenaScaleInAR);
+      }
+    });
+
+    stack.addControl(title);
+    stack.addControl(slider);
+    stack.addControl(valueText);
+    panel.addControl(stack);
+    this.ui.addControl(panel);
+
+    this.scalePanel = panel;
+    this.scaleSlider = slider;
+    this.scaleValueText = valueText;
   }
 
   private createHitCursor(): void {
@@ -182,6 +254,19 @@ export class XRManager {
         return;
       }
 
+      if (this.hasUserPlacedArenaInXR) {
+        const pickedMesh = pointerInfo.pickInfo?.pickedMesh ?? null;
+
+        if (this.isArenaMesh(pickedMesh)) {
+          this.setScalePanelVisible(!this.isScalePanelVisible);
+        } else {
+          this.setScalePanelVisible(false);
+        }
+
+        this.updateUI();
+        return;
+      }
+
       if (!this.lastHitResult) {
         this.updateUI("Procure uma superficie e toque novamente", true);
         return;
@@ -190,6 +275,8 @@ export class XRManager {
       this.applyPlacementFromHit(this.lastHitResult);
       this.arenaRoot.setEnabled(true);
       this.hasUserPlacedArenaInXR = true;
+      this.setHitCursorVisible(false);
+      this.setScalePanelVisible(false);
       this.updateUI();
     });
   }
@@ -212,6 +299,7 @@ export class XRManager {
         this.hasUserPlacedArenaInXR = false;
         this.lastHitResult = null;
         this.setHitCursorVisible(false);
+        this.setScalePanelVisible(false);
         await baseExperience.enterXRAsync("immersive-ar", "local-floor");
       }
 
@@ -232,6 +320,7 @@ export class XRManager {
       this.hasUserPlacedArenaInXR = false;
       this.lastHitResult = null;
       this.setHitCursorVisible(false);
+      this.setScalePanelVisible(false);
       return;
     }
 
@@ -239,6 +328,7 @@ export class XRManager {
     this.hasUserPlacedArenaInXR = false;
     this.lastHitResult = null;
     this.setHitCursorVisible(false);
+    this.setScalePanelVisible(false);
     this.arenaRoot.position.set(0, 0, 0);
     this.arenaRoot.rotationQuaternion = null;
     this.arenaRoot.scaling.copyFrom(this.nonARScale);
@@ -260,6 +350,10 @@ export class XRManager {
       return;
     }
 
+    if (this.hasUserPlacedArenaInXR) {
+      return;
+    }
+
     this.hitCursor.position.copyFrom(hitResult.position);
 
     if (!this.hitCursor.rotationQuaternion) {
@@ -276,6 +370,38 @@ export class XRManager {
     }
 
     this.hitCursor.isVisible = value;
+  }
+
+  private setScalePanelVisible(value: boolean): void {
+    if (!this.scalePanel) {
+      return;
+    }
+
+    this.isScalePanelVisible = value;
+    this.scalePanel.isVisible = value;
+
+    if (this.scaleSlider && this.scaleValueText) {
+      this.scaleSlider.value = this.arenaScaleInAR;
+      this.scaleValueText.text = `Escala: ${this.arenaScaleInAR.toFixed(3)}`;
+    }
+  }
+
+  private isArenaMesh(mesh: AbstractMesh | null): boolean {
+    if (!mesh) {
+      return false;
+    }
+
+    let current: AbstractMesh | TransformNode | null = mesh;
+
+    while (current) {
+      if (current === this.arenaRoot) {
+        return true;
+      }
+
+      current = (current.parent as AbstractMesh | TransformNode | null) ?? null;
+    }
+
+    return false;
   }
 
   private applyArenaScale(value: number): void {
@@ -322,7 +448,9 @@ export class XRManager {
     }
 
     this.statusText.text = this.hasUserPlacedArenaInXR
-      ? "RA: On | Arena posicionada"
+      ? this.isScalePanelVisible
+        ? "RA: On | Ajuste a escala da arena"
+        : "RA: On | Arena posicionada (toque para escalar)"
       : "RA: On | Toque para posicionar a arena";
     this.toggleButton.background = isInXR ? "#216e39" : "#1f3a4d";
   }
