@@ -66,8 +66,7 @@ export class XRManager {
         uiOptions: {
           sessionMode: "immersive-ar",
           referenceSpaceType: "local-floor",
-        },
-        optionalFeatures: ["hit-test", "anchors"],
+        }
       });
 
       this.tryEnableHitTestFeature();
@@ -96,13 +95,7 @@ export class XRManager {
     try {
       this.hitTestFeature = this.xrHelper.baseExperience.featuresManager.enableFeature(
         WebXRFeatureName.HIT_TEST,
-        "latest",
-        {
-          enableTransientHitTest: false,
-          disablePermanentHitTest: false,
-        },
-        false,
-        false
+        "latest"
       );
 
       this.isHitTestAvailable = true;
@@ -158,9 +151,8 @@ export class XRManager {
     const cursor = MeshBuilder.CreateTorus(
       "hit-cursor",
       {
-        diameter: 0.26,
-        thickness: 0.02,
-        tessellation: 24,
+        diameter: 0.35,
+        thickness: 0.02
       },
       this.scene
     );
