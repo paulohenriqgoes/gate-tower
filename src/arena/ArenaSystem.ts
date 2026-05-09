@@ -1,3 +1,4 @@
+import type { TeamId, TowerLaneId } from "../battle/BattleTypes";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
@@ -8,9 +9,28 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
 export interface ArenaBuildResult {
+  arenaLayout: ArenaLayout;
   root: TransformNode;
   ground: Mesh;
+  towerDefinitions: ArenaTowerDefinition[];
   towerMeshes: Mesh[];
+}
+
+export interface ArenaLayout {
+  maxX: number;
+  maxZ: number;
+  minX: number;
+  minZ: number;
+  playerDeploymentMaxZ: number;
+  unitGroundY: number;
+}
+
+export interface ArenaTowerDefinition {
+  diameter: number;
+  id: string;
+  lane: TowerLaneId;
+  mesh: Mesh;
+  team: TeamId;
 }
 
 export class ArenaSystem {
@@ -92,8 +112,26 @@ export class ArenaSystem {
     const towerMeshes = this.createTowerPlaceholders(arenaRoot);
 
     return {
+      arenaLayout: {
+        maxX: this.gridX,
+        maxZ: this.gridZ,
+        minX: -this.gridX,
+        minZ: -this.gridZ,
+        playerDeploymentMaxZ: -2.2,
+        unitGroundY: 0.5,
+      },
       root: arenaRoot,
       ground: baseGround,
+      towerDefinitions: towerMeshes.map((mesh) => {
+        const [, team, lane] = mesh.name.split("-");
+        return {
+          diameter: 1.6,
+          id: mesh.name,
+          lane: lane as TowerLaneId,
+          mesh,
+          team: team === "blue" ? "player" : "enemy",
+        };
+      }),
       towerMeshes,
     };
   }
@@ -105,27 +143,31 @@ export class ArenaSystem {
     const redTowerMaterial = new StandardMaterial("red-tower-material", this.scene);
     redTowerMaterial.diffuseColor = Color3.FromHexString("#df3e3e");
 
-    const towerPositions = [-6, 0, 6];
+    const towerDefinitions: Array<{ lane: TowerLaneId; xPosition: number }> = [
+      { lane: "left", xPosition: -6 },
+      { lane: "center", xPosition: 0 },
+      { lane: "right", xPosition: 6 },
+    ];
     const towers: Mesh[] = [];
 
     // Torres simples para validar os lados do campo antes dos modelos finais.
-    for (const xPosition of towerPositions) {
+    for (const towerDefinition of towerDefinitions) {
       const blueTower = MeshBuilder.CreateCylinder(
-        `tower-blue-${xPosition}`,
+        `tower-blue-${towerDefinition.lane}`,
         { diameter: 1.6, height: 2.8, tessellation: 24 },
         this.scene
       );
-      blueTower.position = new Vector3(xPosition, 1.5, -14);
+      blueTower.position = new Vector3(towerDefinition.xPosition, 1.5, -14);
       blueTower.material = blueTowerMaterial;
       blueTower.parent = arenaRoot;
       towers.push(blueTower);
 
       const redTower = MeshBuilder.CreateCylinder(
-        `tower-red-${xPosition}`,
+        `tower-red-${towerDefinition.lane}`,
         { diameter: 1.6, height: 2.8, tessellation: 24 },
         this.scene
       );
-      redTower.position = new Vector3(xPosition, 1.5, 14);
+      redTower.position = new Vector3(towerDefinition.xPosition, 1.5, 14);
       redTower.material = redTowerMaterial;
       redTower.parent = arenaRoot;
       towers.push(redTower);

@@ -6,6 +6,9 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 
 import { ArenaSystem } from "./arena/ArenaSystem";
+import { CardDeckSystem } from "./cards/CardDeckSystem";
+import { CombatEngine } from "./combat/CombatEngine";
+import { CardDeckHud } from "./ui/CardDeckHud";
 import { XRManager } from "./xr/XRManager";
 
 function formatErrorTrace(error: unknown): string {
@@ -97,6 +100,48 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 
 	const xrManager = new XRManager(scene, [arena.ground], arena.root);
 	await xrManager.initialize();
+
+	const towerCombatSettings = {
+		attackCooldownMs: 1000,
+		attackDamage: 20,
+		attackRangeMultiplier: 5,
+		maxHealth: 1000,
+	};
+
+	const cardDeckSystem = new CardDeckSystem({
+		cards: [
+			{
+				id: "javali-raivoso",
+				name: "Javali Raivoso",
+				summary: "Vida 200. O dano cresce com a distancia percorrida.",
+				cost: 4,
+				accentColor: "#f97316",
+			},
+		],
+		initialMushrooms: 4,
+		maxMushrooms: 10,
+		regenerationIntervalMs: 1800,
+	});
+	cardDeckSystem.startRegeneration();
+
+	const cardDeckHud = new CardDeckHud(scene, cardDeckSystem);
+	const combatEngine = new CombatEngine({
+		arenaLayout: arena.arenaLayout,
+		arenaRoot: arena.root,
+		cardDeckSystem,
+		scene,
+		towerAttackCooldownMs: towerCombatSettings.attackCooldownMs,
+		towerAttackDamage: towerCombatSettings.attackDamage,
+		towerAttackRangeMultiplier: towerCombatSettings.attackRangeMultiplier,
+		towerDefinitions: arena.towerDefinitions,
+		towerMaxHealth: towerCombatSettings.maxHealth,
+	});
+
+	scene.onDisposeObservable.add(() => {
+		combatEngine.dispose();
+		cardDeckHud.dispose();
+		cardDeckSystem.dispose();
+	});
 
 	return scene;
 }
