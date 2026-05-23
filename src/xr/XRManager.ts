@@ -31,7 +31,9 @@ export class XRManager {
   private scalePanel: Rectangle | null = null;
   private scaleSlider: Slider | null = null;
   private scaleValueText: TextBlock | null = null;
+  private scaleButton: Button | null = null;
   private isScalePanelVisible = false;
+  private isScaleToolActive = false;
 
   private isARSupported = false;
   private isHitTestAvailable = false;
@@ -148,7 +150,27 @@ export class XRManager {
       await this.toggleAR();
     });
 
+    this.scaleButton = Button.CreateSimpleButton("scale-btn", "⤡");
+    this.scaleButton.width = "60px";
+    this.scaleButton.height = "60px";
+    this.scaleButton.color = "white";
+    this.scaleButton.cornerRadius = 12;
+    this.scaleButton.background = "#1f3a4d";
+    this.scaleButton.fontSize = 28;
+    this.scaleButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    this.scaleButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.scaleButton.top = "20px";
+    this.scaleButton.left = "-250px";
+    this.scaleButton.isVisible = false;
+
+    this.scaleButton.onPointerClickObservable.add(() => {
+      this.isScaleToolActive = true;
+      this.setScalePanelVisible(true);
+      this.updateUI();
+    });
+
     this.ui.addControl(this.toggleButton);
+    this.ui.addControl(this.scaleButton);
     this.ui.addControl(this.statusText);
     this.createScaleSliderUI();
   }
@@ -160,15 +182,15 @@ export class XRManager {
 
     const panel = new Rectangle("arena-scale-panel");
     panel.width = "260px";
-    panel.height = "120px";
+    panel.height = "160px";
     panel.cornerRadius = 12;
     panel.color = "#4b5563";
     panel.thickness = 1;
     panel.background = "#111827d9";
     panel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     panel.left = "-20px";
-    panel.top = "-20px";
+    panel.top = "20px";
     panel.isVisible = false;
 
     const stack = new StackPanel("arena-scale-stack");
@@ -186,7 +208,7 @@ export class XRManager {
 
     const slider = new Slider("arena-scale-slider");
     slider.minimum = 0.005;
-    slider.maximum = 0.015;
+    slider.maximum = 0.100;
     slider.value = this.arenaScaleInAR;
     slider.height = "20px";
     slider.width = "100%";
@@ -208,9 +230,24 @@ export class XRManager {
       }
     });
 
+    const okButton = Button.CreateSimpleButton("scale-ok-btn", "✓ OK");
+    okButton.width = "80px";
+    okButton.height = "32px";
+    okButton.color = "white";
+    okButton.cornerRadius = 8;
+    okButton.background = "#22c55e";
+    okButton.fontSize = 16;
+
+    okButton.onPointerClickObservable.add(() => {
+      this.isScaleToolActive = false;
+      this.setScalePanelVisible(false);
+      this.updateUI();
+    });
+
     stack.addControl(title);
     stack.addControl(slider);
     stack.addControl(valueText);
+    stack.addControl(okButton);
     panel.addControl(stack);
     this.ui.addControl(panel);
 
@@ -255,15 +292,6 @@ export class XRManager {
       }
 
       if (this.hasUserPlacedArenaInXR) {
-        const pickedMesh = pointerInfo.pickInfo?.pickedMesh ?? null;
-
-        if (this.isArenaMesh(pickedMesh)) {
-          this.setScalePanelVisible(!this.isScalePanelVisible);
-        } else {
-          this.setScalePanelVisible(false);
-        }
-
-        this.updateUI();
         return;
       }
 
@@ -297,6 +325,7 @@ export class XRManager {
         this.applyArenaScale(this.arenaScaleInAR);
         this.arenaRoot.setEnabled(false);
         this.hasUserPlacedArenaInXR = false;
+        this.isScaleToolActive = false;
         this.lastHitResult = null;
         this.setHitCursorVisible(false);
         this.setScalePanelVisible(false);
@@ -318,6 +347,7 @@ export class XRManager {
     if (this.xrHelper.baseExperience.state === WebXRState.IN_XR) {
       this.arenaRoot.setEnabled(false);
       this.hasUserPlacedArenaInXR = false;
+      this.isScaleToolActive = false;
       this.lastHitResult = null;
       this.setHitCursorVisible(false);
       this.setScalePanelVisible(false);
@@ -326,6 +356,7 @@ export class XRManager {
 
     this.arenaRoot.setEnabled(true);
     this.hasUserPlacedArenaInXR = false;
+    this.isScaleToolActive = false;
     this.lastHitResult = null;
     this.setHitCursorVisible(false);
     this.setScalePanelVisible(false);
@@ -436,22 +467,46 @@ export class XRManager {
     const isInXR = state === WebXRState.IN_XR;
 
     if (!isInXR) {
+      // Fora do AR: apenas toggle visivel
+      this.toggleButton.isVisible = true;
       this.statusText.text = "RA: Off";
       this.toggleButton.background = "#1f3a4d";
+      if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.setScalePanelVisible(false);
       return;
     }
 
     if (!this.isHitTestAvailable) {
+      this.toggleButton.isVisible = true;
       this.statusText.text = "RA: On | Hit-test indisponivel";
       this.toggleButton.background = "#216e39";
+      if (this.scaleButton) this.scaleButton.isVisible = false;
       return;
     }
 
-    this.statusText.text = this.hasUserPlacedArenaInXR
-      ? this.isScalePanelVisible
-        ? "RA: On | Ajuste a escala da arena"
-        : "RA: On | Arena posicionada (toque para escalar)"
-      : "RA: On | Toque para posicionar a arena";
-    this.toggleButton.background = isInXR ? "#216e39" : "#1f3a4d";
+    if (!this.hasUserPlacedArenaInXR) {
+      // AR + arena nao posicionada: exibir scale panel no lugar do toggle
+      this.toggleButton.isVisible = false;
+      if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.setScalePanelVisible(true);
+      this.statusText.text = "RA: On | Toque para posicionar a arena";
+      return;
+    }
+
+    if (this.isScaleToolActive) {
+      // AR + arena posicionada + escala ativa: scale panel no lugar do toggle
+      this.toggleButton.isVisible = false;
+      if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.setScalePanelVisible(true);
+      this.statusText.text = "RA: On | Ajuste a escala da arena";
+      return;
+    }
+
+    // AR + arena posicionada: toggle + botao escala
+    this.toggleButton.isVisible = true;
+    this.toggleButton.background = "#216e39";
+    if (this.scaleButton) this.scaleButton.isVisible = true;
+    this.setScalePanelVisible(false);
+    this.statusText.text = "RA: On | Arena posicionada";
   }
 }
