@@ -2,6 +2,7 @@ import {
   AdvancedDynamicTexture,
   Control,
   Grid,
+  Image,
   Rectangle,
   StackPanel,
   TextBlock,
@@ -21,58 +22,65 @@ interface CardView {
   summaryText: TextBlock;
 }
 
+// Tamanho do canvas interno para o widget circular
+const RING_CANVAS_SIZE = 128;
+// Espessura do arco de progresso
+const RING_LINE_WIDTH = 12;
+
 export class CardDeckHud {
   private readonly scene: Scene;
   private readonly deckSystem: CardDeckSystem;
   private readonly ui: AdvancedDynamicTexture;
-  private readonly mushroomValueText: TextBlock;
   private readonly mushroomStatusText: TextBlock;
-  private readonly mushroomFill: Rectangle;
   private readonly cardViews = new Map<string, CardView>();
   private readonly stateObserver: Observer<CardDeckSnapshot> | null;
+
+  // Widget circular do cogumelo
+  private readonly ringCanvas: HTMLCanvasElement;
+  private readonly ringCtx: CanvasRenderingContext2D;
+  private readonly ringImage: Image;
+  private readonly ringContainer: Rectangle;
+  private isBlinking = false;
+  private blinkVisible = true;
+  private blinkElapsed = 0;
 
   public constructor(scene: Scene, deckSystem: CardDeckSystem) {
     this.scene = scene;
     this.deckSystem = deckSystem;
     this.ui = AdvancedDynamicTexture.CreateFullscreenUI("card-deck-ui", true, this.scene);
 
+    // --- Widget circular (canto superior esquerdo) ---
+    this.ringContainer = new Rectangle("mushroom-ring-container");
+    this.ringContainer.width = "80px";
+    this.ringContainer.height = "80px";
+    this.ringContainer.thickness = 0;
+    this.ringContainer.background = "#00000000";
+    this.ringContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.ringContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.ringContainer.top = "20px";
+    this.ringContainer.left = "20px";
+    this.ringContainer.isPointerBlocker = false;
+
+    this.ringCanvas = document.createElement("canvas");
+    this.ringCanvas.width = RING_CANVAS_SIZE;
+    this.ringCanvas.height = RING_CANVAS_SIZE;
+    this.ringCtx = this.ringCanvas.getContext("2d")!;
+
+    this.ringImage = new Image("mushroom-ring-img", "");
+    this.ringImage.width = "80px";
+    this.ringImage.height = "80px";
+    this.ringContainer.addControl(this.ringImage);
+    this.ui.addControl(this.ringContainer);
+
+    // --- Painel inferior (cartas + status) ---
     const rootPanel = new StackPanel("card-deck-root");
     rootPanel.isVertical = true;
     rootPanel.width = "94%";
-    rootPanel.height = "292px";
+    rootPanel.height = "222px";
     rootPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     rootPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
     rootPanel.top = "-18px";
     this.ui.addControl(rootPanel);
-
-    const mushroomCounter = new Rectangle("mushroom-counter");
-    mushroomCounter.width = "100%";
-    mushroomCounter.height = "88px";
-    mushroomCounter.cornerRadius = 22;
-    mushroomCounter.thickness = 1;
-    mushroomCounter.color = "#475569";
-    mushroomCounter.background = "#120f1fd9";
-    mushroomCounter.isPointerBlocker = true;
-
-    const mushroomStack = new StackPanel("mushroom-stack");
-    mushroomStack.isVertical = true;
-    mushroomStack.width = "92%";
-    mushroomStack.height = "74px";
-    mushroomStack.paddingTop = "8px";
-
-    const mushroomTitleText = new TextBlock("mushroom-title", "Cogumelos");
-    mushroomTitleText.height = "20px";
-    mushroomTitleText.color = "#d8b4fe";
-    mushroomTitleText.fontSize = 16;
-    mushroomTitleText.fontFamily = "Trebuchet MS";
-    mushroomTitleText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-
-    this.mushroomValueText = new TextBlock("mushroom-value", "0/10");
-    this.mushroomValueText.height = "30px";
-    this.mushroomValueText.color = "#f8fafc";
-    this.mushroomValueText.fontSize = 28;
-    this.mushroomValueText.fontFamily = "Trebuchet MS";
-    this.mushroomValueText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
 
     this.mushroomStatusText = new TextBlock(
       "mushroom-status",
@@ -83,29 +91,7 @@ export class CardDeckHud {
     this.mushroomStatusText.fontSize = 12;
     this.mushroomStatusText.fontFamily = "Trebuchet MS";
     this.mushroomStatusText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-
-    const mushroomBar = new Rectangle("mushroom-bar");
-    mushroomBar.width = "100%";
-    mushroomBar.height = "8px";
-    mushroomBar.cornerRadius = 4;
-    mushroomBar.thickness = 0;
-    mushroomBar.background = "#312e81";
-
-    this.mushroomFill = new Rectangle("mushroom-fill");
-    this.mushroomFill.width = "0%";
-    this.mushroomFill.height = "8px";
-    this.mushroomFill.cornerRadius = 4;
-    this.mushroomFill.thickness = 0;
-    this.mushroomFill.background = "#d946ef";
-    this.mushroomFill.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-
-    mushroomBar.addControl(this.mushroomFill);
-    mushroomStack.addControl(mushroomTitleText);
-    mushroomStack.addControl(this.mushroomValueText);
-    mushroomStack.addControl(this.mushroomStatusText);
-    mushroomStack.addControl(mushroomBar);
-    mushroomCounter.addControl(mushroomStack);
-    rootPanel.addControl(mushroomCounter);
+    rootPanel.addControl(this.mushroomStatusText);
 
     const spacer = new Rectangle("card-deck-spacer");
     spacer.width = "100%";
@@ -130,8 +116,22 @@ export class CardDeckHud {
 
     rootPanel.addControl(cardGrid);
 
+    // Observer de estado
     this.stateObserver = this.deckSystem.onStateChangedObservable.add((snapshot) => {
       this.render(snapshot);
+    });
+
+    // Animação de blink via registerBeforeRender
+    this.scene.registerBeforeRender(() => {
+      if (!this.isBlinking) {
+        return;
+      }
+      this.blinkElapsed += this.scene.getEngine().getDeltaTime();
+      if (this.blinkElapsed >= 400) {
+        this.blinkElapsed = 0;
+        this.blinkVisible = !this.blinkVisible;
+        this.ringContainer.alpha = this.blinkVisible ? 1 : 0.4;
+      }
     });
 
     this.render(this.deckSystem.getSnapshot());
@@ -219,9 +219,21 @@ export class CardDeckHud {
   }
 
   private render(snapshot: CardDeckSnapshot): void {
-    this.mushroomValueText.text = `${snapshot.mushrooms}/${snapshot.maxMushrooms}`;
-    this.mushroomFill.width = `${(snapshot.mushrooms / snapshot.maxMushrooms) * 100}%`;
+    // Desenhar widget circular
+    this.drawRing(snapshot.mushrooms, snapshot.maxMushrooms);
 
+    // Controlar blink quando cheio
+    const isFull = snapshot.mushrooms >= snapshot.maxMushrooms;
+    if (isFull && !this.isBlinking) {
+      this.isBlinking = true;
+      this.blinkElapsed = 0;
+      this.blinkVisible = true;
+    } else if (!isFull && this.isBlinking) {
+      this.isBlinking = false;
+      this.ringContainer.alpha = 1;
+    }
+
+    // Texto de status
     const selectedCard = snapshot.selectedCardId
       ? this.deckSystem.getCard(snapshot.selectedCardId)
       : null;
@@ -230,6 +242,7 @@ export class CardDeckHud {
       ? `Carta pronta: ${selectedCard.name}`
       : "Toque em uma carta para preparar a invocacao.";
 
+    // Atualizar cartas
     for (const card of snapshot.cards) {
       const view = this.cardViews.get(card.id);
 
@@ -251,6 +264,67 @@ export class CardDeckHud {
       view.nameText.color = isAffordable ? "#f8fafc" : "#a1a1aa";
       view.summaryText.color = isAffordable ? "#cbd5e1" : "#71717a";
     }
+  }
+
+  /** Desenha o arco circular psicodélico com cogumelo no centro */
+  private drawRing(current: number, max: number): void {
+    const ctx = this.ringCtx;
+    const size = RING_CANVAS_SIZE;
+    const center = size / 2;
+    const radius = center - RING_LINE_WIDTH;
+
+    ctx.clearRect(0, 0, size, size);
+
+    // Track de fundo (indigo escuro)
+    ctx.beginPath();
+    ctx.arc(center, center, radius, 0, Math.PI * 2);
+    ctx.lineWidth = RING_LINE_WIDTH;
+    ctx.strokeStyle = "#1e1b4b";
+    ctx.stroke();
+
+    // Arco de progresso com gradiente psicodélico
+    const progress = Math.min(current / max, 1);
+    if (progress > 0) {
+      const startAngle = -Math.PI / 2;
+      const endAngle = startAngle + progress * Math.PI * 2;
+
+      // Gradiente cônico (magenta → cyan → amarelo → magenta)
+      const gradient = ctx.createConicGradient(startAngle, center, center);
+      gradient.addColorStop(0, "#ff00ff");
+      gradient.addColorStop(0.33, "#00ffff");
+      gradient.addColorStop(0.66, "#ffff00");
+      gradient.addColorStop(1, "#ff00ff");
+
+      ctx.beginPath();
+      ctx.arc(center, center, radius, startAngle, endAngle);
+      ctx.lineWidth = RING_LINE_WIDTH;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = gradient;
+      ctx.stroke();
+    }
+
+    // Fundo circular interno (semi-transparente)
+    ctx.beginPath();
+    ctx.arc(center, center, radius - RING_LINE_WIDTH, 0, Math.PI * 2);
+    ctx.fillStyle = "#120f1fcc";
+    ctx.fill();
+
+    // Cogumelo emoji centralizado
+    ctx.font = "32px serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("\u{1F344}", center, center - 4);
+
+    // Texto numérico (current/max)
+    ctx.font = "bold 16px Trebuchet MS, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#d8b4fe";
+    ctx.fillText(`${current}/${max}`, center, center + 18);
+
+    // Atualizar Image source com data URL do canvas
+    this.ringImage.source = this.ringCanvas.toDataURL();
   }
 
   private withAlpha(hexColor: string, alpha: string): string {
