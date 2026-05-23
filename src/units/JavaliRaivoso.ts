@@ -38,7 +38,7 @@ export class JavaliRaivoso extends BaseUnit {
       },
       this.scene
     );
-    body.parent = this.root;
+    body.parent = this.visualRoot;
     body.position.y = 0.82;
     body.material = bodyMaterial;
 
@@ -51,7 +51,7 @@ export class JavaliRaivoso extends BaseUnit {
       },
       this.scene
     );
-    head.parent = this.root;
+    head.parent = this.visualRoot;
     head.position = new Vector3(0, 0.9, 1.18);
     head.material = bodyMaterial;
 
@@ -64,7 +64,7 @@ export class JavaliRaivoso extends BaseUnit {
       },
       this.scene
     );
-    mane.parent = this.root;
+    mane.parent = this.visualRoot;
     mane.position = new Vector3(0, 1.18, 0.12);
     mane.material = maneMaterial;
 
@@ -85,7 +85,7 @@ export class JavaliRaivoso extends BaseUnit {
         },
         this.scene
       );
-      leg.parent = this.root;
+      leg.parent = this.visualRoot;
       leg.position = new Vector3(x, 0.34, z);
       leg.material = maneMaterial;
     }
@@ -100,7 +100,7 @@ export class JavaliRaivoso extends BaseUnit {
         },
         this.scene
       );
-      fang.parent = this.root;
+      fang.parent = this.visualRoot;
       fang.position = new Vector3(x, 0.7, 1.62);
       fang.material = fangMaterial;
     }

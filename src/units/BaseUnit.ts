@@ -10,6 +10,10 @@ import type { TowerActor } from "../towers/TowerActor";
 
 export interface BaseUnitOptions {
   attackIntervalMs: number;
+  attackIntervalRangeMs?: {
+    max: number;
+    min: number;
+  };
   contactRange: number;
   displayName: string;
   health: number;
@@ -18,6 +22,14 @@ export interface BaseUnitOptions {
   scene: Scene;
   spawnPosition: Vector3;
   team: TeamId;
+}
+
+export interface UnitVisualState {
+  deltaSeconds: number;
+  didAttack: boolean;
+  distanceToTarget: number;
+  isMoving: boolean;
+  nowMs: number;
 }
 
 export abstract class BaseUnit {
@@ -31,13 +43,16 @@ export abstract class BaseUnit {
   public readonly scene: Scene;
   public readonly team: TeamId;
 
+  protected readonly attackIntervalRangeMs: BaseUnitOptions["attackIntervalRangeMs"];
   protected health: number;
-  protected lastAttackAt = Number.NEGATIVE_INFINITY;
+  protected nextAttackAt = Number.NEGATIVE_INFINITY;
   protected totalDistanceTravelled = 0;
   protected targetTower: TowerActor | null = null;
+  protected readonly visualRoot: TransformNode;
 
   public constructor(options: BaseUnitOptions) {
     this.attackIntervalMs = options.attackIntervalMs;
+    this.attackIntervalRangeMs = options.attackIntervalRangeMs;
     this.contactRange = options.contactRange;
     this.displayName = options.displayName;
     this.id = options.id;
@@ -49,6 +64,8 @@ export abstract class BaseUnit {
 
     this.root = new TransformNode(`${this.id}-root`, this.scene);
     this.root.position.copyFrom(options.spawnPosition);
+    this.visualRoot = new TransformNode(`${this.id}-visual-root`, this.scene);
+    this.visualRoot.parent = this.root;
 
     const selectionRing = MeshBuilder.CreateTorus(
       `${this.id}-selection-ring`,
@@ -76,6 +93,16 @@ export abstract class BaseUnit {
   protected abstract createVisual(): void;
 
   protected abstract computeAttackDamage(): number;
+
+  protected updateVisual(_state: UnitVisualState): void {}
+
+  protected getHealthRatio(): number {
+    if (this.maxHealth <= 0) {
+      return 0;
+    }
+
+    return this.health / this.maxHealth;
+  }
 
   public isAlive(): boolean {
     return this.health > 0;
@@ -111,6 +138,13 @@ export abstract class BaseUnit {
 
   public update(deltaSeconds: number, nowMs: number): void {
     if (!this.isAlive() || !this.targetTower || !this.targetTower.isAlive()) {
+      this.updateVisual({
+        deltaSeconds,
+        didAttack: false,
+        distanceToTarget: Number.POSITIVE_INFINITY,
+        isMoving: false,
+        nowMs,
+      });
       return;
     }
 
@@ -118,6 +152,7 @@ export abstract class BaseUnit {
     direction.y = 0;
 
     const distanceToTarget = direction.length();
+    let isMoving = false;
 
     if (distanceToTarget > this.contactRange) {
       const movementDistance = Math.min(
@@ -131,21 +166,54 @@ export abstract class BaseUnit {
         this.root.position.addInPlace(movement);
         this.totalDistanceTravelled += movementDistance;
         this.root.rotation.y = Math.atan2(movementDirection.x, movementDirection.z);
+        isMoving = true;
       }
 
+      this.nextAttackAt = Number.NEGATIVE_INFINITY;
+      this.updateVisual({
+        deltaSeconds,
+        didAttack: false,
+        distanceToTarget,
+        isMoving,
+        nowMs,
+      });
       return;
     }
 
-    const isAttackReady = nowMs - this.lastAttackAt >= this.attackIntervalMs;
+    const isAttackReady = nowMs >= this.nextAttackAt;
     if (!isAttackReady) {
+      this.updateVisual({
+        deltaSeconds,
+        didAttack: false,
+        distanceToTarget,
+        isMoving: false,
+        nowMs,
+      });
       return;
     }
 
     this.targetTower.receiveDamage(this.computeAttackDamage());
-    this.lastAttackAt = nowMs;
+    this.nextAttackAt = nowMs + this.resolveNextAttackIntervalMs();
+    this.updateVisual({
+      deltaSeconds,
+      didAttack: true,
+      distanceToTarget,
+      isMoving: false,
+      nowMs,
+    });
   }
 
   public dispose(): void {
     this.root.dispose(false, true);
+  }
+
+  private resolveNextAttackIntervalMs(): number {
+    if (!this.attackIntervalRangeMs) {
+      return this.attackIntervalMs;
+    }
+
+    const min = Math.min(this.attackIntervalRangeMs.min, this.attackIntervalRangeMs.max);
+    const max = Math.max(this.attackIntervalRangeMs.min, this.attackIntervalRangeMs.max);
+    return min + Math.random() * (max - min);
   }
 }

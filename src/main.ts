@@ -123,6 +123,13 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 				cost: 4,
 				accentColor: "#f97316",
 			},
+			{
+				id: "cururu-bombado",
+				name: "Cururu Bombado",
+				summary: "Tanque azul com 60% da vida da torre e super linguada crescente.",
+				cost: 5,
+				accentColor: "#38bdf8",
+			},
 		],
 		initialMushrooms: 4,
 		maxMushrooms: 10,

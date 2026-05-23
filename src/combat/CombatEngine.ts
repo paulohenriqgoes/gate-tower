@@ -60,7 +60,7 @@ export class CombatEngine {
     this.arenaRoot = options.arenaRoot;
     this.cardDeckSystem = options.cardDeckSystem;
     this.scene = options.scene;
-    this.unitFactory = new UnitFactory(this.scene);
+    this.unitFactory = new UnitFactory(this.scene, options.towerMaxHealth);
     this.towerUi = AdvancedDynamicTexture.CreateFullscreenUI("tower-world-ui", true, this.scene);
 
     this.towers = options.towerDefinitions.map((towerDefinition) => {
