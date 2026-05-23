@@ -80,12 +80,18 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	const scene = new Scene(engine);
 	scene.clearColor = new Color4(0.7, 0.8, 0.95, 1);
 
+	// quanto menor a tela, maior deve ser o fator para afastar a camera e enquadrar a arena inteira
+    const referenceScreenWidth = 970;
+    const safeScreenWidth = Math.max(window.innerWidth, 1);
+    const screenFactor = referenceScreenWidth / safeScreenWidth;
+    const distanceCamera = 20 * screenFactor;
+
 	const camera = new ArcRotateCamera(
 		"main-camera",
-		Math.PI / 2,
-		Math.PI / 3,
-		42,
-		new Vector3(0, 0, 0),
+		Math.PI / 2 * -1,
+		Math.PI / 3.4,
+		distanceCamera,
+		new Vector3(0, 0, -8.5),
 		scene
 	);
 	camera.lowerRadiusLimit = 24;
