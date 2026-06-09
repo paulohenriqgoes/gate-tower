@@ -58,7 +58,9 @@ export class CombatEngine {
     this.arenaRoot = options.arenaRoot;
     this.cardDeckSystem = options.cardDeckSystem;
     this.scene = options.scene;
-    this.unitFactory = new UnitFactory(this.scene, options.towerMaxHealth);
+    const towerAttackRange = (options.towerDefinitions[0]?.diameter ?? 0)
+      * options.towerAttackRangeMultiplier;
+    this.unitFactory = new UnitFactory(this.scene, options.towerMaxHealth, towerAttackRange);
 
     this.towers = options.towerDefinitions.map((towerDefinition) => {
       return new TowerActor({
@@ -128,20 +130,25 @@ export class CombatEngine {
       return false;
     }
 
-    const createdUnit = this.unitFactory.createUnit(selectedCard.id, spawnPosition, "player");
-    if (!createdUnit) {
+    const createdUnits = this.unitFactory.createUnits(selectedCard.id, spawnPosition, "player");
+    if (!createdUnits.length) {
       return false;
     }
 
     const consumedCard = this.cardDeckSystem.tryConsumeSelectedCard();
     if (!consumedCard) {
-      createdUnit.dispose();
+      for (const createdUnit of createdUnits) {
+        createdUnit.dispose();
+      }
       return false;
     }
 
-    createdUnit.root.parent = this.arenaRoot;
-    createdUnit.setTargetTower(targetTower);
-    this.units.push(createdUnit);
+    for (const createdUnit of createdUnits) {
+      createdUnit.root.parent = this.arenaRoot;
+      createdUnit.setTargetTower(this.findNearestAliveTower("enemy", createdUnit.root.position) ?? targetTower);
+      this.units.push(createdUnit);
+    }
+
     return true;
   }
 

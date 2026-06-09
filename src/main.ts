@@ -108,14 +108,21 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	await xrManager.initialize();
 
 	const towerCombatSettings = {
-		attackCooldownMs: 1000,
-		attackDamage: 20,
-		attackRangeMultiplier: 5,
+		attackCooldownMs: 900,
+		attackDamage: 35,
+		attackRangeMultiplier: 5.5,
 		maxHealth: 1000,
 	};
 
 	const cardDeckSystem = new CardDeckSystem({
 		cards: [
+			{
+				id: "dona-barata",
+				name: "Dona Barata",
+				summary: "Invoca 3 baratas frageis que lancam havaianas de pau no alcance da torre.",
+				cost: 3,
+				accentColor: "#f472b6",
+			},
 			{
 				id: "javali-raivoso",
 				name: "Javali Raivoso",
