@@ -3,10 +3,12 @@ import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 
 import type { TeamId } from "../battle/BattleTypes";
 import type { TowerActor } from "../towers/TowerActor";
+import { HealthBarMesh } from "../ui/HealthBarMesh";
 
 export interface BaseUnitOptions {
   attackIntervalMs: number;
@@ -48,6 +50,7 @@ export abstract class BaseUnit {
   protected nextAttackAt = Number.NEGATIVE_INFINITY;
   protected totalDistanceTravelled = 0;
   protected targetTower: TowerActor | null = null;
+  protected readonly healthBar: HealthBarMesh;
   protected readonly visualRoot: TransformNode;
 
   public constructor(options: BaseUnitOptions) {
@@ -88,6 +91,7 @@ export abstract class BaseUnit {
     selectionRing.isPickable = false;
 
     this.createVisual();
+    this.healthBar = this.createHealthBar();
   }
 
   protected abstract createVisual(): void;
@@ -130,6 +134,7 @@ export abstract class BaseUnit {
     }
 
     this.health = Math.max(0, this.health - amount);
+    this.healthBar.setRemainingHealth(this.health, this.maxHealth);
 
     if (!this.isAlive()) {
       this.root.setEnabled(false);
@@ -205,6 +210,25 @@ export abstract class BaseUnit {
 
   public dispose(): void {
     this.root.dispose(false, true);
+  }
+
+  private createHealthBar(): HealthBarMesh {
+    const { max, min } = this.root.getHierarchyBoundingVectors(true);
+    const absoluteRootPosition = this.root.getAbsolutePosition();
+    const unitHeight = max.y - absoluteRootPosition.y;
+    const widestSpan = Math.max(max.x - min.x, max.z - min.z);
+
+    return new HealthBarMesh({
+      borderColorHex: "#f5d0fe",
+      emissiveIntensity: 0.85,
+      fillColorHex: "#ff00ff",
+      height: 0.22,
+      id: this.id,
+      parent: this.root,
+      scene: this.scene,
+      width: Scalar.Clamp(widestSpan * 0.8, 1.35, 2.1),
+      yOffset: unitHeight + 0.45,
+    });
   }
 
   private resolveNextAttackIntervalMs(): number {

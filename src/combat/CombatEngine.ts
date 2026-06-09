@@ -1,4 +1,3 @@
-import { AdvancedDynamicTexture } from "@babylonjs/gui";
 import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import { PointerEventTypes } from "@babylonjs/core/Events/pointerEvents";
@@ -47,7 +46,6 @@ export class CombatEngine {
   private readonly arenaRoot: TransformNode;
   private readonly cardDeckSystem: CardDeckSystem;
   private readonly scene: Scene;
-  private readonly towerUi: AdvancedDynamicTexture;
   private readonly towers: TowerActor[];
   private readonly unitFactory: UnitFactory;
 
@@ -61,7 +59,6 @@ export class CombatEngine {
     this.cardDeckSystem = options.cardDeckSystem;
     this.scene = options.scene;
     this.unitFactory = new UnitFactory(this.scene, options.towerMaxHealth);
-    this.towerUi = AdvancedDynamicTexture.CreateFullscreenUI("tower-world-ui", true, this.scene);
 
     this.towers = options.towerDefinitions.map((towerDefinition) => {
       return new TowerActor({
@@ -75,7 +72,6 @@ export class CombatEngine {
         mesh: towerDefinition.mesh,
         scene: this.scene,
         team: towerDefinition.team,
-        ui: this.towerUi,
       });
     });
 
@@ -108,8 +104,6 @@ export class CombatEngine {
     for (const unit of this.units) {
       unit.dispose();
     }
-
-    this.towerUi.dispose();
   }
 
   private tryDeploySelectedCardAtWorldPoint(worldPoint: Vector3): boolean {

@@ -1,10 +1,10 @@
-import { Control, Rectangle, TextBlock, AdvancedDynamicTexture } from "@babylonjs/gui";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
 import type { TeamId, TowerLaneId } from "../battle/BattleTypes";
+import { HealthBarMesh } from "../ui/HealthBarMesh";
 import type { BaseUnit } from "../units/BaseUnit";
 
 export interface TowerActorOptions {
@@ -18,7 +18,6 @@ export interface TowerActorOptions {
   mesh: Mesh;
   scene: Scene;
   team: TeamId;
-  ui: AdvancedDynamicTexture;
 }
 
 export class TowerActor {
@@ -32,9 +31,7 @@ export class TowerActor {
   public readonly mesh: Mesh;
   public readonly team: TeamId;
 
-  private readonly healthFill: Rectangle;
-  private readonly healthLabel: TextBlock;
-  private readonly healthRoot: Rectangle;
+  private readonly healthBar: HealthBarMesh;
   private readonly destroyedMaterial: StandardMaterial;
 
   private health: number;
@@ -52,40 +49,17 @@ export class TowerActor {
     this.team = options.team;
     this.health = options.maxHealth;
 
-    const healthRoot = new Rectangle(`${this.id}-health-root`);
-    healthRoot.width = "110px";
-    healthRoot.height = "22px";
-    healthRoot.cornerRadius = 10;
-    healthRoot.thickness = 1;
-    healthRoot.color = "#0f172a";
-    healthRoot.background = "#111827e6";
-    healthRoot.isPointerBlocker = false;
-    healthRoot.linkWithMesh(this.mesh);
-    healthRoot.linkOffsetY = -84;
-
-    const healthFill = new Rectangle(`${this.id}-health-fill`);
-    healthFill.width = "100%";
-    healthFill.height = "8px";
-    healthFill.cornerRadius = 4;
-    healthFill.thickness = 0;
-    healthFill.background = this.team === "enemy" ? "#ef4444" : "#38bdf8";
-    healthFill.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    healthFill.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    healthFill.top = "3px";
-
-    const healthLabel = new TextBlock(`${this.id}-health-label`, `${this.health}/${this.maxHealth}`);
-    healthLabel.color = "#f8fafc";
-    healthLabel.fontSize = 10;
-    healthLabel.fontFamily = "Trebuchet MS";
-    healthLabel.top = "-4px";
-
-    healthRoot.addControl(healthFill);
-    healthRoot.addControl(healthLabel);
-    options.ui.addControl(healthRoot);
-
-    this.healthRoot = healthRoot;
-    this.healthFill = healthFill;
-    this.healthLabel = healthLabel;
+    this.healthBar = new HealthBarMesh({
+      borderColorHex: this.team === "enemy" ? "#f87171" : "#7dd3fc",
+      emissiveIntensity: 0.35,
+      fillColorHex: this.team === "enemy" ? "#ef4444" : "#38bdf8",
+      height: 0.34,
+      id: this.id,
+      parent: this.mesh,
+      scene: options.scene,
+      width: this.diameter * 1.35,
+      yOffset: this.resolveHealthBarOffsetY(),
+    });
 
     const destroyedMaterial = new StandardMaterial(`${this.id}-destroyed-material`, options.scene);
     destroyedMaterial.diffuseColor = Color3.FromHexString("#475569");
@@ -148,14 +122,17 @@ export class TowerActor {
   }
 
   public dispose(): void {
-    this.healthRoot.dispose();
+    this.healthBar.dispose();
     this.destroyedMaterial.dispose();
   }
 
   private updateHealthBar(): void {
-    const percentage = this.maxHealth === 0 ? 0 : (this.health / this.maxHealth) * 100;
-    this.healthFill.width = `${percentage}%`;
-    this.healthLabel.text = `${Math.ceil(this.health)}/${this.maxHealth}`;
-    this.healthRoot.alpha = this.isAlive() ? 1 : 0.75;
+    this.healthBar.setRemainingHealth(this.health, this.maxHealth);
+    this.healthBar.setOpacity(this.isAlive() ? 1 : 0.7);
+  }
+
+  private resolveHealthBarOffsetY(): number {
+    const localTop = this.mesh.getBoundingInfo().boundingBox.maximum.y;
+    return localTop + 0.6;
   }
 }
