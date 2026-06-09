@@ -120,14 +120,14 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 				id: "dona-barata",
 				name: "Dona Barata",
 				summary: "Invoca 3 baratas frageis que lancam havaianas de pau no alcance da torre.",
-				cost: 3,
+				cost: 4,
 				accentColor: "#f472b6",
 			},
 			{
 				id: "javali-raivoso",
 				name: "Javali Raivoso",
 				summary: "Vida 200. O dano cresce com a distancia percorrida.",
-				cost: 4,
+				cost: 2,
 				accentColor: "#f97316",
 			},
 			{
