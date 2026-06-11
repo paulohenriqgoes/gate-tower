@@ -3,6 +3,7 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
+import { convertMillisecondsToSimulationTicks } from "../battle/SimulationClock";
 import type { TeamId, TowerLaneId } from "../battle/BattleTypes";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
 import type { BaseUnit } from "../units/BaseUnit";
@@ -33,9 +34,10 @@ export class TowerActor {
 
   private readonly healthBar: HealthBarMesh;
   private readonly destroyedMaterial: StandardMaterial;
+  private readonly attackCooldownTicks: number;
 
   private health: number;
-  private lastAttackAt = Number.NEGATIVE_INFINITY;
+  private lastAttackTick = Number.NEGATIVE_INFINITY;
 
   public constructor(options: TowerActorOptions) {
     this.attackCooldownMs = options.attackCooldownMs;
@@ -48,6 +50,7 @@ export class TowerActor {
     this.mesh = options.mesh;
     this.team = options.team;
     this.health = options.maxHealth;
+    this.attackCooldownTicks = convertMillisecondsToSimulationTicks(options.attackCooldownMs);
 
     this.healthBar = new HealthBarMesh({
       borderColorHex: this.team === "enemy" ? "#f87171" : "#7dd3fc",
@@ -81,12 +84,12 @@ export class TowerActor {
     return this.diameter * this.attackRangeMultiplier;
   }
 
-  public canAttack(unit: BaseUnit, nowMs: number): boolean {
+  public canAttack(unit: BaseUnit, currentTick: number): boolean {
     if (!this.isAlive() || !unit.isAlive() || unit.team === this.team) {
       return false;
     }
 
-    const isCooldownReady = nowMs - this.lastAttackAt >= this.attackCooldownMs;
+    const isCooldownReady = currentTick - this.lastAttackTick >= this.attackCooldownTicks;
     if (!isCooldownReady) {
       return false;
     }
@@ -94,13 +97,13 @@ export class TowerActor {
     return this.getDistanceToUnit(unit) <= this.getAttackRange();
   }
 
-  public tryAttack(unit: BaseUnit, nowMs: number): boolean {
-    if (!this.canAttack(unit, nowMs)) {
+  public tryAttack(unit: BaseUnit, currentTick: number): boolean {
+    if (!this.canAttack(unit, currentTick)) {
       return false;
     }
 
     unit.takeDamage(this.attackDamage);
-    this.lastAttackAt = nowMs;
+    this.lastAttackTick = currentTick;
     return true;
   }
 

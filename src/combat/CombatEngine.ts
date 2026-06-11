@@ -6,6 +6,7 @@ import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 
+import type { SimulationTickContext } from "../battle/SimulationClock";
 import type { TeamId } from "../battle/BattleTypes";
 import { CardDeckSystem } from "../cards/CardDeckSystem";
 import { TowerActor } from "../towers/TowerActor";
@@ -41,6 +42,14 @@ export interface CombatEngineOptions {
   towerMaxHealth: number;
 }
 
+interface PendingDeployCommand {
+  cardId: string;
+  localPoint: Vector3;
+  scheduledTick: number;
+  sequence: number;
+  team: TeamId;
+}
+
 export class CombatEngine {
   private readonly arenaLayout: CombatArenaLayout;
   private readonly arenaRoot: TransformNode;
@@ -49,9 +58,11 @@ export class CombatEngine {
   private readonly towers: TowerActor[];
   private readonly unitFactory: UnitFactory;
 
-  private readonly beforeRenderObserver: Observer<Scene>;
   private readonly pointerObserver: Observer<unknown>;
   private readonly units: BaseUnit[] = [];
+  private readonly pendingDeployCommands: PendingDeployCommand[] = [];
+  private currentSimulationTick = 0;
+  private nextCommandSequence = 0;
 
   public constructor(options: CombatEngineOptions) {
     this.arenaLayout = options.arenaLayout;
@@ -77,10 +88,6 @@ export class CombatEngine {
       });
     });
 
-    this.beforeRenderObserver = this.scene.onBeforeRenderObservable.add(() => {
-      this.update();
-    });
-
     this.pointerObserver = this.scene.onPointerObservable.add((pointerInfo) => {
       if (pointerInfo.type !== PointerEventTypes.POINTERDOWN) {
         return;
@@ -91,13 +98,13 @@ export class CombatEngine {
         return;
       }
 
-      this.tryDeploySelectedCardAtWorldPoint(pickedPoint);
+      this.queueDeploySelectedCardAtWorldPoint(pickedPoint);
     });
   }
 
   public dispose(): void {
-    this.scene.onBeforeRenderObservable.remove(this.beforeRenderObserver);
     this.scene.onPointerObservable.remove(this.pointerObserver);
+    this.pendingDeployCommands.length = 0;
 
     for (const tower of this.towers) {
       tower.dispose();
@@ -108,53 +115,9 @@ export class CombatEngine {
     }
   }
 
-  private tryDeploySelectedCardAtWorldPoint(worldPoint: Vector3): boolean {
-    if (!this.arenaRoot.isEnabled()) {
-      return false;
-    }
-
-    const selectedCard = this.cardDeckSystem.getSelectedCard();
-    if (!selectedCard) {
-      return false;
-    }
-
-    const localPoint = this.convertWorldToArenaLocal(worldPoint);
-    const spawnPosition = this.getValidSpawnPosition(localPoint);
-
-    if (!spawnPosition) {
-      return false;
-    }
-
-    const targetTower = this.findNearestAliveTower("enemy", spawnPosition);
-    if (!targetTower) {
-      return false;
-    }
-
-    const createdUnits = this.unitFactory.createUnits(selectedCard.id, spawnPosition, "player");
-    if (!createdUnits.length) {
-      return false;
-    }
-
-    const consumedCard = this.cardDeckSystem.tryConsumeSelectedCard();
-    if (!consumedCard) {
-      for (const createdUnit of createdUnits) {
-        createdUnit.dispose();
-      }
-      return false;
-    }
-
-    for (const createdUnit of createdUnits) {
-      createdUnit.root.parent = this.arenaRoot;
-      createdUnit.setTargetTower(this.findNearestAliveTower("enemy", createdUnit.root.position) ?? targetTower);
-      this.units.push(createdUnit);
-    }
-
-    return true;
-  }
-
-  private update(): void {
-    const deltaSeconds = this.scene.getEngine().getDeltaTime() / 1000;
-    const nowMs = performance.now();
+  public advanceSimulationTick(context: SimulationTickContext): void {
+    this.currentSimulationTick = context.currentTick;
+    this.processPendingDeployCommands();
 
     for (const unit of this.units) {
       if (!unit.isAlive()) {
@@ -163,10 +126,10 @@ export class CombatEngine {
 
       const currentTarget = unit.getTargetTower();
       if (!currentTarget || !currentTarget.isAlive()) {
-        unit.setTargetTower(this.findNearestAliveTower("enemy", unit.root.position));
+        unit.setTargetTower(this.findNearestAliveTower(this.resolveEnemyTeam(unit.team), unit.root.position));
       }
 
-      unit.update(deltaSeconds, nowMs);
+      unit.update(context.tickDurationSeconds, context.currentTick);
     }
 
     for (const tower of this.towers) {
@@ -179,10 +142,95 @@ export class CombatEngine {
         continue;
       }
 
-      tower.tryAttack(targetUnit, nowMs);
+      tower.tryAttack(targetUnit, context.currentTick);
     }
 
     this.cleanupDefeatedUnits();
+  }
+
+  private queueDeploySelectedCardAtWorldPoint(worldPoint: Vector3): boolean {
+    if (!this.arenaRoot.isEnabled()) {
+      return false;
+    }
+
+    const selectedCard = this.cardDeckSystem.getSelectedCard();
+    if (!selectedCard) {
+      return false;
+    }
+
+    const localPoint = this.convertWorldToArenaLocal(worldPoint);
+    this.pendingDeployCommands.push({
+      cardId: selectedCard.id,
+      localPoint,
+      scheduledTick: this.currentSimulationTick + 1,
+      sequence: this.nextCommandSequence,
+      team: "player",
+    });
+    this.nextCommandSequence += 1;
+
+    return true;
+  }
+
+  private processPendingDeployCommands(): void {
+    if (!this.pendingDeployCommands.length) {
+      return;
+    }
+
+    this.pendingDeployCommands.sort((left, right) => {
+      if (left.scheduledTick === right.scheduledTick) {
+        return left.sequence - right.sequence;
+      }
+
+      return left.scheduledTick - right.scheduledTick;
+    });
+
+    const remainingCommands: PendingDeployCommand[] = [];
+
+    for (const command of this.pendingDeployCommands) {
+      if (command.scheduledTick > this.currentSimulationTick) {
+        remainingCommands.push(command);
+        continue;
+      }
+
+      this.tryDeployCardAtLocalPoint(command);
+    }
+
+    this.pendingDeployCommands.length = 0;
+    this.pendingDeployCommands.push(...remainingCommands);
+  }
+
+  private tryDeployCardAtLocalPoint(command: PendingDeployCommand): boolean {
+    const spawnPosition = this.getValidSpawnPosition(command.localPoint);
+    if (!spawnPosition) {
+      return false;
+    }
+
+    const enemyTeam = this.resolveEnemyTeam(command.team);
+    const targetTower = this.findNearestAliveTower(enemyTeam, spawnPosition);
+    if (!targetTower) {
+      return false;
+    }
+
+    const createdUnits = this.unitFactory.createUnits(command.cardId, spawnPosition, command.team);
+    if (!createdUnits.length) {
+      return false;
+    }
+
+    const consumedCard = this.cardDeckSystem.tryConsumeCard(command.cardId);
+    if (!consumedCard) {
+      for (const createdUnit of createdUnits) {
+        createdUnit.dispose();
+      }
+      return false;
+    }
+
+    for (const createdUnit of createdUnits) {
+      createdUnit.root.parent = this.arenaRoot;
+      createdUnit.setTargetTower(this.findNearestAliveTower(enemyTeam, createdUnit.root.position) ?? targetTower);
+      this.units.push(createdUnit);
+    }
+
+    return true;
   }
 
   private cleanupDefeatedUnits(): void {
@@ -243,6 +291,10 @@ export class CombatEngine {
     }
 
     return nearestTower;
+  }
+
+  private resolveEnemyTeam(team: TeamId): TeamId {
+    return team === "player" ? "enemy" : "player";
   }
 
   private findNearestAliveEnemyUnit(team: TeamId, position: Vector3, maxRange: number): BaseUnit | null {

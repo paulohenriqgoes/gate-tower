@@ -1,5 +1,7 @@
 import { Observable } from "@babylonjs/core/Misc/observable";
 
+import { convertMillisecondsToSimulationTicks } from "../battle/SimulationClock";
+
 export interface CardDefinition {
   id: string;
   name: string;
@@ -27,11 +29,12 @@ export class CardDeckSystem {
 
   private readonly cards: CardDefinition[];
   private readonly maxMushrooms: number;
-  private readonly regenerationIntervalMs: number;
+  private readonly regenerationIntervalTicks: number;
 
   private mushrooms: number;
   private selectedCardId: string | null = null;
-  private regenerationHandle: number | null = null;
+  private regenerationEnabled = false;
+  private regenerationElapsedTicks = 0;
 
   public constructor(options: CardDeckSystemOptions) {
     if (!options.cards.length) {
@@ -40,38 +43,47 @@ export class CardDeckSystem {
 
     this.cards = [...options.cards];
     this.maxMushrooms = options.maxMushrooms ?? 10;
-    this.regenerationIntervalMs = options.regenerationIntervalMs ?? 1800;
+    this.regenerationIntervalTicks = convertMillisecondsToSimulationTicks(
+      options.regenerationIntervalMs ?? 1800
+    );
     this.mushrooms = this.clampMushrooms(options.initialMushrooms ?? 4);
   }
 
   public startRegeneration(): void {
-    if (this.regenerationHandle !== null) {
-      return;
-    }
-
-    this.regenerationHandle = window.setInterval(() => {
-      if (this.mushrooms >= this.maxMushrooms) {
-        return;
-      }
-
-      this.mushrooms += 1;
-      this.emitState();
-    }, this.regenerationIntervalMs);
-
+    this.regenerationEnabled = true;
     this.emitState();
   }
 
   public stopRegeneration(): void {
-    if (this.regenerationHandle === null) {
-      return;
-    }
-
-    window.clearInterval(this.regenerationHandle);
-    this.regenerationHandle = null;
+    this.regenerationEnabled = false;
   }
 
   public dispose(): void {
     this.stopRegeneration();
+  }
+
+  public advanceSimulationTick(tickCount = 1): void {
+    if (!this.regenerationEnabled || tickCount <= 0) {
+      return;
+    }
+
+    this.regenerationElapsedTicks += tickCount;
+    let didChangeState = false;
+
+    while (this.regenerationElapsedTicks >= this.regenerationIntervalTicks) {
+      this.regenerationElapsedTicks -= this.regenerationIntervalTicks;
+
+      if (this.mushrooms >= this.maxMushrooms) {
+        continue;
+      }
+
+      this.mushrooms += 1;
+      didChangeState = true;
+    }
+
+    if (didChangeState) {
+      this.emitState();
+    }
   }
 
   public getSnapshot(): CardDeckSnapshot {
@@ -128,17 +140,31 @@ export class CardDeckSystem {
   }
 
   public tryConsumeSelectedCard(): CardDefinition | null {
-    const selectedCard = this.getSelectedCard();
-
-    if (!selectedCard || this.mushrooms < selectedCard.cost) {
+    if (!this.selectedCardId) {
       return null;
     }
 
-    this.mushrooms = this.clampMushrooms(this.mushrooms - selectedCard.cost);
-    this.selectedCardId = null;
+    return this.tryConsumeCard(this.selectedCardId);
+  }
+
+  public tryConsumeCard(cardId: string): CardDefinition | null {
+    const card = this.getCard(cardId);
+
+    if (!card || this.mushrooms < card.cost) {
+      return null;
+    }
+
+    this.mushrooms = this.clampMushrooms(this.mushrooms - card.cost);
+
+    if (this.selectedCardId === card.id) {
+      this.selectedCardId = null;
+    } else if (this.selectedCardId && !this.hasEnoughMushroomsFor(this.selectedCardId)) {
+      this.selectedCardId = null;
+    }
+
     this.emitState();
 
-    return selectedCard;
+    return card;
   }
 
   public setMushrooms(value: number): void {

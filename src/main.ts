@@ -6,6 +6,7 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 
 import { ArenaSystem } from "./arena/ArenaSystem";
+import { SimulationClock } from "./battle/SimulationClock";
 import { CardDeckSystem } from "./cards/CardDeckSystem";
 import { CombatEngine } from "./combat/CombatEngine";
 import { CardDeckHud } from "./ui/CardDeckHud";
@@ -156,8 +157,15 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 		towerDefinitions: arena.towerDefinitions,
 		towerMaxHealth: towerCombatSettings.maxHealth,
 	});
+	const simulationClock = new SimulationClock(scene);
+	const unsubscribeSimulation = simulationClock.subscribe((context) => {
+		combatEngine.advanceSimulationTick(context);
+		cardDeckSystem.advanceSimulationTick();
+	});
 
 	scene.onDisposeObservable.add(() => {
+		unsubscribeSimulation();
+		simulationClock.dispose();
 		combatEngine.dispose();
 		cardDeckHud.dispose();
 		cardDeckSystem.dispose();

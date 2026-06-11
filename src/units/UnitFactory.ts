@@ -12,6 +12,7 @@ export class UnitFactory {
   private readonly scene: Scene;
   private readonly towerAttackRange: number;
   private readonly towerMaxHealth: number;
+  private nextUnitSequence = 1;
 
   public constructor(scene: Scene, towerMaxHealth: number, towerAttackRange: number) {
     this.scene = scene;
@@ -22,9 +23,11 @@ export class UnitFactory {
   public createUnits(cardId: string, spawnPosition: Vector3, team: TeamId): BaseUnit[] {
     switch (cardId) {
       case "cururu-bombado":
+        const cururuIdentity = this.createUnitIdentity(cardId);
         return [
           new CururuBombado({
-            id: this.createUnitId(cardId),
+            id: cururuIdentity.id,
+            randomSeed: cururuIdentity.randomSeed,
             scene: this.scene,
             spawnPosition,
             team,
@@ -34,9 +37,11 @@ export class UnitFactory {
       case "dona-barata":
         return this.createDonaBarataSquad(spawnPosition, team);
       case "javali-raivoso":
+        const javaliIdentity = this.createUnitIdentity(cardId);
         return [
           new JavaliRaivoso({
-            id: this.createUnitId(cardId),
+            id: javaliIdentity.id,
+            randomSeed: javaliIdentity.randomSeed,
             scene: this.scene,
             spawnPosition,
             team,
@@ -55,9 +60,11 @@ export class UnitFactory {
     ];
 
     return formationOffsets.map((offset, index) => {
+      const identity = this.createUnitIdentity(`dona-barata-${index}`);
       return new DonaBarata({
         attackRange: this.towerAttackRange * this.donaBarataAttackRangeMultiplier,
-        id: this.createUnitId(`dona-barata-${index}`),
+        id: identity.id,
+        randomSeed: identity.randomSeed,
         scene: this.scene,
         spawnPosition: spawnPosition.add(offset),
         team,
@@ -65,7 +72,13 @@ export class UnitFactory {
     });
   }
 
-  private createUnitId(cardId: string): string {
-    return `${cardId}-${Date.now()}-${Math.round(Math.random() * 1000)}`;
+  private createUnitIdentity(cardId: string): { id: string; randomSeed: number } {
+    const sequence = this.nextUnitSequence;
+    this.nextUnitSequence += 1;
+
+    return {
+      id: `${cardId}-${sequence}`,
+      randomSeed: sequence,
+    };
   }
 }

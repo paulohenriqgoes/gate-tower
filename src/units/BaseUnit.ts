@@ -6,6 +6,7 @@ import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 
+import { convertMillisecondsToSimulationTicks } from "../battle/SimulationClock";
 import type { TeamId } from "../battle/BattleTypes";
 import type { TowerActor } from "../towers/TowerActor";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
@@ -21,6 +22,7 @@ export interface BaseUnitOptions {
   health: number;
   id: string;
   movementSpeed: number;
+  randomSeed: number;
   scene: Scene;
   spawnPosition: Vector3;
   team: TeamId;
@@ -31,11 +33,11 @@ export interface UnitVisualState {
   didAttack: boolean;
   distanceToTarget: number;
   isMoving: boolean;
-  nowMs: number;
 }
 
 export abstract class BaseUnit {
   public readonly attackIntervalMs: number;
+  public readonly attackIntervalTicks: number;
   public readonly contactRange: number;
   public readonly displayName: string;
   public readonly id: string;
@@ -45,17 +47,27 @@ export abstract class BaseUnit {
   public readonly scene: Scene;
   public readonly team: TeamId;
 
-  protected readonly attackIntervalRangeMs: BaseUnitOptions["attackIntervalRangeMs"];
+  protected readonly attackIntervalRangeTicks: {
+    max: number;
+    min: number;
+  } | null;
   protected health: number;
-  protected nextAttackAt = Number.NEGATIVE_INFINITY;
+  protected nextAttackTick = Number.NEGATIVE_INFINITY;
   protected totalDistanceTravelled = 0;
   protected targetTower: TowerActor | null = null;
   protected readonly healthBar: HealthBarMesh;
   protected readonly visualRoot: TransformNode;
+  private randomState: number;
 
   public constructor(options: BaseUnitOptions) {
     this.attackIntervalMs = options.attackIntervalMs;
-    this.attackIntervalRangeMs = options.attackIntervalRangeMs;
+    this.attackIntervalTicks = convertMillisecondsToSimulationTicks(options.attackIntervalMs);
+    this.attackIntervalRangeTicks = options.attackIntervalRangeMs
+      ? {
+        max: convertMillisecondsToSimulationTicks(options.attackIntervalRangeMs.max),
+        min: convertMillisecondsToSimulationTicks(options.attackIntervalRangeMs.min),
+      }
+      : null;
     this.contactRange = options.contactRange;
     this.displayName = options.displayName;
     this.id = options.id;
@@ -64,6 +76,7 @@ export abstract class BaseUnit {
     this.scene = options.scene;
     this.team = options.team;
     this.health = options.health;
+    this.randomState = (options.randomSeed >>> 0) || 1;
 
     this.root = new TransformNode(`${this.id}-root`, this.scene);
     this.root.position.copyFrom(options.spawnPosition);
@@ -141,14 +154,13 @@ export abstract class BaseUnit {
     }
   }
 
-  public update(deltaSeconds: number, nowMs: number): void {
+  public update(deltaSeconds: number, currentTick: number): void {
     if (!this.isAlive() || !this.targetTower || !this.targetTower.isAlive()) {
       this.updateVisual({
         deltaSeconds,
         didAttack: false,
         distanceToTarget: Number.POSITIVE_INFINITY,
         isMoving: false,
-        nowMs,
       });
       return;
     }
@@ -174,37 +186,34 @@ export abstract class BaseUnit {
         isMoving = true;
       }
 
-      this.nextAttackAt = Number.NEGATIVE_INFINITY;
+      this.nextAttackTick = Number.NEGATIVE_INFINITY;
       this.updateVisual({
         deltaSeconds,
         didAttack: false,
         distanceToTarget,
         isMoving,
-        nowMs,
       });
       return;
     }
 
-    const isAttackReady = nowMs >= this.nextAttackAt;
+    const isAttackReady = currentTick >= this.nextAttackTick;
     if (!isAttackReady) {
       this.updateVisual({
         deltaSeconds,
         didAttack: false,
         distanceToTarget,
         isMoving: false,
-        nowMs,
       });
       return;
     }
 
     this.targetTower.receiveDamage(this.computeAttackDamage());
-    this.nextAttackAt = nowMs + this.resolveNextAttackIntervalMs();
+    this.nextAttackTick = currentTick + this.resolveNextAttackIntervalTicks();
     this.updateVisual({
       deltaSeconds,
       didAttack: true,
       distanceToTarget,
       isMoving: false,
-      nowMs,
     });
   }
 
@@ -231,13 +240,23 @@ export abstract class BaseUnit {
     });
   }
 
-  private resolveNextAttackIntervalMs(): number {
-    if (!this.attackIntervalRangeMs) {
-      return this.attackIntervalMs;
+  private resolveNextAttackIntervalTicks(): number {
+    if (!this.attackIntervalRangeTicks) {
+      return this.attackIntervalTicks;
     }
 
-    const min = Math.min(this.attackIntervalRangeMs.min, this.attackIntervalRangeMs.max);
-    const max = Math.max(this.attackIntervalRangeMs.min, this.attackIntervalRangeMs.max);
-    return min + Math.random() * (max - min);
+    const min = Math.min(this.attackIntervalRangeTicks.min, this.attackIntervalRangeTicks.max);
+    const max = Math.max(this.attackIntervalRangeTicks.min, this.attackIntervalRangeTicks.max);
+
+    if (min === max) {
+      return min;
+    }
+
+    return min + Math.floor(this.nextDeterministicRandom() * (max - min + 1));
+  }
+
+  private nextDeterministicRandom(): number {
+    this.randomState = (Math.imul(this.randomState, 1664525) + 1013904223) >>> 0;
+    return this.randomState / 0x100000000;
   }
 }
