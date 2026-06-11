@@ -17,12 +17,12 @@ Jogo de cartas com lanes em Realidade Aumentada (RA), inspirado na leitura de ca
 
 ## Roadmap de Fases
 
-| Concluida | Fase | Tarefa | Objetivo | Status |
-| --- | --- | --- | --- | --- |
-| [x] | 01 | Arena Anchor | Garantir que a arena $60cm \times 40cm$ fique travada na mesa sem tremer. | Concluída |
-| [x] | 02 | Unit Spawner | Permitir selecionar uma carta e tocar na arena para instanciar uma unidade que anda para frente. | Concluida |
-| [ ] | 03 | Shadows & Life | Adicionar ShadowGenerator para o cubo projetar sombra na arena e uma animacao simples de pular (squash and stretch) enquanto anda. | Nao iniciada |
-| [ ] | 04 | Targeting | Fazer a unidade detectar a torre, parar de andar e comecar a atacar com feedback visual. | Parcialmente concluida |
+| Concluida | Fase | Tarefa | Objetivo |
+| --- | --- | --- | --- |
+| [x] | 01 | POC | AR mode, Arena com escala, posicionar tropas |
+| [0] | 02 | Inimigos | Bot inimigo para jogar contra. |
+| [0] | 03 | Sons e Musica | Adicionar música de fundo e sons para ataques. |
+| [0] | 04 | Tela inicial e Final game | Menu inicial para iniciar o game e final quando ganha/perde partida |
 
 ## Critério de Conclusão da Fase 01
 
