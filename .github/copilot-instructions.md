@@ -3,9 +3,9 @@ Tower Gate - Instruções de Desenvolvimento (Copilot)
 Desenvolver um jogo de cartas com mecânica de lanes (estilo Clash Royale) em Realidade Aumentada (RA). O jogo deve oferecer uma experiência imersiva onde unidades digitais interagem com o espaço físico (mesa/chão) de forma convincente.
 
 2. Restrições e Tecnologias
-Engine: Babylon.js (foco em WebXR).
+Engine: Babylon.js (RA via engine 8th Wall — SLAM na câmera; WebXR não é mais utilizado).
 
-Visualização: Deve existir um toggle (alternador) para ativar/desativar o modo RA em tempo real. A lógica do jogo deve ser independente do modo de renderização (Canvas 3D vs. WebXR).
+Visualização: Deve existir um toggle (alternador) para ativar/desativar o modo RA em tempo real. A lógica do jogo deve ser independente do modo de renderização (Canvas 3D vs. RA 8th Wall).
 
 Postura do Desenvolvedor: Atuar como um Dev Senior. O código deve ser modular, limpo, manutenível e seguir os princípios SOLID.
 
@@ -16,7 +16,7 @@ Commit Messages: Devem ser claros, concisos e descritivos, seguindo o formato "f
 3. Arquitetura Modular Obrigatória
 Todo código deve ser organizado nos seguintes módulos:
 
-XR Manager: Gerencia a sessão WebXR, o Hit Test para ancorar a arena e o estado do toggle RA.
+AR Manager: Gerencia a sessão RA via 8th Wall (`EighthWallARManager`), o posicionamento da arena por raycast no chão estimado pelo SLAM (plano y = 0) e o estado do toggle RA.
 
 Arena System: Define os limites do campo de batalha, navegação (lanes) e detecção de colisões.
 

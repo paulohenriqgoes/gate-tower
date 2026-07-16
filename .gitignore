@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Artefatos do engine 8th Wall (copiados de node_modules no postinstall)
+public/8thwall/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

@@ -14,6 +14,14 @@ Jogo de cartas com lanes em Realidade Aumentada (RA), inspirado na leitura de ca
 - spawn de unidade ao tocar na arena apos selecionar a carta
 - unidade Javali Raivoso andando ate a torre inimiga e causando dano
 - torres com vida, contra-ataque e estado destruido
+- modo RA migrado de WebXR para o engine 8th Wall (SLAM via camera), com suporte a iOS
+
+## Realidade Aumentada (8th Wall)
+
+- O modo RA usa o engine 8th Wall (`@8thwall/engine-binary`), que roda em qualquer navegador mobile (iOS Safari incluido) — WebXR nao e mais utilizado.
+- Os artefatos do engine sao copiados de `node_modules` para `public/8thwall/` automaticamente no `npm install` (script `postinstall`).
+- O chao estimado pelo SLAM fica no plano `y = 0`; a arena e posicionada por raycast com toque na superficie, com ajuste de escala (mundo em metros, escala absoluta).
+- O binario possui licenca de uso limitado (ver `node_modules/@8thwall/engine-binary/LICENSE`).
 
 ## Roadmap de Fases
 
@@ -43,6 +51,8 @@ npm install
 ```bash
 npm run dev
 ```
+
+O dev server roda em HTTPS (certificado autoassinado) porque o acesso a camera exige contexto seguro. Para testar no celular, acesse `https://<ip-da-maquina>:5173` na mesma rede e aceite o aviso de certificado.
 
 - Build de produção:
 

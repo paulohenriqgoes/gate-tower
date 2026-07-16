@@ -1,29 +1,33 @@
-import { WebXRSessionManager } from "@babylonjs/core/XR/webXRSessionManager";
+import type { Behavior } from "@babylonjs/core/Behaviors/behavior";
+import type { Camera } from "@babylonjs/core/Cameras/camera";
+import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
+import "@babylonjs/core/Culling/ray";
+import { PointerEventTypes } from "@babylonjs/core/Events/pointerEvents";
+import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { Plane } from "@babylonjs/core/Maths/math.plane";
+import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
-import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { Color3 } from "@babylonjs/core/Maths/math.color";
-import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Scene } from "@babylonjs/core/scene";
-import type { WebXRDefaultExperience } from "@babylonjs/core/XR/webXRDefaultExperience";
-import "@babylonjs/core/Helpers/sceneHelpers";
-import "@babylonjs/core/XR/webXRDefaultExperience";
-import { WebXRFeatureName } from "@babylonjs/core/XR/webXRFeaturesManager";
-import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
-import "@babylonjs/core/XR/features/WebXRHitTest";
 import { AdvancedDynamicTexture, Button, Control, Rectangle, Slider, StackPanel, TextBlock } from "@babylonjs/gui";
-import type { IWebXRHitResult, WebXRHitTest } from "@babylonjs/core/XR/features/WebXRHitTest";
-import { PointerEventTypes } from "@babylonjs/core/Events/pointerEvents";
-import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 
-export class XRManager {
+import { installBabylonGlobalsForXR8 } from "./babylonRuntimeGlobals";
+
+const XR8_LOAD_TIMEOUT_MS = 15000;
+const MAX_PLACEMENT_DISTANCE = 40;
+
+/**
+ * Gerencia o modo RA via engine 8th Wall (SLAM), substituindo a sessao WebXR.
+ * O chao estimado pelo SLAM fica no plano y = 0 do mundo; posicionamento da
+ * arena e cursor usam raycast contra esse plano.
+ */
+export class EighthWallARManager {
   private readonly scene: Scene;
-  private readonly floorMeshes: Mesh[];
   private readonly arenaRoot: TransformNode;
+  private readonly groundPlane = new Plane(0, 1, 0, 0);
 
-  private xrHelper: WebXRDefaultExperience | null = null;
-  private hitTestFeature: WebXRHitTest | null = null;
   private ui: AdvancedDynamicTexture | null = null;
   private toggleButton: Button | null = null;
   private statusText: TextBlock | null = null;
@@ -32,95 +36,68 @@ export class XRManager {
   private scaleSlider: Slider | null = null;
   private scaleValueText: TextBlock | null = null;
   private scaleButton: Button | null = null;
-  private isScalePanelVisible = false;
   private isScaleToolActive = false;
 
+  private arCamera: FreeCamera | null = null;
+  private previousCamera: Camera | null = null;
+  private cameraBehavior: Behavior<Camera> | null = null;
+
+  private isXR8Ready = false;
+  private hasXR8LoadFailed = false;
   private isARSupported = false;
-  private isHitTestAvailable = false;
+  private isInAR = false;
+  private isEnteringAR = false;
   private hasUserPlacedArenaInXR = false;
-  private lastHitResult: IWebXRHitResult | null = null;
   private nonARScale = new Vector3(1, 1, 1);
   private arenaScaleInAR = 0.005;
 
-  public constructor(scene: Scene, floorMeshes: Mesh[], arenaRoot: TransformNode) {
+  public constructor(scene: Scene, arenaRoot: TransformNode) {
     this.scene = scene;
-    this.floorMeshes = floorMeshes;
     this.arenaRoot = arenaRoot;
   }
 
-  public async initialize(): Promise<void> {
+  public initialize(): void {
     this.createBabylonToggleUI();
     this.createHitCursor();
+    this.registerCursorTracking();
     this.registerTouchPlacement();
-
-    try {
-      this.isARSupported = await WebXRSessionManager.IsSessionSupportedAsync("immersive-ar");
-    } catch (error) {
-      this.isARSupported = false;
-      this.updateUI("RA indisponivel", true);
-      this.throwXRManagerError("Falha ao verificar suporte de RA", error);
-      return;
-    }
-
-    if (!this.isARSupported) {
-      this.updateUI("RA indisponivel", true);
-      return;
-    }
-
-    try {
-      this.xrHelper = await this.scene.createDefaultXRExperienceAsync({
-        floorMeshes: this.floorMeshes,
-        uiOptions: {
-          sessionMode: "immersive-ar",
-          referenceSpaceType: "local-floor",
-        }
-      });
-
-      this.tryEnableHitTestFeature();
-
-      this.xrHelper.baseExperience.onStateChangedObservable.add(() => {
-        this.handleXRState();
-        this.updateUI();
-      });
-
-      this.updateUI();
-    } catch (error) {
-      this.xrHelper = null;
-      this.isARSupported = false;
-      this.updateUI("Falha ao iniciar RA", true);
-      this.throwXRManagerError("Falha ao iniciar createDefaultXRExperienceAsync", error);
-    }
+    this.waitForXR8Load();
   }
 
-  private tryEnableHitTestFeature(): void {
-    if (!this.xrHelper) {
-      this.isHitTestAvailable = false;
-      this.hitTestFeature = null;
+  private waitForXR8Load(): void {
+    if (window.XR8) {
+      this.markXR8Ready();
       return;
     }
 
+    const timeoutId = window.setTimeout(() => {
+      this.hasXR8LoadFailed = true;
+      this.updateUI();
+    }, XR8_LOAD_TIMEOUT_MS);
+
+    window.addEventListener(
+      "xrloaded",
+      () => {
+        window.clearTimeout(timeoutId);
+        this.markXR8Ready();
+      },
+      { once: true }
+    );
+
+    this.updateUI();
+  }
+
+  private markXR8Ready(): void {
+    this.isXR8Ready = true;
+
     try {
-      this.hitTestFeature = this.xrHelper.baseExperience.featuresManager.enableFeature(
-        WebXRFeatureName.HIT_TEST,
-        "latest"
-      );
-
-      this.isHitTestAvailable = true;
-
-      this.hitTestFeature.onHitTestResultObservable.add((results) => {
-        if (!results.length) {
-          return;
-        }
-
-        this.lastHitResult = results[0];
-        this.updateHitCursorFromHit(this.lastHitResult);
-      });
+      this.isARSupported = window.XR8?.XrDevice.isDeviceBrowserCompatible() ?? false;
     } catch (error) {
-      this.isHitTestAvailable = false;
-      this.hitTestFeature = null;
-      this.lastHitResult = null;
-      console.warn("[XRManager] Hit-test indisponivel, continuando sem reposicionamento.", error);
+      this.isARSupported = false;
+      console.warn("[EighthWallARManager] Falha ao verificar compatibilidade do dispositivo.", error);
     }
+
+    this.updateUI();
   }
 
   private createBabylonToggleUI(): void {
@@ -146,8 +123,8 @@ export class XRManager {
     this.statusText.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
     this.statusText.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
 
-    this.toggleButton.onPointerClickObservable.add(async () => {
-      await this.toggleAR();
+    this.toggleButton.onPointerClickObservable.add(() => {
+      void this.toggleAR();
     });
 
     this.scaleButton = Button.CreateSimpleButton("scale-btn", "⤡");
@@ -225,7 +202,7 @@ export class XRManager {
       this.arenaScaleInAR = Number(value.toFixed(3));
       valueText.text = `Escala: ${this.arenaScaleInAR.toFixed(3)}`;
 
-      if (this.xrHelper?.baseExperience.state === WebXRState.IN_XR && this.hasUserPlacedArenaInXR) {
+      if (this.isInAR && this.hasUserPlacedArenaInXR) {
         this.applyArenaScale(this.arenaScaleInAR);
       }
     });
@@ -276,31 +253,45 @@ export class XRManager {
     this.hitCursor = cursor;
   }
 
+  private registerCursorTracking(): void {
+    this.scene.onBeforeRenderObservable.add(() => {
+      if (!this.isInAR || this.hasUserPlacedArenaInXR || !this.hitCursor) {
+        return;
+      }
+
+      const engine = this.scene.getEngine();
+      const groundPoint = this.pickGroundPoint(engine.getRenderWidth() / 2, engine.getRenderHeight() / 2);
+
+      if (!groundPoint) {
+        this.setHitCursorVisible(false);
+        return;
+      }
+
+      this.hitCursor.position.copyFrom(groundPoint);
+      this.hitCursor.rotationQuaternion = null;
+      this.hitCursor.rotation.set(0, 0, 0);
+      this.setHitCursorVisible(true);
+    });
+  }
+
   private registerTouchPlacement(): void {
     this.scene.onPointerObservable.add((pointerInfo) => {
       if (pointerInfo.type !== PointerEventTypes.POINTERDOWN) {
         return;
       }
 
-      if (!this.xrHelper || this.xrHelper.baseExperience.state !== WebXRState.IN_XR) {
+      if (!this.isInAR || this.hasUserPlacedArenaInXR) {
         return;
       }
 
-      if (!this.isHitTestAvailable) {
-        this.updateUI("Hit-test indisponivel neste dispositivo", true);
-        return;
-      }
+      const groundPoint = this.pickGroundPoint(this.scene.pointerX, this.scene.pointerY);
 
-      if (this.hasUserPlacedArenaInXR) {
-        return;
-      }
-
-      if (!this.lastHitResult) {
+      if (!groundPoint) {
         this.updateUI("Procure uma superficie e toque novamente", true);
         return;
       }
 
-      this.applyPlacementFromHit(this.lastHitResult);
+      this.applyPlacement(groundPoint);
       this.arenaRoot.setEnabled(true);
       this.hasUserPlacedArenaInXR = true;
       this.setHitCursorVisible(false);
@@ -309,90 +300,177 @@ export class XRManager {
     });
   }
 
+  private pickGroundPoint(screenX: number, screenY: number): Vector3 | null {
+    if (!this.arCamera) {
+      return null;
+    }
+
+    const ray = this.scene.createPickingRay(screenX, screenY, Matrix.Identity(), this.arCamera);
+    const distance = ray.intersectsPlane(this.groundPlane);
+
+    if (distance === null || distance < 0 || distance > MAX_PLACEMENT_DISTANCE) {
+      return null;
+    }
+
+    return ray.origin.add(ray.direction.scale(distance));
+  }
+
   private async toggleAR(): Promise<void> {
-    if (!this.xrHelper || !this.isARSupported) {
+    if (this.isEnteringAR) {
+      return;
+    }
+
+    if (!this.isXR8Ready || !this.isARSupported || !window.XR8) {
       this.updateUI("RA indisponivel", true);
       return;
     }
 
-    const baseExperience = this.xrHelper.baseExperience;
-
-    try {
-      if (baseExperience.state === 2) {
-        await baseExperience.exitXRAsync();
-      } else {
-        this.nonARScale.copyFrom(this.arenaRoot.scaling);
-        this.applyArenaScale(this.arenaScaleInAR);
-        this.arenaRoot.setEnabled(false);
-        this.hasUserPlacedArenaInXR = false;
-        this.isScaleToolActive = false;
-        this.lastHitResult = null;
-        this.setHitCursorVisible(false);
-        this.setScalePanelVisible(false);
-        await baseExperience.enterXRAsync("immersive-ar", "local-floor");
-      }
-
-      this.updateUI();
-    } catch (error) {
-      this.updateUI("Falha ao alternar RA", true);
-      this.throwXRManagerError("Falha ao alternar sessao RA", error);
-    }
-  }
-
-  private handleXRState(): void {
-    if (!this.xrHelper) {
+    if (this.isInAR) {
+      this.exitAR();
       return;
     }
 
-    if (this.xrHelper.baseExperience.state === WebXRState.IN_XR) {
+    await this.enterAR(window.XR8);
+  }
+
+  private async enterAR(xr8: XR8Api): Promise<void> {
+    this.isEnteringAR = true;
+    this.updateUI("Iniciando RA...", false);
+
+    try {
+      await this.requestMotionPermission();
+
+      installBabylonGlobalsForXR8();
+      xr8.XrController.configure({ scale: "absolute" });
+      xr8.addCameraPipelineModule(this.createStatusPipelineModule());
+
+      this.nonARScale.copyFrom(this.arenaRoot.scaling);
+      this.applyArenaScale(this.arenaScaleInAR);
       this.arenaRoot.setEnabled(false);
       this.hasUserPlacedArenaInXR = false;
       this.isScaleToolActive = false;
-      this.lastHitResult = null;
       this.setHitCursorVisible(false);
       this.setScalePanelVisible(false);
-      return;
+
+      this.previousCamera = this.scene.activeCamera;
+      this.previousCamera?.detachControl();
+
+      this.arCamera = new FreeCamera("ar-camera", new Vector3(0, 2, 0), this.scene);
+      this.arCamera.minZ = 0.01;
+      this.arCamera.maxZ = 1000;
+      this.scene.activeCamera = this.arCamera;
+
+      this.cameraBehavior = xr8.Babylonjs.xrCameraBehavior({
+        cameraConfig: { direction: xr8.XrConfig.camera().BACK },
+      });
+      this.arCamera.addBehavior(this.cameraBehavior, true);
+
+      this.isInAR = true;
+      this.updateUI();
+    } catch (error) {
+      console.error("[EighthWallARManager] Falha ao iniciar RA.", error);
+      this.exitAR();
+      this.updateUI("Falha ao iniciar RA", true);
+    } finally {
+      this.isEnteringAR = false;
+    }
+  }
+
+  private exitAR(): void {
+    if (this.arCamera && this.cameraBehavior) {
+      this.arCamera.removeBehavior(this.cameraBehavior);
     }
 
-    this.arenaRoot.setEnabled(true);
+    this.cameraBehavior = null;
+
+    if (this.arCamera) {
+      this.arCamera.dispose();
+      this.arCamera = null;
+    }
+
+    // O attach do behavior desliga o autoClear para desenhar o feed da camera.
+    this.scene.autoClear = true;
+
+    if (this.previousCamera) {
+      this.scene.activeCamera = this.previousCamera;
+      this.previousCamera.attachControl(true);
+      this.previousCamera = null;
+    }
+
+    this.isInAR = false;
     this.hasUserPlacedArenaInXR = false;
     this.isScaleToolActive = false;
-    this.lastHitResult = null;
     this.setHitCursorVisible(false);
     this.setScalePanelVisible(false);
+
+    this.arenaRoot.setEnabled(true);
     this.arenaRoot.position.set(0, 0, 0);
     this.arenaRoot.rotationQuaternion = null;
+    this.arenaRoot.rotation.set(0, 0, 0);
     this.arenaRoot.scaling.copyFrom(this.nonARScale);
+
+    this.updateUI();
   }
 
-  private applyPlacementFromHit(hitResult: IWebXRHitResult): void {  
-    this.arenaRoot.position.copyFrom(hitResult.position);
+  private createStatusPipelineModule(): XR8CameraPipelineModule {
+    return {
+      name: "gate-ar-status",
+      onCameraStatusChange: ({ status }) => {
+        if (status !== "failed") {
+          return;
+        }
 
-    if (!this.arenaRoot.rotationQuaternion) {
-      this.arenaRoot.rotationQuaternion = Quaternion.Identity();
+        // Sai fora do callback do pipeline para nao parar o XR8 durante o proprio tick.
+        window.setTimeout(() => {
+          this.exitAR();
+          this.updateUI("Permissao de camera negada", true);
+        }, 0);
+      },
+      onException: (error) => {
+        console.error("[EighthWallARManager] Erro no engine 8th Wall.", error);
+
+        window.setTimeout(() => {
+          this.exitAR();
+          this.updateUI("Falha ao iniciar RA", true);
+        }, 0);
+      },
+    };
+  }
+
+  /** iOS 13+ exige permissao explicita de sensores de movimento dentro de um gesto do usuario. */
+  private async requestMotionPermission(): Promise<void> {
+    const motionEvent =
+      typeof DeviceMotionEvent !== "undefined"
+        ? (DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> })
+        : null;
+
+    if (!motionEvent?.requestPermission) {
+      return;
     }
 
-    this.arenaRoot.rotationQuaternion.copyFrom(hitResult.rotationQuaternion);
+    try {
+      const result = await motionEvent.requestPermission();
+
+      if (result !== "granted") {
+        throw new Error("Permissao de sensores de movimento negada.");
+      }
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  private applyPlacement(groundPoint: Vector3): void {
+    this.arenaRoot.position.copyFrom(groundPoint);
+
+    // Alinha o eixo +Z da arena com a direcao horizontal da camera: torres
+    // azuis (lado do jogador) ficam mais proximas de quem posicionou.
+    const forward = this.arCamera
+      ? this.arCamera.getDirection(Vector3.Forward())
+      : Vector3.Forward();
+    const yaw = Math.atan2(forward.x, forward.z);
+    this.arenaRoot.rotationQuaternion = Quaternion.FromEulerAngles(0, yaw, 0);
+
     this.applyArenaScale(this.arenaScaleInAR);
-  }
-
-  private updateHitCursorFromHit(hitResult: IWebXRHitResult): void {
-    if (!this.hitCursor || !this.xrHelper || this.xrHelper.baseExperience.state !== WebXRState.IN_XR) {
-      return;
-    }
-
-    if (this.hasUserPlacedArenaInXR) {
-      return;
-    }
-
-    this.hitCursor.position.copyFrom(hitResult.position);
-
-    if (!this.hitCursor.rotationQuaternion) {
-      this.hitCursor.rotationQuaternion = Quaternion.Identity();
-    }
-
-    this.hitCursor.rotationQuaternion.copyFrom(hitResult.rotationQuaternion);
-    this.setHitCursorVisible(true);
   }
 
   private setHitCursorVisible(value: boolean): void {
@@ -408,7 +486,6 @@ export class XRManager {
       return;
     }
 
-    this.isScalePanelVisible = value;
     this.scalePanel.isVisible = value;
 
     if (this.scaleSlider && this.scaleValueText) {
@@ -417,39 +494,8 @@ export class XRManager {
     }
   }
 
-  private isArenaMesh(mesh: AbstractMesh | null): boolean {
-    if (!mesh) {
-      return false;
-    }
-
-    let current: AbstractMesh | TransformNode | null = mesh;
-
-    while (current) {
-      if (current === this.arenaRoot) {
-        return true;
-      }
-
-      current = (current.parent as AbstractMesh | TransformNode | null) ?? null;
-    }
-
-    return false;
-  }
-
   private applyArenaScale(value: number): void {
     this.arenaRoot.scaling.setAll(value);
-  }
-
-  private throwXRManagerError(context: string, error: unknown): never {
-    const baseError = error instanceof Error ? error : new Error(String(error));
-    const fullMessage = `${context}: ${baseError.message}`;
-    const wrappedError = new Error(fullMessage);
-
-    if (baseError.stack) {
-      wrappedError.stack = `${wrappedError.name}: ${fullMessage}\n${baseError.stack}`;
-    }
-
-    console.error("[XRManager]", wrappedError);
-    throw wrappedError;
   }
 
   private updateUI(customLabel?: string, warning = false): void {
@@ -463,24 +509,31 @@ export class XRManager {
       return;
     }
 
-    const state = this.xrHelper?.baseExperience.state ?? 0;
-    const isInXR = state === WebXRState.IN_XR;
-
-    if (!isInXR) {
-      // Fora do AR: apenas toggle visivel
+    if (!this.isXR8Ready) {
       this.toggleButton.isVisible = true;
-      this.statusText.text = "RA: Off";
+      this.statusText.text = this.hasXR8LoadFailed ? "RA indisponivel" : "Carregando RA...";
       this.toggleButton.background = "#1f3a4d";
       if (this.scaleButton) this.scaleButton.isVisible = false;
       this.setScalePanelVisible(false);
       return;
     }
 
-    if (!this.isHitTestAvailable) {
+    if (!this.isARSupported) {
       this.toggleButton.isVisible = true;
-      this.statusText.text = "RA: On | Hit-test indisponivel";
-      this.toggleButton.background = "#216e39";
+      this.statusText.text = "RA indisponivel";
+      this.toggleButton.background = "#1f3a4d";
       if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.setScalePanelVisible(false);
+      return;
+    }
+
+    if (!this.isInAR) {
+      // Fora do AR: apenas toggle visivel
+      this.toggleButton.isVisible = true;
+      this.statusText.text = "RA: Off";
+      this.toggleButton.background = "#1f3a4d";
+      if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.setScalePanelVisible(false);
       return;
     }
 
