@@ -9,7 +9,7 @@ import { ArenaSystem } from "./arena/ArenaSystem";
 import { CardDeckSystem } from "./cards/CardDeckSystem";
 import { CombatEngine } from "./combat/CombatEngine";
 import { CardDeckHud } from "./ui/CardDeckHud";
-import { XRManager } from "./xr/XRManager";
+import { EighthWallARManager } from "./ar/EighthWallARManager";
 
 function formatErrorTrace(error: unknown): string {
 	if (error instanceof Error) {
@@ -104,8 +104,8 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	const arenaSystem = new ArenaSystem(scene);
 	const arena = arenaSystem.buildInitialArena();
 
-	const xrManager = new XRManager(scene, [arena.ground], arena.root);
-	await xrManager.initialize();
+	const arManager = new EighthWallARManager(scene, arena.root);
+	arManager.initialize();
 
 	const towerCombatSettings = {
 		attackCooldownMs: 900,
