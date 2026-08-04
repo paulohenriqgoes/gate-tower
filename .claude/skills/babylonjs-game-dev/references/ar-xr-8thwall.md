@@ -120,3 +120,46 @@ AR roda a decodificação da câmera, o SLAM e o render do Babylon.js ao mesmo t
 - Teste em iOS Safari e em Android Chrome cedo — SLAM baseado em WebGL tem diferenças reais de estabilidade de tracking entre os dois, que não aparecem testando só em um.
 - HTTPS é obrigatório para acesso à câmera fora de `localhost`. Para testar no celular durante o desenvolvimento, sirva o projeto Vite com um túnel HTTPS (ex.: `ngrok http <porta>`) apontando para o servidor de dev do Vite, já que a maioria dos celulares não vai aceitar certificado autoassinado sem fricção.
 - A primeira interação do usuário (toque para conceder permissão de câmera) é obrigatória por política dos navegadores — planeje uma tela inicial que peça esse toque explicitamente, em vez de tentar iniciar o `XR8.run()` sozinho no carregamento da página.
+
+## Troubleshooting: drift e grounding em AR (lições de campo)
+
+Estes são os problemas que **só aparecem no device** com world tracking real — não dá pra pegar no desktop (o SLAM não roda fora do celular). Trate esta seção como um playbook de diagnóstico.
+
+### Passo 1 — separe os DOIS "drifts", porque a cura é diferente
+
+Quando o usuário diz "a arena não fica no lugar", quase sempre é um de dois fenômenos distintos:
+
+1. **Salto de relocalização (SLAM):** o sistema de coordenadas inteiro dá um pulo quando o engine re-localiza. Acontece **com o celular parado ou não**, em degrau. **Nada** que você pendura na cena corrige — o binário distribuído do 8th Wall não expõe anchor persistente por objeto em world tracking (só `recenter()`). Dá pra **mitigar/mascarar** (gating por tracking status, absorção de salto, ou pivotar para **Image Target** que tem anchor real), nunca eliminar.
+2. **Escorregar por profundidade errada:** a arena "desliza em relação ao chão real" **só quando a câmera se move** (pior ao aproximar — paralaxe é máxima perto). Isso é âncora na profundidade errada, **não** SLAM. **Esse tem cura.**
+
+Pergunta de triagem: "escorrega parado, ou só quando você move o celular?" → parado = item 1; só movendo = item 2.
+
+### Passo 2 — conserte o item 2 (o comum): place-once na superfície real
+
+A causa clássica é posicionar o conteúdo por raycast contra um **plano matemático `y=0`** (a altura inicial do celular, não o chão real). Um ponto fixo na profundidade errada se projeta em lugares diferentes do piso conforme a câmera anda → "escorrega".
+
+Receita (não precisa de reancoragem contínua — ela é pro item 1 e costuma introduzir *swim*/tremor):
+
+- No toque, dispare **vários `hitTest`** num grid ao redor do ponto (não um só — um feature point ruim faz a arena pular).
+- Faça **fit de um plano** com os pontos: altura mediana + rejeição de outlier (MAD); normal por mínimos quadrados (campo de altura `y=a·x+b·z+c`, resolvido por Cramer).
+- Posicione na **profundidade real** e **trave**. Um ponto fixo na altura certa fica grudado quando você anda.
+- Ofereça um botão **"reposicionar"** manual para o resíduo (que é item 1).
+
+### Passo 3 — gotchas que travam tudo
+
+- **`hitTest` estoura o WASM se chamado cedo demais.** Chamar `XR8.XrController.hitTest` antes do SLAM ter pose lança `RuntimeError: memory access out of bounds` — e no render loop isso **mata o app inteiro**. Faça gate: só chame quando o `trackingStatus === "NORMAL"` (via `onUpdate` → `event.processCpuResult.reality.trackingStatus`), e envolva toda chamada em `try/catch` como rede de segurança. Cuidado: `LIMITED` pode ter pose mas deixar o tracking instável demais para posicionar bem — prefira `NORMAL`.
+- **Normalização de coordenadas do `hitTest`.** As coords são `[0,1]`. Normalize por `canvas.clientWidth/clientHeight` (**px CSS**), **nunca** por `engine.getRenderWidth/Height()` (px de dispositivo, ×devicePixelRatio ~3 no mobile). Misturar faz o hitTest mirar no lugar errado.
+- **Celular não tem console acessível.** Não dá pra depender de `console.log` no device. Jogue estado crítico (ex.: `trackingStatus`) **na própria tela** (um `TextBlock`/GUI). Isso desbloqueia o diagnóstico remoto.
+- **Tilt: o "up" do SLAM às vezes não bate com o piso.** Se a arena parece levemente inclinada (um lado "pra cima"), alinhe o *up* do conteúdo à **normal medida** no fit do plano — com um clamp (ex.: rejeitar normais > ~12° da vertical, que são ruído) pra nunca tombar.
+
+### Passo 4 — grounding: faça parecer que está no chão
+
+O tracking pode estar perfeito e ainda "parecer flutuando". O que resolve é **pista visual**, não mais precisão:
+
+- **Esconda o chão virtual opaco em AR.** Um grid/xadrez opaco **compete** com o piso real e denuncia o plano flutuante. Agrupe os tiles sob um nó e desligue-o ao entrar em AR (mantenha no modo não-AR). **Gotcha de picking:** se o chão virtual era a superfície de toque (deploy, seleção), esconder os tiles quebra isso — use um ground **invisível-mas-pickável** com `visibility = 0` (NÃO `isVisible = false`, que remove a mesh do picking do Babylon).
+- **Sombra de contato (blob), não shadow-mapping.** Em AR mobile, prefira um "blob" — um disco com gradiente radial transparente sob cada entidade — a shadow-mapping real. É mais barato (a câmera + SLAM já comem o frame), sem dependência extra, e **robusto em qualquer escala** (shadow map numa arena em escala 0.02 é frágil). Ancora tanto ou mais.
+- **Anime a entrada.** Fazer o conteúdo **surgir crescendo** (escala 0→alvo com ease-out) em vez de aparecer de uma vez, além de charme, **mascara o "snap"** da ancoragem inicial.
+
+### Limite honesto para setar expectativa
+
+World tracking do binário distribuído **não tem anchor persistente por objeto** — só `recenter()`/`recenterWithOrigin`. Então saltos de relocalização (item 1) são **mitigados**, nunca 100% eliminados. Se a estabilidade for inegociável (ex.: jogo de mesa), avalie ancorar num **Image Target** (playmat impresso): aí há anchor real e o conteúdo trava no marcador físico.

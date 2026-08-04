@@ -9,6 +9,7 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TeamId } from "../battle/BattleTypes";
 import type { TowerActor } from "../towers/TowerActor";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
+import { createContactShadow } from "../fx/contactShadow";
 
 export interface BaseUnitOptions {
   attackIntervalMs: number;
@@ -91,7 +92,23 @@ export abstract class BaseUnit {
     selectionRing.isPickable = false;
 
     this.createVisual();
+    this.createContactShadow();
     this.healthBar = this.createHealthBar();
+  }
+
+  /** Sombra de contato sob a unidade, dimensionada pela sua caixa envolvente. */
+  private createContactShadow(): void {
+    const { min, max } = this.root.getHierarchyBoundingVectors(true);
+    const span = Math.max(max.x - min.x, max.z - min.z);
+    const diameter = Scalar.Clamp(span * 1.2, 1, 3);
+
+    const blob = createContactShadow(this.scene, {
+      diameter,
+      opacity: 0.4,
+      name: `${this.id}-shadow`,
+    });
+    blob.parent = this.root;
+    blob.position.y = 0.02;
   }
 
   protected abstract createVisual(): void;

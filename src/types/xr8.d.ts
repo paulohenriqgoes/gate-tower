@@ -2,11 +2,35 @@ import type { Behavior } from "@babylonjs/core/Behaviors/behavior";
 import type { Camera } from "@babylonjs/core/Cameras/camera";
 
 declare global {
+  type XR8HitTestType = "FEATURE_POINT" | "ESTIMATED_SURFACE" | "DETECTED_SURFACE";
+
+  type XR8TrackingStatus =
+    | "INITIALIZING"
+    | "LIMITED"
+    | "RELOCALIZING"
+    | "NORMAL"
+    | "NOT_AVAILABLE";
+
+  interface XR8HitTestResult {
+    type: XR8HitTestType;
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number; w: number };
+    distance: number;
+  }
+
   interface XR8CameraPipelineModule {
     name: string;
     onCameraStatusChange?: (event: { status: "requesting" | "hasStream" | "hasVideo" | "failed" }) => void;
     onException?: (error: unknown) => void;
     onStart?: () => void;
+    onUpdate?: (event: {
+      processCpuResult?: {
+        reality?: {
+          trackingStatus?: XR8TrackingStatus;
+          trackingReason?: string;
+        };
+      };
+    }) => void;
   }
 
   interface XR8CameraBehaviorConfig {
@@ -28,6 +52,7 @@ declare global {
         enableLighting?: boolean;
         scale?: "responsive" | "absolute";
       }) => void;
+      hitTest: (x: number, y: number, includedTypes: XR8HitTestType[]) => XR8HitTestResult[];
       recenter: () => void;
     };
     XrDevice: {

@@ -11,12 +11,29 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
-import { AdvancedDynamicTexture, Button, Control, Rectangle, Slider, StackPanel, TextBlock } from "@babylonjs/gui";
+import { AdvancedDynamicTexture, Button, Control, Ellipse, Rectangle, Slider, StackPanel, TextBlock } from "@babylonjs/gui";
 
 import { installBabylonGlobalsForXR8 } from "./babylonRuntimeGlobals";
+import { buildSampleOffsets, fitGroundPlane, normalizeToCanvas, type GroundPlaneFit } from "./hitTestSampling";
+import { playSpawnScaleIn } from "../fx/spawnAnimation";
 
 const XR8_LOAD_TIMEOUT_MS = 15000;
 const MAX_PLACEMENT_DISTANCE = 40;
+
+// Amostragem do hitTest para o fit de plano no momento de posicionar (Fase 2).
+// Um grid em aneis ao redor do toque da uma estimativa de altura robusta a ruido.
+const SAMPLE_RADIUS = 0.06;
+const SAMPLE_RINGS = 2;
+const SAMPLE_PER_RING = 6;
+const MIN_INLIERS = 3;
+// Preferir superficie detectada; FEATURE_POINT e ultimo recurso.
+const HITTEST_TYPES: XR8HitTestType[] = ["DETECTED_SURFACE", "ESTIMATED_SURFACE", "FEATURE_POINT"];
+
+// So NORMAL: em device o LIMITED deixou o tracking instavel demais ao posicionar.
+// Os demais (INITIALIZING/RELOCALIZING/null) tambem sao onde o WASM estourava.
+const HITTEST_SAFE_STATUSES: XR8TrackingStatus[] = ["NORMAL"];
+
+const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
 /**
  * Gerencia o modo RA via engine 8th Wall (SLAM), substituindo a sessao WebXR.
@@ -38,6 +55,11 @@ export class EighthWallARManager {
   private scaleButton: Button | null = null;
   private isScaleToolActive = false;
 
+  private loaderPanel: Rectangle | null = null;
+  private spinnerRotator: Rectangle | null = null;
+  private placePrompt: TextBlock | null = null;
+  private arenaGridNode: TransformNode | null = null;
+
   private arCamera: FreeCamera | null = null;
   private previousCamera: Camera | null = null;
   private cameraBehavior: Behavior<Camera> | null = null;
@@ -49,7 +71,8 @@ export class EighthWallARManager {
   private isEnteringAR = false;
   private hasUserPlacedArenaInXR = false;
   private nonARScale = new Vector3(1, 1, 1);
-  private arenaScaleInAR = 0.005;
+  private arenaScaleInAR = 0.02;
+  private latestTrackingStatus: XR8TrackingStatus | null = null;
 
   public constructor(scene: Scene, arenaRoot: TransformNode) {
     this.scene = scene;
@@ -150,6 +173,113 @@ export class EighthWallARManager {
     this.ui.addControl(this.scaleButton);
     this.ui.addControl(this.statusText);
     this.createScaleSliderUI();
+    this.createLoaderUI();
+  }
+
+  /**
+   * Loader central (vertical/horizontal) exibido enquanto o SLAM nao esta
+   * NORMAL, no lugar das mensagens do topo. Um anel estatico + um ponto que
+   * orbita (rotacionado por frame) formam o spinner; um prompt central separado
+   * aparece quando o tracking fica pronto para posicionar.
+   */
+  private createLoaderUI(): void {
+    if (!this.ui) {
+      return;
+    }
+
+    const panel = new Rectangle("ar-loader");
+    panel.width = "240px";
+    panel.height = "180px";
+    panel.thickness = 0;
+    panel.background = "transparent";
+    panel.isHitTestVisible = false;
+    panel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    panel.isVisible = false;
+
+    const ring = new Ellipse("ar-loader-ring");
+    ring.width = "72px";
+    ring.height = "72px";
+    ring.thickness = 6;
+    ring.color = "#ffffff40";
+    ring.background = "transparent";
+    ring.isHitTestVisible = false;
+    ring.top = "-24px";
+    panel.addControl(ring);
+
+    const rotator = new Rectangle("ar-loader-rotator");
+    rotator.width = "72px";
+    rotator.height = "72px";
+    rotator.thickness = 0;
+    rotator.background = "transparent";
+    rotator.isHitTestVisible = false;
+    rotator.top = "-24px";
+
+    const dot = new Ellipse("ar-loader-dot");
+    dot.width = "16px";
+    dot.height = "16px";
+    dot.thickness = 0;
+    dot.background = "#22c55e";
+    dot.isHitTestVisible = false;
+    dot.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    rotator.addControl(dot);
+    panel.addControl(rotator);
+
+    const label = new TextBlock("ar-loader-label", "Preparando o ambiente...\nmova o celular devagar");
+    label.color = "white";
+    label.fontSize = 17;
+    label.height = "56px";
+    label.textWrapping = true;
+    label.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    label.isHitTestVisible = false;
+    panel.addControl(label);
+
+    this.ui.addControl(panel);
+    this.loaderPanel = panel;
+    this.spinnerRotator = rotator;
+
+    const prompt = new TextBlock("ar-place-prompt", "Aponte para o chao e toque para posicionar a arena");
+    prompt.color = "white";
+    prompt.fontSize = 20;
+    prompt.textWrapping = true;
+    prompt.width = "78%";
+    prompt.height = "70px";
+    prompt.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    prompt.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    prompt.isHitTestVisible = false;
+    prompt.isVisible = false;
+    this.ui.addControl(prompt);
+    this.placePrompt = prompt;
+
+    this.scene.onBeforeRenderObservable.add(() => {
+      if (this.spinnerRotator && this.loaderPanel?.isVisible) {
+        this.spinnerRotator.rotation += 0.09;
+      }
+    });
+  }
+
+  /**
+   * Sincroniza o overlay central com o estado de posicionamento:
+   * - esperando tracking (nao NORMAL) → loader girando;
+   * - pronto (NORMAL, ainda nao posicionado) → prompt "aponte e toque";
+   * - fora disso → nada, e o texto do topo volta a valer.
+   */
+  private refreshPlacementOverlay(): void {
+    const inPlacement = this.isInAR && !this.hasUserPlacedArenaInXR;
+    const ready = inPlacement && this.isTrackingReady();
+    const waiting = inPlacement && !ready;
+
+    if (this.loaderPanel) {
+      this.loaderPanel.isVisible = waiting;
+    }
+
+    if (this.placePrompt) {
+      this.placePrompt.isVisible = ready;
+    }
+
+    if (this.statusText) {
+      this.statusText.isVisible = !inPlacement;
+    }
   }
 
   private createScaleSliderUI(): void {
@@ -259,19 +389,62 @@ export class EighthWallARManager {
         return;
       }
 
-      const engine = this.scene.getEngine();
-      const groundPoint = this.pickGroundPoint(engine.getRenderWidth() / 2, engine.getRenderHeight() / 2);
-
-      if (!groundPoint) {
+      // O reticle so aparece com tracking NORMAL — antes disso o loader central
+      // e quem comunica a espera.
+      if (!this.isTrackingReady()) {
         this.setHitCursorVisible(false);
         return;
       }
 
-      this.hitCursor.position.copyFrom(groundPoint);
+      const previewPoint = this.previewGroundPoint();
+
+      if (!previewPoint) {
+        this.setHitCursorVisible(false);
+        return;
+      }
+
+      this.hitCursor.position.copyFrom(previewPoint);
       this.hitCursor.rotationQuaternion = null;
       this.hitCursor.rotation.set(0, 0, 0);
       this.setHitCursorVisible(true);
     });
+  }
+
+  /**
+   * Ponto de preview do cursor: um unico hitTest no centro da tela (barato, 1x
+   * por frame). Se o engine nao devolver superficie, cai no plano y=0 apenas
+   * como feedback visual — NUNCA e usado para posicionar de fato a arena.
+   */
+  private previewGroundPoint(): Vector3 | null {
+    const xr8 = window.XR8;
+
+    // So consulta o hitTest com SLAM rastreando (NORMAL). Chamar antes disso
+    // estoura o WASM do xr-slam ("memory access out of bounds").
+    if (xr8 && this.isTrackingReady()) {
+      const results = this.safeHitTest(xr8, 0.5, 0.5);
+
+      if (results.length > 0) {
+        const { position } = results[0];
+        return new Vector3(position.x, position.y, position.z);
+      }
+    }
+
+    const engine = this.scene.getEngine();
+    return this.pickGroundPoint(engine.getRenderWidth() / 2, engine.getRenderHeight() / 2);
+  }
+
+  /**
+   * Envolve XR8.XrController.hitTest em try/catch. Mesmo com o gate de tracking,
+   * o WASM do SLAM pode lancar (RuntimeError) em janelas de relocalizacao — e um
+   * throw dentro do render loop mataria a aplicacao inteira.
+   */
+  private safeHitTest(xr8: XR8Api, x: number, y: number): XR8HitTestResult[] {
+    try {
+      return xr8.XrController.hitTest(x, y, HITTEST_TYPES);
+    } catch (error) {
+      console.warn("[EighthWallARManager] hitTest falhou (SLAM instavel).", error);
+      return [];
+    }
   }
 
   private registerTouchPlacement(): void {
@@ -284,20 +457,94 @@ export class EighthWallARManager {
         return;
       }
 
-      const groundPoint = this.pickGroundPoint(this.scene.pointerX, this.scene.pointerY);
+      if (!this.isTrackingReady()) {
+        // O loader central ja comunica a espera; nada a fazer no toque.
+        return;
+      }
 
-      if (!groundPoint) {
+      const fit = this.sampleGroundFit(this.scene.pointerX, this.scene.pointerY);
+
+      if (!fit) {
         this.updateUI("Procure uma superficie e toque novamente", true);
         return;
       }
 
-      this.applyPlacement(groundPoint);
+      // Ancora na profundidade real do piso (fit.position) e TRAVA — sem
+      // reancoragem continua. Isso corrige o item 2 (arena escorregando ao
+      // aproximar o celular por causa de profundidade errada do plano y=0).
+      this.applyPlacement(fit);
       this.arenaRoot.setEnabled(true);
+      // A arena surge crescendo a partir da ancora, em vez de aparecer inteira.
+      playSpawnScaleIn(this.arenaRoot, this.scene);
       this.hasUserPlacedArenaInXR = true;
       this.setHitCursorVisible(false);
       this.setScalePanelVisible(false);
       this.updateUI();
     });
+  }
+
+  /**
+   * Dispara um grid de hitTests (aneis ao redor do toque) e faz o fit robusto de
+   * um plano para estimar a profundidade real do piso. Coordenadas de tela em px
+   * CSS sao normalizadas por clientWidth/clientHeight (NUNCA getRenderWidth).
+   */
+  private sampleGroundFit(screenX: number, screenY: number): GroundPlaneFit | null {
+    const xr8 = window.XR8;
+    const canvas = this.scene.getEngine().getRenderingCanvas();
+
+    if (!xr8 || !canvas) {
+      return null;
+    }
+
+    const base = normalizeToCanvas(screenX, screenY, canvas);
+    const offsets = buildSampleOffsets(SAMPLE_RADIUS, SAMPLE_RINGS, SAMPLE_PER_RING);
+    const points: Vector3[] = [];
+
+    for (const { dx, dy } of offsets) {
+      const sampleX = clamp01(base.x + dx);
+      const sampleY = clamp01(base.y + dy);
+      const results = this.safeHitTest(xr8, sampleX, sampleY);
+
+      if (results.length > 0) {
+        const { position } = results[0];
+        points.push(new Vector3(position.x, position.y, position.z));
+      }
+    }
+
+    return fitGroundPlane(points, MIN_INLIERS);
+  }
+
+  /**
+   * Gate de posicionamento por qualidade de tracking. Status desconhecido (null)
+   * NAO bloqueia — o engine pode nao reportar; so bloqueamos quando o SLAM diz
+   * explicitamente que ainda nao esta pronto (INITIALIZING/RELOCALIZING/etc).
+   */
+  private isTrackingReady(): boolean {
+    // hitTest so e seguro depois que o SLAM tem pose (NORMAL ou LIMITED).
+    // INITIALIZING/RELOCALIZING/null BLOQUEIAM — foi onde o WASM estourava.
+    return this.latestTrackingStatus !== null && HITTEST_SAFE_STATUSES.includes(this.latestTrackingStatus);
+  }
+
+  /** Texto de status na tela (o celular nao tem console acessivel). */
+  private trackingHintText(): string {
+    const status = this.latestTrackingStatus ?? "iniciando";
+
+    if (!this.isTrackingReady()) {
+      return `Tracking: ${status} | mova o celular devagar p/ estabilizar`;
+    }
+
+    return status === "NORMAL"
+      ? `Tracking: ${status} | aponte pro chao e toque`
+      : `Tracking: ${status} | da pra posicionar (NORMAL fica mais preciso)`;
+  }
+
+  /** Liga/desliga o grid xadrez da arena (agrupado sob o no "arena-grid"). */
+  private setArenaGridVisible(visible: boolean): void {
+    if (!this.arenaGridNode) {
+      this.arenaGridNode = this.scene.getTransformNodeByName("arena-grid");
+    }
+
+    this.arenaGridNode?.setEnabled(visible);
   }
 
   private pickGroundPoint(screenX: number, screenY: number): Vector3 | null {
@@ -348,7 +595,11 @@ export class EighthWallARManager {
       this.applyArenaScale(this.arenaScaleInAR);
       this.arenaRoot.setEnabled(false);
       this.hasUserPlacedArenaInXR = false;
+      this.latestTrackingStatus = null;
       this.isScaleToolActive = false;
+      // Em RA o grid xadrez denuncia o plano flutuante — escondido; ficam so
+      // torres/unidades + sombras de contato no piso real.
+      this.setArenaGridVisible(false);
       this.setHitCursorVisible(false);
       this.setScalePanelVisible(false);
 
@@ -408,6 +659,7 @@ export class EighthWallARManager {
     this.arenaRoot.rotationQuaternion = null;
     this.arenaRoot.rotation.set(0, 0, 0);
     this.arenaRoot.scaling.copyFrom(this.nonARScale);
+    this.setArenaGridVisible(true);
 
     this.updateUI();
   }
@@ -415,6 +667,21 @@ export class EighthWallARManager {
   private createStatusPipelineModule(): XR8CameraPipelineModule {
     return {
       name: "gate-ar-status",
+      onUpdate: (event) => {
+        const status = event?.processCpuResult?.reality?.trackingStatus;
+
+        if (!status || status === this.latestTrackingStatus) {
+          return;
+        }
+
+        console.info(`[EighthWallARManager] trackingStatus: ${status}`);
+        this.latestTrackingStatus = status;
+
+        // Reflete o status na tela (celular nao tem console acessivel).
+        if (this.isInAR) {
+          this.updateUI();
+        }
+      },
       onCameraStatusChange: ({ status }) => {
         if (status !== "failed") {
           return;
@@ -459,8 +726,8 @@ export class EighthWallARManager {
     }
   }
 
-  private applyPlacement(groundPoint: Vector3): void {
-    this.arenaRoot.position.copyFrom(groundPoint);
+  private applyPlacement(fit: GroundPlaneFit): void {
+    const groundPoint = fit.position;
 
     // Alinha o eixo +Z da arena com a direcao horizontal da camera: torres
     // azuis (lado do jogador) ficam mais proximas de quem posicionou.
@@ -468,9 +735,76 @@ export class EighthWallARManager {
       ? this.arCamera.getDirection(Vector3.Forward())
       : Vector3.Forward();
     const yaw = Math.atan2(forward.x, forward.z);
-    this.arenaRoot.rotationQuaternion = Quaternion.FromEulerAngles(0, yaw, 0);
+    const yawRotation = Quaternion.FromEulerAngles(0, yaw, 0);
 
+    // Alinha o "up" da arena a normal REAL do piso medida no fit, para ela
+    // assentar plana no chao. A world-up do SLAM as vezes nao bate com o piso,
+    // o que dava a sensacao de um lado (vermelho) levemente inclinado pra cima.
+    const rotation = this.buildGroundAlignedRotation(fit.normal, yawRotation);
+
+    this.arenaRoot.rotationQuaternion = rotation;
     this.applyArenaScale(this.arenaScaleInAR);
+
+    // O toque NAO ancora o centro da arena, e sim as "costas" das torres azuis
+    // (a borda do lado do jogador). Deslocamos a arena para que esse ponto local
+    // caia exatamente no ponto tocado — o campo se estende para frente.
+    const anchorLocal = this.getPlacementAnchorLocal().scale(this.arenaScaleInAR);
+    const worldOffset = Vector3.Zero();
+    anchorLocal.rotateByQuaternionToRef(rotation, worldOffset);
+
+    this.arenaRoot.position.copyFrom(groundPoint.subtract(worldOffset));
+  }
+
+  /**
+   * Ponto local da arena a ser ancorado no toque: as costas (lado do jogador) da
+   * fileira de torres azuis. Derivado das proprias torres (`tower-blue-*`) para
+   * nao hardcodar o layout do ArenaSystem.
+   */
+  private getPlacementAnchorLocal(): Vector3 {
+    const blueTowers = this.arenaRoot.getChildMeshes(
+      true,
+      (node) => node.name.startsWith("tower-blue")
+    );
+
+    if (blueTowers.length === 0) {
+      return Vector3.Zero();
+    }
+
+    let minZ = Number.POSITIVE_INFINITY;
+    for (const tower of blueTowers) {
+      minZ = Math.min(minZ, tower.position.z);
+    }
+
+    // Recuo pelo raio da torre (diameter 1.6) para chegar atras dela.
+    const TOWER_RADIUS = 0.8;
+    return new Vector3(0, 0, minZ - TOWER_RADIUS);
+  }
+
+  /**
+   * Compoe a rotacao final: primeiro o yaw (direcao), depois inclina o "up" da
+   * arena ate a normal medida do piso. Rejeita normais muito fora da vertical
+   * (ruido do fit): acima de MAX_TILT mantem nivelado, evitando tombar a arena.
+   */
+  private buildGroundAlignedRotation(normal: Vector3, yawRotation: Quaternion): Quaternion {
+    const MAX_TILT_RAD = (12 * Math.PI) / 180;
+    const up = Vector3.Up();
+
+    if (normal.lengthSquared() < 1e-6) {
+      return yawRotation;
+    }
+
+    const n = normal.normalizeToNew();
+    const angle = Math.acos(Math.min(1, Math.max(-1, Vector3.Dot(up, n))));
+
+    if (!Number.isFinite(angle) || angle > MAX_TILT_RAD) {
+      return yawRotation;
+    }
+
+    const tilt = new Quaternion();
+    Quaternion.FromUnitVectorsToRef(up, n, tilt);
+
+    // tilt * yaw = aplica o yaw primeiro (em torno do up), depois inclina.
+    return tilt.multiply(yawRotation);
   }
 
   private setHitCursorVisible(value: boolean): void {
@@ -503,7 +837,10 @@ export class EighthWallARManager {
       return;
     }
 
+    this.refreshPlacementOverlay();
+
     if (customLabel) {
+      this.statusText.isVisible = true;
       this.statusText.text = customLabel;
       this.toggleButton.background = warning ? "#7c2d12" : "#1f3a4d";
       return;
@@ -542,7 +879,7 @@ export class EighthWallARManager {
       this.toggleButton.isVisible = false;
       if (this.scaleButton) this.scaleButton.isVisible = false;
       this.setScalePanelVisible(true);
-      this.statusText.text = "RA: On | Toque para posicionar a arena";
+      this.statusText.text = this.trackingHintText();
       return;
     }
 

@@ -8,6 +8,8 @@ import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
+import { createContactShadow } from "../fx/contactShadow";
+
 export interface ArenaBuildResult {
   arenaLayout: ArenaLayout;
   root: TransformNode;
@@ -46,6 +48,12 @@ export class ArenaSystem {
 
   public buildInitialArena(): ArenaBuildResult {
     const arenaRoot = new TransformNode("arena-root", this.scene);
+
+    // Todos os tiles (o "grid" xadrez) ficam sob este no para poder ser
+    // escondido de uma vez no modo RA (o xadrez denuncia que a arena e um plano
+    // flutuante; sem ele, ficam so torres/unidades + as sombras de contato).
+    const gridNode = new TransformNode("arena-grid", this.scene);
+    gridNode.parent = arenaRoot;
 
     const baseGround = MeshBuilder.CreateGround(
       "arena-ground",
@@ -102,12 +110,15 @@ export class ArenaSystem {
           tile.material = grassMaterial;
         }
 
-        tile.parent = arenaRoot;
+        tile.parent = gridNode;
       }
     }
 
     baseGround.position.y = 0;
-    baseGround.isVisible = false;
+    // visibility = 0 (e nao isVisible = false) para ficar invisivel ao olho MAS
+    // continuar pickavel: e ele o plano de toque do deploy agora que os tiles do
+    // grid ficam escondidos em RA (isVisible=false tiraria a mesh do picking).
+    baseGround.visibility = 0;
 
     const towerMeshes = this.createTowerPlaceholders(arenaRoot);
 
@@ -161,6 +172,7 @@ export class ArenaSystem {
       blueTower.material = blueTowerMaterial;
       blueTower.parent = arenaRoot;
       towers.push(blueTower);
+      this.addContactBlob(arenaRoot, towerDefinition.xPosition, -14, 2.4);
 
       const redTower = MeshBuilder.CreateCylinder(
         `tower-red-${towerDefinition.lane}`,
@@ -171,9 +183,17 @@ export class ArenaSystem {
       redTower.material = redTowerMaterial;
       redTower.parent = arenaRoot;
       towers.push(redTower);
+      this.addContactBlob(arenaRoot, towerDefinition.xPosition, 14, 2.4);
     }
 
     return towers;
+  }
+
+  /** Sombra de contato (blob) sob uma torre, para ancora-la ao piso. */
+  private addContactBlob(parent: TransformNode, x: number, z: number, diameter: number): void {
+    const blob = createContactShadow(this.scene, { diameter, opacity: 0.4, name: `tower-shadow-${x}-${z}` });
+    blob.parent = parent;
+    blob.position.set(x, 0.02, z);
   }
 
   private createPatternMaterial(

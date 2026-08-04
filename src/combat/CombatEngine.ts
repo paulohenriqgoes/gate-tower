@@ -11,6 +11,7 @@ import { CardDeckSystem } from "../cards/CardDeckSystem";
 import { TowerActor } from "../towers/TowerActor";
 import type { BaseUnit } from "../units/BaseUnit";
 import { UnitFactory } from "../units/UnitFactory";
+import { playSpawnScaleIn } from "../fx/spawnAnimation";
 
 export interface CombatArenaTowerDefinition {
   diameter: number;
@@ -147,6 +148,8 @@ export class CombatEngine {
       createdUnit.root.parent = this.arenaRoot;
       createdUnit.setTargetTower(this.findNearestAliveTower("enemy", createdUnit.root.position) ?? targetTower);
       this.units.push(createdUnit);
+      // Surge crescendo em vez de aparecer de uma vez.
+      playSpawnScaleIn(createdUnit.root, this.scene);
     }
 
     return true;
