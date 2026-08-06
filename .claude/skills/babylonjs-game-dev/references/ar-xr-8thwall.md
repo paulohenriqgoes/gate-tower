@@ -163,3 +163,38 @@ O tracking pode estar perfeito e ainda "parecer flutuando". O que resolve é **p
 ### Limite honesto para setar expectativa
 
 World tracking do binário distribuído **não tem anchor persistente por objeto** — só `recenter()`/`recenterWithOrigin`. Então saltos de relocalização (item 1) são **mitigados**, nunca 100% eliminados. Se a estabilidade for inegociável (ex.: jogo de mesa), avalie ancorar num **Image Target** (playmat impresso): aí há anchor real e o conteúdo trava no marcador físico.
+
+## Orientação de tela (landscape/portrait), fullscreen e AR
+
+Travar a tela em paisagem é a primeira ideia que vem à cabeça pra um jogo landscape, e parece uma decisão de UI inofensiva — mas em AR com world tracking ela mexe direto em como o engine calcula IMU e projeção de câmera a cada frame. Trate isto como uma seção irmã do troubleshooting de drift acima: mesmo espírito ("só aparece no device"), causa diferente.
+
+### Como o engine consome orientação (confirmado por engenharia reversa do bundle)
+
+- **Não é lido uma vez no início da sessão.** A cada frame, o `frameStartResult` é remontado com `orientation: K()`, e `K()` lê `screen.orientation.angle` ao vivo — não existe cache por sessão. Esse valor vai a cada frame para o WASM via `_c8EmAsm_stageFrame(textureName, texW, texH, orientation, alpha, beta, gamma, qw, qx, qy, qz, videoTime, frameTime, now, lat, lon, acc)`. Se a hipótese de trabalho for "travar cedo, esperar a viewport estabilizar e o problema some", vale desmentir logo: a leitura é contínua, não é um valor congelado no início.
+- **`K()` mapeia `angle` assim:** `0→0`, `90→90`, `180→180`, `270→-90`. As duas variantes de paisagem dão valores **diferentes** — `landscape-primary` = 90, `landscape-secondary` = -90. O engine nunca lê `screen.orientation.type`, só `angle`. Em desktop (device não reconhecido como MOBILE) o retorno é fixo em `90`.
+- **O IMU é repassado cru.** `deviceorientation` (alpha/beta/gamma) vira um quaternion ZXY em JS **sem nenhuma compensação pelo ângulo de tela e sem troca de eixos X/Y**; `devicemotion` vai direto ao WASM. A compensação para paisagem é 100% responsabilidade do WASM, usando o argumento `orientation` — ou seja: **se o `orientation` reportado discordar da pose física real do aparelho, o IMU inteiro entra girado**. É o ponto único de falha do sistema.
+- **Três canais atualizam o estado do WASM, e um deles é assimétrico:**
+  - `onVideoSizeChange` → `_c8EmAsm_engineVideoSizeChange(videoW, videoH, orientation)` — leva orientation
+  - `onDeviceOrientationChange` → `_c8EmAsm_engineOrientationChange(videoW, videoH, orientation)` — leva orientation
+  - `onCanvasSizeChange` → só atualiza `pixelRectWidth/pixelRectHeight` — **não leva orientation**
+- **As constraints do `getUserMedia` são fixas e sempre em formato paisagem** (ex.: `{width:{exact:1280},height:{exact:720}}`, `{width:{min:960},height:{min:720}}`, `{width:{min:640},height:{min:480}}`), sem qualquer relação com a orientação da tela. O vídeo chega em coordenadas de sensor; não há re-request de stream ao girar o aparelho.
+- **`camera.fov`/`camera.aspectRatio` do Babylon não são usados em AR.** A matriz de projeção inteira é injetada por frame a partir das intrinsics do WASM via `camera.freezeProjectionMatrix(matrix)`. O `pixelRect` que gera essas intrinsics é gravado uma vez no `onAttach` (`pixelRectWidth || (pixelRectWidth = canvasWidth)` — repare no `||`: só grava se ainda for `0`) e depois só muda via `onCanvasSizeChange`.
+- **Resize de canvas é seguro.** O engine compara as dimensões do canvas com um cache **a cada frame** no `pre-render` e dispara `onCanvasSizeChange` sozinho. Chamar `engine.resize()` do Babylon durante a sessão não quebra nada.
+
+### Resultado empírico (Android, device real)
+
+Com o app travado em paisagem via `screen.orientation.lock()`, o tracking de AR ficou inutilizável: objetos deslizam a qualquer movimento e o tracking perde orientação. O mesmo código de AR funciona normalmente em portrait. **Não resolveu:**
+
+- (a) entrar em fullscreen e travar orientação **antes** de subir a sessão, esperando a viewport estabilizar;
+- (b) suprimir qualquer pedido de fullscreen/lock enquanto a sessão está no ar;
+- (c) trocar o lock genérico `"landscape"` por `"landscape-primary"`.
+
+Suspeito remanescente (hipótese, **não** fato confirmado): o `pixelRect` das intrinsics — o canal que não leva `orientation` — combinado com o crop pesado de um canvas ~20:9 em fullscreen contra vídeo 4:3/16:9. Quem for investigar deve começar medindo o aspect ratio do canvas contra o do vídeo.
+
+### Recomendações
+
+- **Recomendação principal: não trave a tela em paisagem para uma cena de AR com world tracking.** Se o jogo é paisagem, prefira paisagem fora da AR e portrait ao entrar na AR, em vez de uma trava global. Trate paisagem+AR como algo a **validar em device cedo**, não a assumir que vai funcionar.
+- Se for tentar mesmo assim: use lock específico (`screen.orientation.lock("landscape-primary")`), nunca o genérico `"landscape"` — o genérico trava na variante em que o aparelho já estiver, e as duas variantes dão `angle` diferente (90 vs -90). Depois de travado, o SO **para de emitir `orientationchange`** ao virar o aparelho 180°, enquanto câmera e IMU continuam mudando de referencial — mais uma fonte de dessincronia silenciosa.
+- Valide em device **antes** de construir o layout em cima da premissa de paisagem. O celular não tem console acessível: logue no próprio HUD `videoTrack.getSettings()`, `video.videoWidth/videoHeight`, `canvas.width/height`, `engine.getRenderWidth()/getRenderHeight()`, `screen.orientation.type` e `screen.orientation.angle` — no init e a cada `orientationchange`.
+- `screen.orientation.lock()` exige fullscreen no Android/Chrome e **não existe no Safari do iPhone** (existe no iPadOS). No iPhone, tela cheia real só via "Adicionar à Tela de Início" com manifest (`display: fullscreen`, `orientation: landscape`) + metas `apple-mobile-web-app-capable`. Fallback universal para pedir rotação, sem depender de nenhuma dessas APIs: overlay CSS com `@media (orientation: portrait) and (pointer: coarse)` — funciona sem JS, antes mesmo da cena carregar.
+- Evite pedir fullscreen/lock **com a sessão de AR no ar**: isso não corrompe a orientação reportada (o valor é lido ao vivo, ver item acima), mas redimensiona o canvas e reprojeta a cena no meio do tracking — ruído gratuito em cima de algo já sensível. Peça antes de subir a sessão.
