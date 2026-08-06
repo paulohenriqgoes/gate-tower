@@ -1,39 +1,30 @@
-import {
-  AdvancedDynamicTexture,
-  Control,
-  Grid,
-  Image,
-  Rectangle,
-  StackPanel,
-  TextBlock,
-} from "@babylonjs/gui";
+import { Control, Image, Rectangle, StackPanel } from "@babylonjs/gui";
 import type { Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 
-import type { CardDefinition, CardDeckSnapshot } from "../cards/CardDeckSystem";
+import type { CardDeckSnapshot } from "../cards/CardDeckSystem";
 import { CardDeckSystem } from "../cards/CardDeckSystem";
-
-interface CardView {
-  accent: Rectangle;
-  container: Rectangle;
-  costBadge: Rectangle;
-  costText: TextBlock;
-  nameText: TextBlock;
-  summaryText: TextBlock;
-}
+import { DiamondCard, DIAMOND_DIAGONAL } from "./DiamondCard";
+import type { HudLayer } from "./HudLayer";
 
 // Tamanho do canvas interno para o widget circular
 const RING_CANVAS_SIZE = 128;
 // Espessura do arco de progresso
 const RING_LINE_WIDTH = 12;
+// Lado do quadrado do widget de cogumelos dentro da barra superior
+const RING_SIZE = 84;
+// Espaco vertical entre os losangos da coluna lateral
+const CARD_SPACING = 10;
+
+const IDLE_STATUS = "Toque em uma carta para preparar a invocacao.";
 
 export class CardDeckHud {
   private readonly scene: Scene;
   private readonly deckSystem: CardDeckSystem;
-  private readonly ui: AdvancedDynamicTexture;
-  private readonly mushroomStatusText: TextBlock;
-  private readonly cardViews = new Map<string, CardView>();
+  private readonly hud: HudLayer;
+  private readonly cardViews = new Map<string, DiamondCard>();
   private readonly stateObserver: Observer<CardDeckSnapshot> | null;
+  private readonly cardColumn: StackPanel;
 
   // Widget circular do cogumelo
   private readonly ringCanvas: HTMLCanvasElement;
@@ -44,21 +35,17 @@ export class CardDeckHud {
   private blinkVisible = true;
   private blinkElapsed = 0;
 
-  public constructor(scene: Scene, deckSystem: CardDeckSystem) {
+  public constructor(scene: Scene, deckSystem: CardDeckSystem, hud: HudLayer) {
     this.scene = scene;
     this.deckSystem = deckSystem;
-    this.ui = AdvancedDynamicTexture.CreateFullscreenUI("card-deck-ui", true, this.scene);
+    this.hud = hud;
 
-    // --- Widget circular (canto superior esquerdo) ---
+    // --- Widget circular (slot esquerdo da barra superior) ---
     this.ringContainer = new Rectangle("mushroom-ring-container");
-    this.ringContainer.width = "80px";
-    this.ringContainer.height = "80px";
+    this.ringContainer.width = `${RING_SIZE}px`;
+    this.ringContainer.height = `${RING_SIZE}px`;
     this.ringContainer.thickness = 0;
     this.ringContainer.background = "#00000000";
-    this.ringContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    this.ringContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    this.ringContainer.top = "20px";
-    this.ringContainer.left = "20px";
     this.ringContainer.isPointerBlocker = false;
 
     this.ringCanvas = document.createElement("canvas");
@@ -67,54 +54,33 @@ export class CardDeckHud {
     this.ringCtx = this.ringCanvas.getContext("2d")!;
 
     this.ringImage = new Image("mushroom-ring-img", "");
-    this.ringImage.width = "80px";
-    this.ringImage.height = "80px";
+    this.ringImage.width = `${RING_SIZE}px`;
+    this.ringImage.height = `${RING_SIZE}px`;
     this.ringContainer.addControl(this.ringImage);
-    this.ui.addControl(this.ringContainer);
+    this.hud.fillSlot("mushrooms", this.ringContainer);
 
-    // --- Painel inferior (cartas + status) ---
-    const rootPanel = new StackPanel("card-deck-root");
-    rootPanel.isVertical = true;
-    rootPanel.width = "94%";
-    rootPanel.height = "222px";
-    rootPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    rootPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    rootPanel.top = "-18px";
-    this.ui.addControl(rootPanel);
+    // --- Coluna de cartas (borda direita, em paisagem) ---
+    this.cardColumn = new StackPanel("card-deck-column");
+    this.cardColumn.isVertical = true;
+    this.cardColumn.width = `${DIAMOND_DIAGONAL}px`;
+    this.cardColumn.spacing = CARD_SPACING;
+    this.cardColumn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    this.cardColumn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    // A coluna nao bloqueia o ponteiro: quem bloqueia e cada losango, cujo
+    // `contains` aplica a matriz inversa e respeita a forma girada. Assim um
+    // toque no vao entre as cartas ainda chega na arena.
+    this.cardColumn.isPointerBlocker = false;
+    this.hud.getTexture().addControl(this.cardColumn);
+    this.applyColumnMargin();
 
-    this.mushroomStatusText = new TextBlock(
-      "mushroom-status",
-      "Toque em uma carta para preparar a invocacao."
-    );
-    this.mushroomStatusText.height = "18px";
-    this.mushroomStatusText.color = "#d4d4d8";
-    this.mushroomStatusText.fontSize = 12;
-    this.mushroomStatusText.fontFamily = "Trebuchet MS";
-    this.mushroomStatusText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    rootPanel.addControl(this.mushroomStatusText);
+    for (const card of this.deckSystem.getSnapshot().cards) {
+      const view = new DiamondCard(card, (cardId) => {
+        this.deckSystem.selectCard(cardId);
+      });
 
-    const spacer = new Rectangle("card-deck-spacer");
-    spacer.width = "100%";
-    spacer.height = "14px";
-    spacer.thickness = 0;
-    spacer.background = "#00000000";
-    rootPanel.addControl(spacer);
-
-    const cardGrid = new Grid("card-deck-grid");
-    cardGrid.width = "100%";
-    cardGrid.height = "190px";
-    cardGrid.isPointerBlocker = true;
-    cardGrid.addRowDefinition(1);
-
-    for (let index = 0; index < this.deckSystem.getSnapshot().cards.length; index += 1) {
-      cardGrid.addColumnDefinition(1);
+      this.cardColumn.addControl(view.root);
+      this.cardViews.set(card.id, view);
     }
-
-    for (const [index, card] of this.deckSystem.getSnapshot().cards.entries()) {
-      this.createCardControl(cardGrid, card, index);
-    }
-
-    rootPanel.addControl(cardGrid);
 
     // Observer de estado
     this.stateObserver = this.deckSystem.onStateChangedObservable.add((snapshot) => {
@@ -137,85 +103,18 @@ export class CardDeckHud {
     this.render(this.deckSystem.getSnapshot());
   }
 
+  /** Reposiciona a coluna apos mudanca de orientacao/tamanho (notch inclusive). */
+  public applyColumnMargin(): void {
+    this.cardColumn.left = `${-this.hud.getRightMargin()}px`;
+  }
+
   public dispose(): void {
     if (this.stateObserver) {
       this.deckSystem.onStateChangedObservable.remove(this.stateObserver);
     }
 
-    this.ui.dispose();
-  }
-
-  private createCardControl(cardGrid: Grid, card: CardDefinition, columnIndex: number): void {
-    const container = new Rectangle(`card-${card.id}`);
-    container.width = "92%";
-    container.height = "178px";
-    container.cornerRadius = 22;
-    container.thickness = 2;
-    container.paddingLeft = "6px";
-    container.paddingRight = "6px";
-    container.paddingTop = "4px";
-    container.paddingBottom = "4px";
-    container.isPointerBlocker = true;
-
-    const cardStack = new StackPanel(`card-stack-${card.id}`);
-    cardStack.isVertical = true;
-    cardStack.width = "86%";
-    cardStack.height = "148px";
-    cardStack.paddingTop = "14px";
-
-    const accent = new Rectangle(`card-accent-${card.id}`);
-    accent.width = "100%";
-    accent.height = "10px";
-    accent.cornerRadius = 5;
-    accent.thickness = 0;
-    accent.background = card.accentColor;
-
-    const nameText = new TextBlock(`card-name-${card.id}`, card.name);
-    nameText.height = "50px";
-    nameText.fontSize = 18;
-    nameText.color = "#f8fafc";
-    nameText.fontFamily = "Trebuchet MS";
-    nameText.textWrapping = true;
-
-    const summaryText = new TextBlock(`card-summary-${card.id}`, card.summary);
-    summaryText.height = "44px";
-    summaryText.fontSize = 12;
-    summaryText.color = "#cbd5e1";
-    summaryText.fontFamily = "Trebuchet MS";
-    summaryText.textWrapping = true;
-
-    const costBadge = new Rectangle(`card-cost-badge-${card.id}`);
-    costBadge.width = "92px";
-    costBadge.height = "30px";
-    costBadge.cornerRadius = 15;
-    costBadge.thickness = 0;
-    costBadge.background = card.accentColor;
-
-    const costText = new TextBlock(`card-cost-${card.id}`, `${card.cost} cog.`);
-    costText.color = "#ffffff";
-    costText.fontSize = 13;
-    costText.fontFamily = "Trebuchet MS";
-
-    costBadge.addControl(costText);
-    cardStack.addControl(accent);
-    cardStack.addControl(nameText);
-    cardStack.addControl(summaryText);
-    cardStack.addControl(costBadge);
-    container.addControl(cardStack);
-
-    container.onPointerClickObservable.add(() => {
-      this.deckSystem.selectCard(card.id);
-    });
-
-    cardGrid.addControl(container, 0, columnIndex);
-    this.cardViews.set(card.id, {
-      accent,
-      container,
-      costBadge,
-      costText,
-      nameText,
-      summaryText,
-    });
+    this.cardColumn.dispose();
+    this.ringContainer.dispose();
   }
 
   private render(snapshot: CardDeckSnapshot): void {
@@ -233,14 +132,14 @@ export class CardDeckHud {
       this.ringContainer.alpha = 1;
     }
 
-    // Texto de status
+    // Com o losango nao ha espaco para a descricao: ela vira o texto de status.
     const selectedCard = snapshot.selectedCardId
       ? this.deckSystem.getCard(snapshot.selectedCardId)
       : null;
 
-    this.mushroomStatusText.text = selectedCard
-      ? `Carta pronta: ${selectedCard.name}`
-      : "Toque em uma carta para preparar a invocacao.";
+    this.hud.setCardStatus(
+      selectedCard ? `${selectedCard.name}: ${selectedCard.summary}` : IDLE_STATUS
+    );
 
     // Atualizar cartas
     for (const card of snapshot.cards) {
@@ -250,19 +149,10 @@ export class CardDeckHud {
         continue;
       }
 
-      const isAffordable = snapshot.mushrooms >= card.cost;
-      const isSelected = snapshot.selectedCardId === card.id;
-
-      view.container.background = isSelected ? this.withAlpha(card.accentColor, "3d") : "#140f1dd9";
-      view.container.color = isSelected ? card.accentColor : isAffordable ? "#4c1d95" : "#3f3f46";
-      view.container.thickness = isSelected ? 4 : 2;
-      view.container.alpha = isAffordable ? 1 : 0.45;
-
-      view.accent.background = isSelected ? "#fdf4ff" : card.accentColor;
-      view.costBadge.background = isAffordable ? card.accentColor : "#52525b";
-      view.costText.text = `${card.cost} cog.`;
-      view.nameText.color = isAffordable ? "#f8fafc" : "#a1a1aa";
-      view.summaryText.color = isAffordable ? "#cbd5e1" : "#71717a";
+      view.applyState({
+        isAffordable: snapshot.mushrooms >= card.cost,
+        isSelected: snapshot.selectedCardId === card.id,
+      });
     }
   }
 
@@ -325,13 +215,5 @@ export class CardDeckHud {
 
     // Atualizar Image source com data URL do canvas
     this.ringImage.source = this.ringCanvas.toDataURL();
-  }
-
-  private withAlpha(hexColor: string, alpha: string): string {
-    if (/^#[0-9a-fA-F]{6}$/.test(hexColor)) {
-      return `${hexColor}${alpha}`;
-    }
-
-    return hexColor;
   }
 }

@@ -9,7 +9,14 @@ import { ArenaSystem } from "./arena/ArenaSystem";
 import { CardDeckSystem } from "./cards/CardDeckSystem";
 import { CombatEngine } from "./combat/CombatEngine";
 import { CardDeckHud } from "./ui/CardDeckHud";
+import { HudLayer } from "./ui/HudLayer";
 import { EighthWallARManager } from "./ar/EighthWallARManager";
+import { frameArenaCamera, measureArenaExtents } from "./camera/arenaFraming";
+import { FullscreenToggle } from "./ui/FullscreenToggle";
+import {
+  installImmersiveModeOnGesture,
+  onOrientationChange,
+} from "./ui/screenOrientation";
 
 function formatErrorTrace(error: unknown): string {
 	if (error instanceof Error) {
@@ -76,26 +83,25 @@ function renderFatalErrorModal(error: unknown): void {
 	document.body.appendChild(container);
 }
 
-async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<Scene> {
+interface GameRuntime {
+	arManager: EighthWallARManager;
+	/** Reenquadra a camera e o HUD apos resize/mudanca de orientacao. */
+	relayout: () => void;
+	scene: Scene;
+}
+
+async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<GameRuntime> {
 	const scene = new Scene(engine);
 	scene.clearColor = new Color4(0.7, 0.8, 0.95, 1);
-
-	// quanto menor a tela, maior deve ser o fator para afastar a camera e enquadrar a arena inteira
-    const referenceScreenWidth = 970;
-    const safeScreenWidth = Math.max(window.innerWidth, 1);
-    const screenFactor = referenceScreenWidth / safeScreenWidth;
-    const distanceCamera = 20 * screenFactor;
 
 	const camera = new ArcRotateCamera(
 		"main-camera",
 		Math.PI / 2 * -1,
 		Math.PI / 3.4,
-		distanceCamera,
-		new Vector3(0, 0, -8.5),
+		30,
+		Vector3.Zero(),
 		scene
 	);
-	camera.lowerRadiusLimit = 24;
-	camera.upperRadiusLimit = 55;
 	camera.attachControl(canvas, true);
 
 	const light = new HemisphericLight("main-light", new Vector3(0, 1, 0), scene);
@@ -104,7 +110,17 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	const arenaSystem = new ArenaSystem(scene);
 	const arena = arenaSystem.buildInitialArena();
 
-	const arManager = new EighthWallARManager(scene, arena.root);
+	// Medido antes de qualquer escala de RA (o modo RA reduz o root para ~0.02).
+	const arenaExtents = measureArenaExtents(arena.root);
+	frameArenaCamera(camera, engine, arenaExtents);
+
+	const hudLayer = new HudLayer(scene);
+
+	const fullscreenToggle = new FullscreenToggle();
+	hudLayer.fillSlot("fullscreen", fullscreenToggle.root);
+	hudLayer.setSlotVisible("fullscreen", fullscreenToggle.isAvailable());
+
+	const arManager = new EighthWallARManager(scene, arena.root, hudLayer);
 	arManager.initialize();
 
 	const towerCombatSettings = {
@@ -144,7 +160,7 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 	});
 	cardDeckSystem.startRegeneration();
 
-	const cardDeckHud = new CardDeckHud(scene, cardDeckSystem);
+	const cardDeckHud = new CardDeckHud(scene, cardDeckSystem, hudLayer);
 	const combatEngine = new CombatEngine({
 		arenaLayout: arena.arenaLayout,
 		arenaRoot: arena.root,
@@ -161,9 +177,36 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<S
 		combatEngine.dispose();
 		cardDeckHud.dispose();
 		cardDeckSystem.dispose();
+		fullscreenToggle.dispose();
+		hudLayer.dispose();
 	});
 
-	return scene;
+	let framedAspectRatio = engine.getAspectRatio(camera);
+
+	const relayout = (): void => {
+		hudLayer.refreshSafeArea();
+		cardDeckHud.applyColumnMargin();
+
+		// Em RA a camera ativa e a FreeCamera controlada pelo 8th Wall (projecao
+		// vem do engine); reenquadrar so faz sentido fora do modo RA.
+		if (scene.activeCamera !== camera) {
+			return;
+		}
+
+		// Reenquadrar reseta o que o jogador ajustou na camera, entao so vale a
+		// pena quando a proporcao muda de verdade (girar o aparelho) — e nao a
+		// cada resize da barra de endereco do navegador mobile.
+		const aspectRatio = engine.getAspectRatio(camera);
+
+		if (Math.abs(aspectRatio - framedAspectRatio) / framedAspectRatio < 0.1) {
+			return;
+		}
+
+		framedAspectRatio = aspectRatio;
+		frameArenaCamera(camera, engine, arenaExtents);
+	};
+
+	return { arManager, relayout, scene };
 }
 
 async function bootstrap(): Promise<void> {
@@ -174,14 +217,23 @@ async function bootstrap(): Promise<void> {
 	}
 
 	const engine = new Engine(canvas, true);
-	const scene = await createScene(engine, canvas);
+	const { arManager, relayout, scene } = await createScene(engine, canvas);
 
 	engine.runRenderLoop(() => {
 		scene.render();
 	});
 
-	window.addEventListener("resize", () => {
+	// O jogo e desenhado para paisagem: tela cheia + trava de orientacao sao
+	// tentadas nos primeiros gestos (Android/Chrome). Onde a API nao existe
+	// (Safari do iPhone), o overlay de rotacao de index.html assume e a tela
+	// cheia depende de adicionar o site a tela de inicio.
+	// Durante a RA quem cuida disso e o proprio `enterAR`, antes de subir a
+	// sessao — mexer na orientacao com a sessao no ar desalinha o tracking.
+	installImmersiveModeOnGesture(canvas, () => arManager.isSessionActive());
+
+	onOrientationChange(() => {
 		engine.resize();
+		relayout();
 	});
 }
 

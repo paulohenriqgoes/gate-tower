@@ -2,8 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <title>Babylon AR Tower Defense</title>
+    <!--
+      Tela cheia: no Android/Chrome vem da Fullscreen API (src/ui/screenOrientation.ts).
+      No Safari do iPhone, que nao implementa a API, o unico caminho e adicionar
+      o site a tela de inicio — dai valem as metas apple-mobile-web-app-*.
+    -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#090e13" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Tower Gate" />
     <script src="/8thwall/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
     <style>
       html,
@@ -21,10 +35,75 @@
         touch-action: none;
         display: block;
       }
+
+      /*
+        O jogo e landscape-first. Onde screen.orientation.lock funciona
+        (Android/Chrome em fullscreen) este aviso nunca aparece; no iOS Safari,
+        que ignora a API, ele e o que garante a orientacao correta.
+      */
+      #rotate-prompt {
+        display: none;
+      }
+
+      @media (orientation: portrait) and (pointer: coarse) {
+        #rotate-prompt {
+          display: flex;
+          position: fixed;
+          inset: 0;
+          z-index: 10;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 18px;
+          padding: 24px;
+          background: #090e13;
+          color: #f8fafc;
+          font-family: "Trebuchet MS", ui-sans-serif, system-ui, sans-serif;
+          text-align: center;
+        }
+      }
+
+      #rotate-prompt .rotate-icon {
+        font-size: 64px;
+        animation: rotate-hint 2.4s ease-in-out infinite;
+      }
+
+      #rotate-prompt .rotate-title {
+        font-size: 22px;
+        font-weight: bold;
+      }
+
+      #rotate-prompt .rotate-hint {
+        font-size: 15px;
+        color: #a5b4fc;
+        max-width: 22em;
+      }
+
+      @keyframes rotate-hint {
+        0%,
+        45% {
+          transform: rotate(0deg);
+        }
+        70%,
+        100% {
+          transform: rotate(90deg);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #rotate-prompt .rotate-icon {
+          animation: none;
+        }
+      }
     </style>
   </head>
   <body>
     <canvas id="renderCanvas"></canvas>
+    <div id="rotate-prompt">
+      <div class="rotate-icon">📱</div>
+      <div class="rotate-title">Gire o celular</div>
+      <div class="rotate-hint">O Tower Gate foi feito para ser jogado deitado (paisagem).</div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

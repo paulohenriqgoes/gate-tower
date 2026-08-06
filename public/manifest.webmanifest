@@ -1,0 +1,12 @@
+{
+  "name": "Tower Gate",
+  "short_name": "Tower Gate",
+  "description": "Jogo de cartas com lanes em Realidade Aumentada.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#090e13",
+  "theme_color": "#090e13"
+}

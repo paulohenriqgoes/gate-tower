@@ -15,6 +15,29 @@ Jogo de cartas com lanes em Realidade Aumentada (RA), inspirado na leitura de ca
 - unidade Javali Raivoso andando ate a torre inimiga e causando dano
 - torres com vida, contra-ataque e estado destruido
 - modo RA migrado de WebXR para o engine 8th Wall (SLAM via camera), com suporte a iOS
+- layout landscape-first: HUD em paisagem e enquadramento de camera por aspect ratio
+
+## Layout (paisagem)
+
+O jogo e desenhado para ser jogado com o celular deitado:
+
+- barra superior esquerda com contador de cogumelos, switch de RA e botao de escala;
+- linhas de status (RA e carta selecionada) logo abaixo da barra;
+- cartas em losango empilhadas na borda direita — a descricao da carta aparece no status ao seleciona-la;
+- a camera reenquadra a arena a cada mudanca de orientacao, descontando a faixa ocupada pelas cartas.
+
+## Tela cheia e orientacao
+
+- No Android/Chrome o jogo entra em tela cheia e trava em paisagem
+  (`requestFullscreen` + `screen.orientation.lock`) ja nos primeiros toques.
+  Depois do primeiro sucesso ele nao insiste mais — o botao `⛶` da barra
+  superior serve para sair e voltar.
+- No Safari do iPhone nao existe Fullscreen API: o botao `⛶` fica oculto e a
+  tela cheia de verdade so acontece com **Compartilhar > Adicionar a Tela de
+  Inicio** (o `manifest.webmanifest` e as metas `apple-mobile-web-app-*` fazem
+  o atalho abrir em paisagem, sem barras do Safari).
+- Quando a trava de orientacao nao esta disponivel, um overlay CSS pede para
+  girar o aparelho.
 
 ## Realidade Aumentada (8th Wall)
 

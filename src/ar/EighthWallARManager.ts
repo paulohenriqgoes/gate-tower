@@ -11,18 +11,23 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
-import { AdvancedDynamicTexture, Button, Control, Ellipse, Rectangle, Slider, StackPanel, TextBlock } from "@babylonjs/gui";
+import { Button, Control, Ellipse, Rectangle, Slider, StackPanel, TextBlock } from "@babylonjs/gui";
 
 import { installBabylonGlobalsForXR8 } from "./babylonRuntimeGlobals";
 import { buildSampleOffsets, fitGroundPlane, normalizeToCanvas, type GroundPlaneFit } from "./hitTestSampling";
 import { playSpawnScaleIn } from "../fx/spawnAnimation";
+import type { HudLayer } from "../ui/HudLayer";
+import { enterImmersiveMode } from "../ui/screenOrientation";
+import { ToggleSwitch } from "../ui/ToggleSwitch";
 
 const XR8_LOAD_TIMEOUT_MS = 15000;
 const MAX_PLACEMENT_DISTANCE = 40;
+// Teto de frames aguardando a viewport estabilizar depois do fullscreen.
+const VIEWPORT_SETTLE_MAX_FRAMES = 30;
 
 // Amostragem do hitTest para o fit de plano no momento de posicionar (Fase 2).
 // Um grid em aneis ao redor do toque da uma estimativa de altura robusta a ruido.
-const SAMPLE_RADIUS = 0.06;
+const SAMPLE_RADIUS = 0.04;
 const SAMPLE_RINGS = 2;
 const SAMPLE_PER_RING = 6;
 const MIN_INLIERS = 3;
@@ -31,7 +36,7 @@ const HITTEST_TYPES: XR8HitTestType[] = ["DETECTED_SURFACE", "ESTIMATED_SURFACE"
 
 // So NORMAL: em device o LIMITED deixou o tracking instavel demais ao posicionar.
 // Os demais (INITIALIZING/RELOCALIZING/null) tambem sao onde o WASM estourava.
-const HITTEST_SAFE_STATUSES: XR8TrackingStatus[] = ["NORMAL"];
+const HITTEST_SAFE_STATUSES: XR8TrackingStatus[] = ["LIMITED", "NORMAL"];
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -45,9 +50,8 @@ export class EighthWallARManager {
   private readonly arenaRoot: TransformNode;
   private readonly groundPlane = new Plane(0, 1, 0, 0);
 
-  private ui: AdvancedDynamicTexture | null = null;
-  private toggleButton: Button | null = null;
-  private statusText: TextBlock | null = null;
+  private readonly hud: HudLayer;
+  private toggleSwitch: ToggleSwitch | null = null;
   private hitCursor: Mesh | null = null;
   private scalePanel: Rectangle | null = null;
   private scaleSlider: Slider | null = null;
@@ -71,12 +75,18 @@ export class EighthWallARManager {
   private isEnteringAR = false;
   private hasUserPlacedArenaInXR = false;
   private nonARScale = new Vector3(1, 1, 1);
-  private arenaScaleInAR = 0.02;
+  private arenaScaleInAR = 0.05;
   private latestTrackingStatus: XR8TrackingStatus | null = null;
 
-  public constructor(scene: Scene, arenaRoot: TransformNode) {
+  public constructor(scene: Scene, arenaRoot: TransformNode, hud: HudLayer) {
     this.scene = scene;
     this.arenaRoot = arenaRoot;
+    this.hud = hud;
+  }
+
+  /** Sessao de RA ativa ou em abertura. */
+  public isSessionActive(): boolean {
+    return this.isInAR || this.isEnteringAR;
   }
 
   public initialize(): void {
@@ -123,32 +133,16 @@ export class EighthWallARManager {
     this.updateUI();
   }
 
+  /**
+   * Monta os controles de RA na barra superior esquerda do HUD compartilhado:
+   * switch liga/desliga e botao de escala, ao lado do contador de cogumelos.
+   */
   private createBabylonToggleUI(): void {
-    this.ui = AdvancedDynamicTexture.CreateFullscreenUI("xr-ui", true, this.scene);
-
-    this.toggleButton = Button.CreateSimpleButton("toggle-ra", "Alternar RA");
-    this.toggleButton.width = "220px";
-    this.toggleButton.height = "60px";
-    this.toggleButton.color = "white";
-    this.toggleButton.cornerRadius = 12;
-    this.toggleButton.background = "#1f3a4d";
-    this.toggleButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.toggleButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    this.toggleButton.top = "20px";
-    this.toggleButton.left = "-20px";
-
-    this.statusText = new TextBlock("ra-status", "RA: Off");
-    this.statusText.color = "white";
-    this.statusText.fontSize = 20;
-    this.statusText.height = "40px";
-    this.statusText.top = "92px";
-    this.statusText.left = "-20px";
-    this.statusText.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.statusText.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-
-    this.toggleButton.onPointerClickObservable.add(() => {
+    this.toggleSwitch = new ToggleSwitch(this.scene, "toggle-ra", "AR");
+    this.toggleSwitch.onToggleObservable.add(() => {
       void this.toggleAR();
     });
+    this.hud.fillSlot("ar-toggle", this.toggleSwitch.root);
 
     this.scaleButton = Button.CreateSimpleButton("scale-btn", "⤡");
     this.scaleButton.width = "60px";
@@ -157,23 +151,35 @@ export class EighthWallARManager {
     this.scaleButton.cornerRadius = 12;
     this.scaleButton.background = "#1f3a4d";
     this.scaleButton.fontSize = 28;
-    this.scaleButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.scaleButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    this.scaleButton.top = "20px";
-    this.scaleButton.left = "-250px";
-    this.scaleButton.isVisible = false;
+    this.scaleButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
 
     this.scaleButton.onPointerClickObservable.add(() => {
+      // Fora do modo RA o botao fica esmaecido e inerte (em vez de invisivel),
+      // para a barra do topo nao mudar de largura a cada troca de estado.
+      if (!this.isScaleButtonEnabled()) {
+        return;
+      }
+
       this.isScaleToolActive = true;
       this.setScalePanelVisible(true);
       this.updateUI();
     });
 
-    this.ui.addControl(this.toggleButton);
-    this.ui.addControl(this.scaleButton);
-    this.ui.addControl(this.statusText);
+    this.hud.fillSlot("ar-scale", this.scaleButton);
     this.createScaleSliderUI();
     this.createLoaderUI();
+  }
+
+  private isScaleButtonEnabled(): boolean {
+    return this.isInAR && this.hasUserPlacedArenaInXR && !this.isScaleToolActive;
+  }
+
+  private setScaleButtonEnabled(isEnabled: boolean): void {
+    if (!this.scaleButton) {
+      return;
+    }
+
+    this.scaleButton.alpha = isEnabled ? 1 : 0.35;
   }
 
   /**
@@ -183,9 +189,7 @@ export class EighthWallARManager {
    * aparece quando o tracking fica pronto para posicionar.
    */
   private createLoaderUI(): void {
-    if (!this.ui) {
-      return;
-    }
+    const ui = this.hud.getTexture();
 
     const panel = new Rectangle("ar-loader");
     panel.width = "240px";
@@ -234,7 +238,7 @@ export class EighthWallARManager {
     label.isHitTestVisible = false;
     panel.addControl(label);
 
-    this.ui.addControl(panel);
+    ui.addControl(panel);
     this.loaderPanel = panel;
     this.spinnerRotator = rotator;
 
@@ -248,7 +252,7 @@ export class EighthWallARManager {
     prompt.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     prompt.isHitTestVisible = false;
     prompt.isVisible = false;
-    this.ui.addControl(prompt);
+    ui.addControl(prompt);
     this.placePrompt = prompt;
 
     this.scene.onBeforeRenderObservable.add(() => {
@@ -277,15 +281,11 @@ export class EighthWallARManager {
       this.placePrompt.isVisible = ready;
     }
 
-    if (this.statusText) {
-      this.statusText.isVisible = !inPlacement;
-    }
+    this.hud.setArStatusVisible(!inPlacement);
   }
 
   private createScaleSliderUI(): void {
-    if (!this.ui) {
-      return;
-    }
+    const ui = this.hud.getTexture();
 
     const panel = new Rectangle("arena-scale-panel");
     panel.width = "260px";
@@ -294,10 +294,12 @@ export class EighthWallARManager {
     panel.color = "#4b5563";
     panel.thickness = 1;
     panel.background = "#111827d9";
-    panel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    panel.left = "-20px";
-    panel.top = "20px";
+    // Inferior-esquerdo: em paisagem o topo-direito e a lateral direita ficam
+    // ocupados pela coluna de cartas.
+    panel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    panel.left = "22px";
+    panel.top = "-22px";
     panel.isVisible = false;
 
     const stack = new StackPanel("arena-scale-stack");
@@ -356,7 +358,7 @@ export class EighthWallARManager {
     stack.addControl(valueText);
     stack.addControl(okButton);
     panel.addControl(stack);
-    this.ui.addControl(panel);
+    ui.addControl(panel);
 
     this.scalePanel = panel;
     this.scaleSlider = slider;
@@ -587,6 +589,13 @@ export class EighthWallARManager {
     try {
       await this.requestMotionPermission();
 
+      // Tela cheia e trava de orientacao ANTES de iniciar a sessao: o engine le
+      // a orientacao uma unica vez no init (`initCameraRuntime` + `orientation`)
+      // e so entao passa a ouvir `orientationchange`. Mudar isso depois que a
+      // sessao subiu deixa a pose do SLAM girada em relacao a tela.
+      await enterImmersiveMode();
+      await this.waitForStableViewport();
+
       installBabylonGlobalsForXR8();
       xr8.XrController.configure({ scale: "absolute" });
       xr8.addCameraPipelineModule(this.createStatusPipelineModule());
@@ -702,6 +711,31 @@ export class EighthWallARManager {
         }, 0);
       },
     };
+  }
+
+  /**
+   * Espera a viewport parar de mudar antes de subir a sessao. Entrar em tela
+   * cheia e travar a orientacao redimensionam a tela de forma assincrona, e o
+   * engine so fotografa canvas e orientacao no momento do init.
+   */
+  private async waitForStableViewport(): Promise<void> {
+    let lastWidth = -1;
+    let lastHeight = -1;
+
+    for (let frame = 0; frame < VIEWPORT_SETTLE_MAX_FRAMES; frame += 1) {
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+
+      const { innerHeight, innerWidth } = window;
+
+      if (innerWidth === lastWidth && innerHeight === lastHeight) {
+        return;
+      }
+
+      lastWidth = innerWidth;
+      lastHeight = innerHeight;
+    }
   }
 
   /** iOS 13+ exige permissao explicita de sensores de movimento dentro de um gesto do usuario. */
@@ -833,70 +867,54 @@ export class EighthWallARManager {
   }
 
   private updateUI(customLabel?: string, warning = false): void {
-    if (!this.toggleButton || !this.statusText) {
+    if (!this.toggleSwitch) {
       return;
     }
 
     this.refreshPlacementOverlay();
+    this.toggleSwitch.setState(this.isInAR);
+    this.toggleSwitch.setEnabled(this.isXR8Ready && this.isARSupported && !this.isEnteringAR);
+    this.toggleSwitch.setWarning(warning);
+    this.setScaleButtonEnabled(this.isScaleButtonEnabled());
 
     if (customLabel) {
-      this.statusText.isVisible = true;
-      this.statusText.text = customLabel;
-      this.toggleButton.background = warning ? "#7c2d12" : "#1f3a4d";
+      this.hud.setArStatusVisible(true);
+      this.hud.setArStatus(customLabel);
       return;
     }
 
     if (!this.isXR8Ready) {
-      this.toggleButton.isVisible = true;
-      this.statusText.text = this.hasXR8LoadFailed ? "RA indisponivel" : "Carregando RA...";
-      this.toggleButton.background = "#1f3a4d";
-      if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.hud.setArStatus(this.hasXR8LoadFailed ? "RA indisponivel" : "Carregando RA...");
       this.setScalePanelVisible(false);
       return;
     }
 
     if (!this.isARSupported) {
-      this.toggleButton.isVisible = true;
-      this.statusText.text = "RA indisponivel";
-      this.toggleButton.background = "#1f3a4d";
-      if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.hud.setArStatus("RA indisponivel");
       this.setScalePanelVisible(false);
       return;
     }
 
     if (!this.isInAR) {
-      // Fora do AR: apenas toggle visivel
-      this.toggleButton.isVisible = true;
-      this.statusText.text = "RA: Off";
-      this.toggleButton.background = "#1f3a4d";
-      if (this.scaleButton) this.scaleButton.isVisible = false;
+      this.hud.setArStatus("RA: Off");
       this.setScalePanelVisible(false);
       return;
     }
 
     if (!this.hasUserPlacedArenaInXR) {
-      // AR + arena nao posicionada: exibir scale panel no lugar do toggle
-      this.toggleButton.isVisible = false;
-      if (this.scaleButton) this.scaleButton.isVisible = false;
+      // AR + arena nao posicionada: painel de escala disponivel desde o inicio
       this.setScalePanelVisible(true);
-      this.statusText.text = this.trackingHintText();
+      this.hud.setArStatus(this.trackingHintText());
       return;
     }
 
     if (this.isScaleToolActive) {
-      // AR + arena posicionada + escala ativa: scale panel no lugar do toggle
-      this.toggleButton.isVisible = false;
-      if (this.scaleButton) this.scaleButton.isVisible = false;
       this.setScalePanelVisible(true);
-      this.statusText.text = "RA: On | Ajuste a escala da arena";
+      this.hud.setArStatus("RA: On | Ajuste a escala da arena");
       return;
     }
 
-    // AR + arena posicionada: toggle + botao escala
-    this.toggleButton.isVisible = true;
-    this.toggleButton.background = "#216e39";
-    if (this.scaleButton) this.scaleButton.isVisible = true;
     this.setScalePanelVisible(false);
-    this.statusText.text = "RA: On | Arena posicionada";
+    this.hud.setArStatus("RA: On | Arena posicionada");
   }
 }
