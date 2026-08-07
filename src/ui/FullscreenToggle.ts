@@ -25,12 +25,12 @@ export class FullscreenToggle {
 
   public constructor() {
     this.root = Button.CreateSimpleButton("fullscreen-btn", "⛶");
-    this.root.width = "60px";
-    this.root.height = "60px";
+    this.root.width = "72px";
+    this.root.height = "72px";
     this.root.color = "white";
     this.root.cornerRadius = 12;
     this.root.background = BACKGROUND_OFF;
-    this.root.fontSize = 28;
+    this.root.fontSize = 32;
     this.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
 
     this.root.onPointerClickObservable.add(() => {

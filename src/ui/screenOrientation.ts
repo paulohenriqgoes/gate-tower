@@ -1,7 +1,9 @@
 /**
- * Utilitarios de orientacao de tela. O jogo e desenhado para paisagem: tentamos
- * travar a orientacao nativamente (Android/Chrome, exige fullscreen) e, onde a
- * API nao existe (iOS Safari), o overlay CSS de `index.html` pede a rotacao.
+ * Utilitarios de orientacao de tela. A politica e POR MODO DE JOGO, nao global:
+ * no modo tela o jogo e desenhado para paisagem (trava nativa no Android/Chrome
+ * e, onde a API nao existe, o overlay CSS de `index.html` pede a rotacao); ja o
+ * modo RA roda destravado, porque em paisagem travada o tracking do 8th Wall
+ * fica inutilizavel no device. Quem aplica cada politica e o `GameFlow`.
  */
 
 export interface SafeAreaInsets {
@@ -13,6 +15,7 @@ export interface SafeAreaInsets {
 
 type LockableOrientation = ScreenOrientation & {
   lock?: (orientation: string) => Promise<void>;
+  unlock?: () => void;
 };
 
 // Safari (iPadOS e WebViews antigos) so expoe a API de fullscreen prefixada.
@@ -113,6 +116,24 @@ export async function enterImmersiveMode(): Promise<boolean> {
   }
 
   return isFullscreenActive;
+}
+
+/**
+ * Solta a trava de orientacao e sai da tela cheia. Usado ao entrar em RA: em
+ * paisagem travada o tracking do 8th Wall fica inutilizavel no device, e com o
+ * lock ativo o SO para de emitir `orientationchange` ao virar o aparelho —
+ * o que dessincroniza o que o engine reporta ao WASM da pose fisica real.
+ */
+export async function exitImmersiveMode(): Promise<void> {
+  const orientation = window.screen?.orientation as LockableOrientation | undefined;
+
+  try {
+    orientation?.unlock?.();
+  } catch {
+    // Nao existe no Safari do iPhone; destravar nunca deve derrubar a RA.
+  }
+
+  await exitFullscreen();
 }
 
 /**

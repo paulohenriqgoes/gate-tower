@@ -7,24 +7,29 @@ import {
 } from "@babylonjs/gui";
 import type { Scene } from "@babylonjs/core/scene";
 
-import { readSafeAreaInsets, type SafeAreaInsets } from "./screenOrientation";
+import { isPortrait, readSafeAreaInsets, type SafeAreaInsets } from "./screenOrientation";
 
 /** Slots fixos da barra superior esquerda, na ordem em que aparecem na tela. */
-export type HudTopBarSlot = "mushrooms" | "ar-toggle" | "ar-scale" | "fullscreen";
+export type HudTopBarSlot = "mushrooms" | "ar-scale" | "fullscreen";
 
-const SLOT_ORDER: HudTopBarSlot[] = ["mushrooms", "ar-toggle", "ar-scale", "fullscreen"];
+const SLOT_ORDER: HudTopBarSlot[] = ["mushrooms", "ar-scale", "fullscreen"];
 const SLOT_WIDTHS: Record<HudTopBarSlot, number> = {
   "ar-scale": 76,
-  "ar-toggle": 158,
   fullscreen: 76,
   mushrooms: 92,
 };
 
-// Resolucao de referencia do HUD. Todo valor em px dos controles e reescalado
-// por `idealWidth/idealHeight`; com `useSmallestIdeal`, em paisagem o fator vem
-// da ALTURA — o eixo apertado quando o celular esta deitado.
-const IDEAL_WIDTH = 1280;
-const IDEAL_HEIGHT = 720;
+// Resolucao de referencia do HUD, sempre com o eixo CURTO da tela valendo
+// IDEAL_SHORT. Todo valor em px dos controles e multiplicado por `idealRatio`,
+// e com `useSmallestIdeal` o Babylon usa `width/idealWidth` em portrait e
+// `height/idealHeight` em paisagem. Manter 1280 na largura nas duas orientacoes
+// espremia o design inteiro em ~390 px CSS quando o celular estava em pe —
+// tudo ficava ~1.8x menor que em paisagem e os botoes viravam inclicaveis.
+const IDEAL_LONG = 1280;
+const IDEAL_SHORT = 720;
+
+const AR_STATUS_COLOR = "#cbd5e1";
+const AR_STATUS_WARNING_COLOR = "#fca5a5";
 
 const TOP_BAR_HEIGHT = 88;
 const COLUMN_WIDTH = 560;
@@ -45,11 +50,18 @@ export class HudLayer {
   private readonly cardStatusText: TextBlock;
   private safeArea: SafeAreaInsets = { bottom: 0, left: 0, right: 0, top: 0 };
 
+  // `arStatusText` tem dois donos disputando visibilidade: a fase de jogo
+  // (menu vs partida, via `setStatusVisible`) e o posicionamento de RA (via
+  // `setArStatusVisible`, chamado pelo EighthWallARManager). O valor exibido
+  // e a conjuncao dos dois, senao entrar em RA reacende um status que o menu
+  // tinha apagado.
+  private isGameFlowStatusVisible = true;
+  private isArPlacementStatusVisible = true;
+
   public constructor(scene: Scene) {
     this.texture = AdvancedDynamicTexture.CreateFullscreenUI("game-hud", true, scene);
-    this.texture.idealWidth = IDEAL_WIDTH;
-    this.texture.idealHeight = IDEAL_HEIGHT;
     this.texture.useSmallestIdeal = true;
+    this.applyIdealResolution();
 
     this.leftColumn = new StackPanel("hud-left-column");
     this.leftColumn.isVertical = true;
@@ -79,7 +91,7 @@ export class HudLayer {
       this.slots.set(slot, holder);
     }
 
-    this.arStatusText = this.createStatusText("hud-ar-status", 18, "#cbd5e1", 26);
+    this.arStatusText = this.createStatusText("hud-ar-status", 18, AR_STATUS_COLOR, 26);
     this.cardStatusText = this.createStatusText("hud-card-status", 15, "#a5b4fc", 46);
     this.cardStatusText.textWrapping = true;
 
@@ -117,12 +129,25 @@ export class HudLayer {
     }
   }
 
-  public setArStatus(text: string): void {
+  /** Liga/desliga as duas linhas de status (RA e carta selecionada). */
+  public setStatusVisible(isVisible: boolean): void {
+    this.isGameFlowStatusVisible = isVisible;
+    this.arStatusText.isVisible = this.isGameFlowStatusVisible && this.isArPlacementStatusVisible;
+    this.cardStatusText.isVisible = isVisible;
+  }
+
+  /**
+   * O aviso vira cor do texto porque o switch de RA — que antes ficava vermelho
+   * em caso de erro — saiu da barra junto com a escolha de modo.
+   */
+  public setArStatus(text: string, isWarning = false): void {
     this.arStatusText.text = text;
+    this.arStatusText.color = isWarning ? AR_STATUS_WARNING_COLOR : AR_STATUS_COLOR;
   }
 
   public setArStatusVisible(visible: boolean): void {
-    this.arStatusText.isVisible = visible;
+    this.isArPlacementStatusVisible = visible;
+    this.arStatusText.isVisible = this.isGameFlowStatusVisible && this.isArPlacementStatusVisible;
   }
 
   public setCardStatus(text: string): void {
@@ -136,6 +161,9 @@ export class HudLayer {
    * roda a cada `resize`.
    */
   public refreshSafeArea(): void {
+    // Antes das margens: elas sao calculadas em px do espaco ideal, que muda
+    // junto com a orientacao.
+    this.applyIdealResolution();
     this.safeArea = readSafeAreaInsets();
 
     const scale = this.cssPixelToIdealPixel();
@@ -150,6 +178,18 @@ export class HudLayer {
 
   public dispose(): void {
     this.texture.dispose();
+  }
+
+  /**
+   * Gira o espaco de referencia junto com a tela, para que o eixo curto valha
+   * sempre IDEAL_SHORT e um controle de 80px tenha o mesmo tamanho fisico nas
+   * duas orientacoes.
+   */
+  private applyIdealResolution(): void {
+    const portrait = isPortrait();
+
+    this.texture.idealWidth = portrait ? IDEAL_SHORT : IDEAL_LONG;
+    this.texture.idealHeight = portrait ? IDEAL_LONG : IDEAL_SHORT;
   }
 
   /**

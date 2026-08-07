@@ -8,15 +8,15 @@ import { Scene } from "@babylonjs/core/scene";
 import { ArenaSystem } from "./arena/ArenaSystem";
 import { CardDeckSystem } from "./cards/CardDeckSystem";
 import { CombatEngine } from "./combat/CombatEngine";
+import { GameFlow } from "./game/GameFlow";
 import { CardDeckHud } from "./ui/CardDeckHud";
+import { DiagnosticsOverlay } from "./ui/DiagnosticsOverlay";
 import { HudLayer } from "./ui/HudLayer";
+import { StartScreen } from "./ui/StartScreen";
 import { EighthWallARManager } from "./ar/EighthWallARManager";
 import { frameArenaCamera, measureArenaExtents } from "./camera/arenaFraming";
 import { FullscreenToggle } from "./ui/FullscreenToggle";
-import {
-  installImmersiveModeOnGesture,
-  onOrientationChange,
-} from "./ui/screenOrientation";
+import { onOrientationChange } from "./ui/screenOrientation";
 
 function formatErrorTrace(error: unknown): string {
 	if (error instanceof Error) {
@@ -84,7 +84,6 @@ function renderFatalErrorModal(error: unknown): void {
 }
 
 interface GameRuntime {
-	arManager: EighthWallARManager;
 	/** Reenquadra a camera e o HUD apos resize/mudanca de orientacao. */
 	relayout: () => void;
 	scene: Scene;
@@ -120,7 +119,13 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	hudLayer.fillSlot("fullscreen", fullscreenToggle.root);
 	hudLayer.setSlotVisible("fullscreen", fullscreenToggle.isAvailable());
 
-	const arManager = new EighthWallARManager(scene, arena.root, hudLayer);
+	// Painel de debug so existe com `?debug=1`: em RA o celular nao tem console,
+	// e sem esses numeros nao da para investigar viewport/orientacao/tracking.
+	const diagnosticsOverlay = DiagnosticsOverlay.isEnabled()
+		? new DiagnosticsOverlay(hudLayer, scene)
+		: null;
+
+	const arManager = new EighthWallARManager(scene, arena.root, hudLayer, diagnosticsOverlay);
 	arManager.initialize();
 
 	const towerCombatSettings = {
@@ -158,8 +163,8 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		maxMushrooms: 10,
 		regenerationIntervalMs: 1800,
 	});
-	cardDeckSystem.startRegeneration();
-
+	// A regeneracao de cogumelos nao comeca no boot: quem liga e o GameFlow ao
+	// entrar em partida, para o contador nao correr durante o menu.
 	const cardDeckHud = new CardDeckHud(scene, cardDeckSystem, hudLayer);
 	const combatEngine = new CombatEngine({
 		arenaLayout: arena.arenaLayout,
@@ -173,7 +178,32 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		towerMaxHealth: towerCombatSettings.maxHealth,
 	});
 
+	const startScreen = new StartScreen(hudLayer);
+	startScreen.setArAvailable(arManager.isARAvailable());
+
+	// O engine do 8th Wall carrega de forma assincrona: o menu abre com o botao
+	// de RA esmaecido e so libera quando o engine responde.
+	const availabilityObserver = arManager.onAvailabilityChangedObservable.add((isAvailable) => {
+		startScreen.setArAvailable(isAvailable);
+	});
+
+	const gameFlow = new GameFlow({
+		arManager,
+		arenaRoot: arena.root,
+		canvas,
+		cardDeckHud,
+		cardDeckSystem,
+		combatEngine,
+		hudLayer,
+		startScreen,
+	});
+	gameFlow.start();
+
 	scene.onDisposeObservable.add(() => {
+		arManager.onAvailabilityChangedObservable.remove(availabilityObserver);
+		gameFlow.dispose();
+		startScreen.dispose();
+		diagnosticsOverlay?.dispose();
 		combatEngine.dispose();
 		cardDeckHud.dispose();
 		cardDeckSystem.dispose();
@@ -206,7 +236,7 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		frameArenaCamera(camera, engine, arenaExtents);
 	};
 
-	return { arManager, relayout, scene };
+	return { relayout, scene };
 }
 
 async function bootstrap(): Promise<void> {
@@ -217,19 +247,16 @@ async function bootstrap(): Promise<void> {
 	}
 
 	const engine = new Engine(canvas, true);
-	const { arManager, relayout, scene } = await createScene(engine, canvas);
+	const { relayout, scene } = await createScene(engine, canvas);
 
 	engine.runRenderLoop(() => {
 		scene.render();
 	});
 
-	// O jogo e desenhado para paisagem: tela cheia + trava de orientacao sao
-	// tentadas nos primeiros gestos (Android/Chrome). Onde a API nao existe
-	// (Safari do iPhone), o overlay de rotacao de index.html assume e a tela
-	// cheia depende de adicionar o site a tela de inicio.
-	// Durante a RA quem cuida disso e o proprio `enterAR`, antes de subir a
-	// sessao — mexer na orientacao com a sessao no ar desalinha o tracking.
-	installImmersiveModeOnGesture(canvas, () => arManager.isSessionActive());
+	// Tela cheia e trava de orientacao NAO sao mais aplicadas no boot: elas
+	// disparavam no primeiro toque, que agora e o toque do proprio menu — antes
+	// de o jogador dizer se vai jogar em RA (onde a trava quebra o tracking) ou
+	// na tela. Quem aplica a politica de cada modo e o GameFlow.
 
 	onOrientationChange(() => {
 		engine.resize();

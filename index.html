@@ -19,6 +19,13 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Tower Gate" />
     <script src="/8thwall/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
+    <!--
+      Coaching overlay de escala absoluta (MIT). Guia o jogador a mover o
+      celular para frente e para tras ate o SLAM convergir — sem isso da para
+      ancorar a arena com a escala ainda errada. Ele se expoe sozinho em
+      window.CoachingOverlay ao carregar.
+    -->
+    <script src="/coaching-overlay/coaching-overlay.js" async crossorigin="anonymous"></script>
     <style>
       html,
       body {
@@ -37,16 +44,21 @@
       }
 
       /*
-        O jogo e landscape-first. Onde screen.orientation.lock funciona
+        O modo tela e landscape-first. Onde screen.orientation.lock funciona
         (Android/Chrome em fullscreen) este aviso nunca aparece; no iOS Safari,
         que ignora a API, ele e o que garante a orientacao correta.
+
+        A classe `needs-landscape` no body e o que restringe o aviso ao modo
+        tela: em RA o jogo roda destravado (paisagem travada quebra o tracking
+        no device), entao o overlay nao pode cobrir a camera. Quem liga e
+        desliga a classe e o GameFlow.
       */
       #rotate-prompt {
         display: none;
       }
 
       @media (orientation: portrait) and (pointer: coarse) {
-        #rotate-prompt {
+        body.needs-landscape #rotate-prompt {
           display: flex;
           position: fixed;
           inset: 0;

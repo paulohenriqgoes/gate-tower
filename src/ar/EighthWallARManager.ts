@@ -10,15 +10,18 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+import { Observable } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 import { Button, Control, Ellipse, Rectangle, Slider, StackPanel, TextBlock } from "@babylonjs/gui";
 
+import type { ArSessionController } from "./ArSessionController";
 import { installBabylonGlobalsForXR8 } from "./babylonRuntimeGlobals";
 import { buildSampleOffsets, fitGroundPlane, normalizeToCanvas, type GroundPlaneFit } from "./hitTestSampling";
+import { attachCoachingOverlay, detachCoachingOverlay } from "./coachingOverlay";
 import { playSpawnScaleIn } from "../fx/spawnAnimation";
+import type { DiagnosticsOverlay } from "../ui/DiagnosticsOverlay";
 import type { HudLayer } from "../ui/HudLayer";
-import { enterImmersiveMode } from "../ui/screenOrientation";
-import { ToggleSwitch } from "../ui/ToggleSwitch";
+import { exitImmersiveMode } from "../ui/screenOrientation";
 
 const XR8_LOAD_TIMEOUT_MS = 15000;
 const MAX_PLACEMENT_DISTANCE = 40;
@@ -34,9 +37,27 @@ const MIN_INLIERS = 3;
 // Preferir superficie detectada; FEATURE_POINT e ultimo recurso.
 const HITTEST_TYPES: XR8HitTestType[] = ["DETECTED_SURFACE", "ESTIMATED_SURFACE", "FEATURE_POINT"];
 
-// So NORMAL: em device o LIMITED deixou o tracking instavel demais ao posicionar.
-// Os demais (INITIALIZING/RELOCALIZING/null) tambem sao onde o WASM estourava.
-const HITTEST_SAFE_STATUSES: XR8TrackingStatus[] = ["LIMITED", "NORMAL"];
+// So NORMAL. Esse e o criterio oficial de "escala absoluta convergiu": o
+// coaching overlay do proprio 8th Wall aparece em LIMITED+INITIALIZING e some
+// em NORMAL. Ancorar antes disso produz arena com tamanho e profundidade
+// errados — e LIMITED/INITIALIZING/RELOCALIZING sao onde o WASM estourava.
+const HITTEST_SAFE_STATUSES: XR8TrackingStatus[] = ["NORMAL"];
+
+// Escape para ambiente com pouca textura, onde o SLAM pode nunca chegar em
+// NORMAL: depois desse tempo LIMITED tambem libera, com aviso de precisao.
+const PLACEMENT_FALLBACK_MS = 30000;
+const FALLBACK_STATUSES: XR8TrackingStatus[] = ["LIMITED", "NORMAL"];
+
+const STATUS_MODULE_NAME = "gate-ar-status";
+
+// Alvos de toque do painel de setup. O espaco ideal do HUD vale ~0.54 px CSS
+// por px em celular, entao um botao precisa de ~82px aqui para chegar aos 44px
+// CSS recomendados — com os 32px antigos ele virava 17px CSS e nao dava para
+// acertar com o dedo.
+const SETUP_PANEL_WIDTH = 320;
+const SETUP_BUTTON_HEIGHT = 84;
+const SETUP_BUTTON_WIDTH = 140;
+const SETUP_SLIDER_HEIGHT = 56;
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -45,18 +66,25 @@ const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
  * O chao estimado pelo SLAM fica no plano y = 0 do mundo; posicionamento da
  * arena e cursor usam raycast contra esse plano.
  */
-export class EighthWallARManager {
+export class EighthWallARManager implements ArSessionController {
+  public readonly onArenaPlacedObservable = new Observable<void>();
+  public readonly onMatchStartRequestedObservable = new Observable<void>();
+  public readonly onSessionFailedObservable = new Observable<string>();
+  public readonly onAvailabilityChangedObservable = new Observable<boolean>();
+
   private readonly scene: Scene;
   private readonly arenaRoot: TransformNode;
   private readonly groundPlane = new Plane(0, 1, 0, 0);
 
   private readonly hud: HudLayer;
-  private toggleSwitch: ToggleSwitch | null = null;
+  private readonly diagnostics: DiagnosticsOverlay | null;
   private hitCursor: Mesh | null = null;
   private scalePanel: Rectangle | null = null;
   private scaleSlider: Slider | null = null;
   private scaleValueText: TextBlock | null = null;
   private scaleButton: Button | null = null;
+  private setupButtons: StackPanel | null = null;
+  private confirmScaleButton: Button | null = null;
   private isScaleToolActive = false;
 
   private loaderPanel: Rectangle | null = null;
@@ -77,16 +105,64 @@ export class EighthWallARManager {
   private nonARScale = new Vector3(1, 1, 1);
   private arenaScaleInAR = 0.05;
   private latestTrackingStatus: XR8TrackingStatus | null = null;
+  private hasFallbackUnlocked = false;
+  private fallbackTimeoutId: number | null = null;
+  // A partida comecou: o painel de setup sai e o botao de escala da barra entra.
+  private isSetupComplete = false;
 
-  public constructor(scene: Scene, arenaRoot: TransformNode, hud: HudLayer) {
+  public constructor(
+    scene: Scene,
+    arenaRoot: TransformNode,
+    hud: HudLayer,
+    diagnostics: DiagnosticsOverlay | null = null
+  ) {
     this.scene = scene;
     this.arenaRoot = arenaRoot;
     this.hud = hud;
+    this.diagnostics = diagnostics;
   }
 
   /** Sessao de RA ativa ou em abertura. */
   public isSessionActive(): boolean {
     return this.isInAR || this.isEnteringAR;
+  }
+
+  /** Engine carregado e device compativel com a RA do 8th Wall. */
+  public isARAvailable(): boolean {
+    return this.isXR8Ready && this.isARSupported;
+  }
+
+  /**
+   * Volta para a fase de posicionamento sem derrubar a sessao. Antes disso, uma
+   * vez ancorada a arena so dava para refazer saindo e voltando da RA.
+   */
+  public repositionArena(): void {
+    if (!this.isInAR) {
+      return;
+    }
+
+    this.hasUserPlacedArenaInXR = false;
+    this.isSetupComplete = false;
+    this.arenaRoot.setEnabled(false);
+    this.setScalePanelVisible(false);
+    this.updateUI();
+  }
+
+  /** Encerra a fase de setup: painel de setup e coaching overlay saem de cena. */
+  public completeSetup(): void {
+    this.isSetupComplete = true;
+    this.isScaleToolActive = false;
+
+    // O overlay some sozinho ao chegar em NORMAL, mas o modulo continua vivo e
+    // reapareceria se o tracking degradasse no meio da partida.
+    const xr8 = window.XR8;
+    if (xr8) {
+      detachCoachingOverlay(xr8);
+    }
+
+    this.setScalePanelVisible(false);
+    this.setHitCursorVisible(false);
+    this.updateUI();
   }
 
   public initialize(): void {
@@ -106,6 +182,7 @@ export class EighthWallARManager {
     const timeoutId = window.setTimeout(() => {
       this.hasXR8LoadFailed = true;
       this.updateUI();
+      this.onAvailabilityChangedObservable.notifyObservers(false);
     }, XR8_LOAD_TIMEOUT_MS);
 
     window.addEventListener(
@@ -131,26 +208,23 @@ export class EighthWallARManager {
     }
 
     this.updateUI();
+    this.onAvailabilityChangedObservable.notifyObservers(this.isARAvailable());
   }
 
   /**
    * Monta os controles de RA na barra superior esquerda do HUD compartilhado:
-   * switch liga/desliga e botao de escala, ao lado do contador de cogumelos.
+   * botao de escala, ao lado do contador de cogumelos. A escolha entre RA e
+   * modo tela nao vive mais aqui — ela e feita na tela inicial, antes da
+   * partida, porque cada modo tem politica de orientacao propria.
    */
   private createBabylonToggleUI(): void {
-    this.toggleSwitch = new ToggleSwitch(this.scene, "toggle-ra", "AR");
-    this.toggleSwitch.onToggleObservable.add(() => {
-      void this.toggleAR();
-    });
-    this.hud.fillSlot("ar-toggle", this.toggleSwitch.root);
-
     this.scaleButton = Button.CreateSimpleButton("scale-btn", "⤡");
-    this.scaleButton.width = "60px";
-    this.scaleButton.height = "60px";
+    this.scaleButton.width = "72px";
+    this.scaleButton.height = "72px";
     this.scaleButton.color = "white";
     this.scaleButton.cornerRadius = 12;
     this.scaleButton.background = "#1f3a4d";
-    this.scaleButton.fontSize = 28;
+    this.scaleButton.fontSize = 32;
     this.scaleButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
 
     this.scaleButton.onPointerClickObservable.add(() => {
@@ -170,8 +244,9 @@ export class EighthWallARManager {
     this.createLoaderUI();
   }
 
+  /** O botao da barra so serve DURANTE a partida; no setup o painel ja esta aberto. */
   private isScaleButtonEnabled(): boolean {
-    return this.isInAR && this.hasUserPlacedArenaInXR && !this.isScaleToolActive;
+    return this.isInAR && this.isSetupComplete && !this.isScaleToolActive;
   }
 
   private setScaleButtonEnabled(isEnabled: boolean): void {
@@ -264,14 +339,18 @@ export class EighthWallARManager {
 
   /**
    * Sincroniza o overlay central com o estado de posicionamento:
-   * - esperando tracking (nao NORMAL) → loader girando;
-   * - pronto (NORMAL, ainda nao posicionado) → prompt "aponte e toque";
+   * - sessao subindo, sem `trackingStatus` ainda → loader girando;
+   * - calibrando (o engine ja reporta status) → quem fala e o coaching overlay
+   *   oficial do 8th Wall, entao o loader sai de cena para nao competir;
+   * - pronto (calibrado, ainda nao posicionado) → prompt "aponte e toque";
    * - fora disso → nada, e o texto do topo volta a valer.
    */
   private refreshPlacementOverlay(): void {
     const inPlacement = this.isInAR && !this.hasUserPlacedArenaInXR;
     const ready = inPlacement && this.isTrackingReady();
-    const waiting = inPlacement && !ready;
+    // So enquanto o engine nao reportou nada: a partir dai a calibracao e
+    // comunicada pelo coaching overlay, e dois indicadores girando confundem.
+    const waiting = inPlacement && !ready && this.latestTrackingStatus === null;
 
     if (this.loaderPanel) {
       this.loaderPanel.isVisible = waiting;
@@ -288,8 +367,10 @@ export class EighthWallARManager {
     const ui = this.hud.getTexture();
 
     const panel = new Rectangle("arena-scale-panel");
-    panel.width = "260px";
-    panel.height = "160px";
+    panel.width = `${SETUP_PANEL_WIDTH}px`;
+    // O StackPanel ignora filhos invisiveis, entao a altura acomoda a linha de
+    // botoes de setup e o painel encolhe sozinho durante a partida.
+    panel.adaptHeightToChildren = true;
     panel.cornerRadius = 12;
     panel.color = "#4b5563";
     panel.thickness = 1;
@@ -310,24 +391,24 @@ export class EighthWallARManager {
     stack.paddingBottom = "10px";
 
     const title = new TextBlock("arena-scale-title", "Escala da arena");
-    title.height = "26px";
+    title.height = "34px";
     title.color = "white";
-    title.fontSize = 18;
+    title.fontSize = 22;
     title.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
 
     const slider = new Slider("arena-scale-slider");
     slider.minimum = 0.005;
     slider.maximum = 0.100;
     slider.value = this.arenaScaleInAR;
-    slider.height = "20px";
+    slider.height = `${SETUP_SLIDER_HEIGHT}px`;
     slider.width = "100%";
     slider.background = "#374151";
     slider.color = "#22c55e";
 
     const valueText = new TextBlock("arena-scale-value", `Escala: ${this.arenaScaleInAR.toFixed(3)}`);
-    valueText.height = "22px";
+    valueText.height = "30px";
     valueText.color = "#d1d5db";
-    valueText.fontSize = 15;
+    valueText.fontSize = 19;
     valueText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
 
     slider.onValueChangedObservable.add((value) => {
@@ -339,13 +420,9 @@ export class EighthWallARManager {
       }
     });
 
-    const okButton = Button.CreateSimpleButton("scale-ok-btn", "✓ OK");
-    okButton.width = "80px";
-    okButton.height = "32px";
-    okButton.color = "white";
-    okButton.cornerRadius = 8;
-    okButton.background = "#22c55e";
-    okButton.fontSize = 16;
+    // Confirma o ajuste de escala feito DURANTE a partida (painel aberto pelo
+    // botao da barra). Na fase de setup quem confirma e "Comecar".
+    const okButton = this.createPanelButton("scale-ok-btn", "✓ OK", "#22c55e");
 
     okButton.onPointerClickObservable.add(() => {
       this.isScaleToolActive = false;
@@ -353,16 +430,51 @@ export class EighthWallARManager {
       this.updateUI();
     });
 
+    // Par de botoes exclusivo da fase de setup.
+    const setupButtons = new StackPanel("arena-setup-buttons");
+    setupButtons.isVertical = false;
+    setupButtons.height = `${SETUP_BUTTON_HEIGHT}px`;
+    setupButtons.spacing = 12;
+
+    const repositionButton = this.createPanelButton("reposition-btn", "Reposicionar", "#1f3a4d");
+    repositionButton.onPointerClickObservable.add(() => {
+      this.repositionArena();
+    });
+
+    const startButton = this.createPanelButton("start-match-btn", "Comecar", "#22c55e");
+    startButton.onPointerClickObservable.add(() => {
+      // Quem transiciona a fase e o GameFlow; aqui so avisamos.
+      this.onMatchStartRequestedObservable.notifyObservers();
+    });
+
+    setupButtons.addControl(repositionButton);
+    setupButtons.addControl(startButton);
+
     stack.addControl(title);
     stack.addControl(slider);
     stack.addControl(valueText);
     stack.addControl(okButton);
+    stack.addControl(setupButtons);
     panel.addControl(stack);
     ui.addControl(panel);
 
     this.scalePanel = panel;
     this.scaleSlider = slider;
     this.scaleValueText = valueText;
+    this.setupButtons = setupButtons;
+    this.confirmScaleButton = okButton;
+  }
+
+  private createPanelButton(name: string, label: string, background: string): Button {
+    const button = Button.CreateSimpleButton(name, label);
+    button.width = `${SETUP_BUTTON_WIDTH}px`;
+    button.height = `${SETUP_BUTTON_HEIGHT}px`;
+    button.color = "white";
+    button.cornerRadius = 10;
+    button.background = background;
+    button.fontSize = 20;
+
+    return button;
   }
 
   private createHitCursor(): void {
@@ -479,9 +591,10 @@ export class EighthWallARManager {
       // A arena surge crescendo a partir da ancora, em vez de aparecer inteira.
       playSpawnScaleIn(this.arenaRoot, this.scene);
       this.hasUserPlacedArenaInXR = true;
+      this.clearPlacementFallbackTimer();
       this.setHitCursorVisible(false);
-      this.setScalePanelVisible(false);
       this.updateUI();
+      this.onArenaPlacedObservable.notifyObservers();
     });
   }
 
@@ -522,9 +635,37 @@ export class EighthWallARManager {
    * explicitamente que ainda nao esta pronto (INITIALIZING/RELOCALIZING/etc).
    */
   private isTrackingReady(): boolean {
-    // hitTest so e seguro depois que o SLAM tem pose (NORMAL ou LIMITED).
-    // INITIALIZING/RELOCALIZING/null BLOQUEIAM — foi onde o WASM estourava.
-    return this.latestTrackingStatus !== null && HITTEST_SAFE_STATUSES.includes(this.latestTrackingStatus);
+    if (this.latestTrackingStatus === null) {
+      return false;
+    }
+
+    const allowed = this.hasFallbackUnlocked ? FALLBACK_STATUSES : HITTEST_SAFE_STATUSES;
+
+    return allowed.includes(this.latestTrackingStatus);
+  }
+
+  /**
+   * Arma o escape de posicionamento. Sem ele, um ambiente com pouca textura
+   * (parede lisa, pouca luz) pode nunca chegar em NORMAL e prender o jogador no
+   * coaching overlay sem conseguir jogar em RA.
+   */
+  private startPlacementFallbackTimer(): void {
+    this.clearPlacementFallbackTimer();
+
+    this.fallbackTimeoutId = window.setTimeout(() => {
+      this.fallbackTimeoutId = null;
+      this.hasFallbackUnlocked = true;
+      this.updateUI();
+    }, PLACEMENT_FALLBACK_MS);
+  }
+
+  private clearPlacementFallbackTimer(): void {
+    if (this.fallbackTimeoutId === null) {
+      return;
+    }
+
+    window.clearTimeout(this.fallbackTimeoutId);
+    this.fallbackTimeoutId = null;
   }
 
   /** Texto de status na tela (o celular nao tem console acessivel). */
@@ -532,12 +673,12 @@ export class EighthWallARManager {
     const status = this.latestTrackingStatus ?? "iniciando";
 
     if (!this.isTrackingReady()) {
-      return `Tracking: ${status} | mova o celular devagar p/ estabilizar`;
+      return `Tracking: ${status} | mova o celular p/ frente e p/ tras`;
     }
 
     return status === "NORMAL"
       ? `Tracking: ${status} | aponte pro chao e toque`
-      : `Tracking: ${status} | da pra posicionar (NORMAL fica mais preciso)`;
+      : `Tracking: ${status} | da pra posicionar, mas a precisao pode cair`;
   }
 
   /** Liga/desliga o grid xadrez da arena (agrupado sob o no "arena-grid"). */
@@ -564,47 +705,49 @@ export class EighthWallARManager {
     return ray.origin.add(ray.direction.scale(distance));
   }
 
-  private async toggleAR(): Promise<void> {
-    if (this.isEnteringAR) {
+  public async enterAR(): Promise<void> {
+    if (this.isEnteringAR || this.isInAR) {
       return;
     }
 
-    if (!this.isXR8Ready || !this.isARSupported || !window.XR8) {
+    const xr8 = window.XR8;
+
+    if (!this.isARAvailable() || !xr8) {
       this.updateUI("RA indisponivel", true);
+      this.onSessionFailedObservable.notifyObservers("RA indisponivel neste aparelho");
       return;
     }
 
-    if (this.isInAR) {
-      this.exitAR();
-      return;
-    }
-
-    await this.enterAR(window.XR8);
-  }
-
-  private async enterAR(xr8: XR8Api): Promise<void> {
     this.isEnteringAR = true;
     this.updateUI("Iniciando RA...", false);
 
     try {
       await this.requestMotionPermission();
 
-      // Tela cheia e trava de orientacao ANTES de iniciar a sessao: o engine le
-      // a orientacao uma unica vez no init (`initCameraRuntime` + `orientation`)
-      // e so entao passa a ouvir `orientationchange`. Mudar isso depois que a
-      // sessao subiu deixa a pose do SLAM girada em relacao a tela.
-      await enterImmersiveMode();
+      // Sai da tela cheia e destrava a orientacao ANTES de subir a sessao. Em
+      // paisagem travada o tracking fica inutilizavel no device, e com o lock
+      // ativo o SO para de emitir `orientationchange` — o engine recalcula
+      // `orientation` a cada frame e entrega ao WASM, entao um lock silencioso
+      // desalinha o IMU da pose fisica real. Mexer nisso com a sessao no ar
+      // tambem redimensiona o canvas e reprojeta a cena no meio do tracking.
+      await exitImmersiveMode();
       await this.waitForStableViewport();
 
       installBabylonGlobalsForXR8();
       xr8.XrController.configure({ scale: "absolute" });
       xr8.addCameraPipelineModule(this.createStatusPipelineModule());
+      // Guia o jogador a mover o celular ate a escala absoluta convergir; ele
+      // some sozinho quando o tracking chega em NORMAL.
+      attachCoachingOverlay(xr8);
 
       this.nonARScale.copyFrom(this.arenaRoot.scaling);
       this.applyArenaScale(this.arenaScaleInAR);
       this.arenaRoot.setEnabled(false);
       this.hasUserPlacedArenaInXR = false;
+      this.isSetupComplete = false;
       this.latestTrackingStatus = null;
+      this.hasFallbackUnlocked = false;
+      this.startPlacementFallbackTimer();
       this.isScaleToolActive = false;
       // Em RA o grid xadrez denuncia o plano flutuante — escondido; ficam so
       // torres/unidades + sombras de contato no piso real.
@@ -631,12 +774,28 @@ export class EighthWallARManager {
       console.error("[EighthWallARManager] Falha ao iniciar RA.", error);
       this.exitAR();
       this.updateUI("Falha ao iniciar RA", true);
+      this.onSessionFailedObservable.notifyObservers("Falha ao iniciar a RA");
     } finally {
       this.isEnteringAR = false;
     }
   }
 
-  private exitAR(): void {
+  public exitAR(): void {
+    // Os modulos eram adicionados a cada `enterAR` e nunca removidos: entrar,
+    // sair e entrar de novo empilhava uma instancia nova por vez.
+    const xr8 = window.XR8;
+    if (xr8) {
+      try {
+        xr8.removeCameraPipelineModule(STATUS_MODULE_NAME);
+      } catch (error) {
+        console.warn("[EighthWallARManager] Falha ao remover o modulo de status.", error);
+      }
+
+      detachCoachingOverlay(xr8);
+    }
+
+    this.clearPlacementFallbackTimer();
+
     if (this.arCamera && this.cameraBehavior) {
       this.arCamera.removeBehavior(this.cameraBehavior);
     }
@@ -659,6 +818,8 @@ export class EighthWallARManager {
 
     this.isInAR = false;
     this.hasUserPlacedArenaInXR = false;
+    this.isSetupComplete = false;
+    this.hasFallbackUnlocked = false;
     this.isScaleToolActive = false;
     this.setHitCursorVisible(false);
     this.setScalePanelVisible(false);
@@ -674,10 +835,34 @@ export class EighthWallARManager {
   }
 
   private createStatusPipelineModule(): XR8CameraPipelineModule {
+    let hasDumpedEventKeys = false;
+
     return {
-      name: "gate-ar-status",
+      name: STATUS_MODULE_NAME,
+      onAttach: (event) => {
+        this.reportVideoSize(event);
+
+        if (hasDumpedEventKeys) {
+          return;
+        }
+
+        hasDumpedEventKeys = true;
+        // O bundle do engine e fechado e nossa tipagem dos callbacks e parcial;
+        // este dump em tela e o que permite tipar o resto a partir do que ele
+        // realmente entrega, em vez de assumir nomes.
+        this.diagnostics?.setField("eventKeys", Object.keys(event).join(","));
+      },
+      onVideoSizeChange: (event) => {
+        this.reportVideoSize(event);
+      },
       onUpdate: (event) => {
         const status = event?.processCpuResult?.reality?.trackingStatus;
+        const reason = event?.processCpuResult?.reality?.trackingReason;
+
+        this.diagnostics?.setFields({
+          trackingStatus: status ?? "n/a",
+          trackingReason: reason ?? "n/a",
+        });
 
         if (!status || status === this.latestTrackingStatus) {
           return;
@@ -700,6 +885,7 @@ export class EighthWallARManager {
         window.setTimeout(() => {
           this.exitAR();
           this.updateUI("Permissao de camera negada", true);
+          this.onSessionFailedObservable.notifyObservers("Permissao de camera negada");
         }, 0);
       },
       onException: (error) => {
@@ -708,9 +894,27 @@ export class EighthWallARManager {
         window.setTimeout(() => {
           this.exitAR();
           this.updateUI("Falha ao iniciar RA", true);
+          this.onSessionFailedObservable.notifyObservers("A sessao de RA caiu");
         }, 0);
       },
     };
+  }
+
+  /**
+   * O aspect do video contra o do canvas e a medida que decide se a hipotese do
+   * `pixelRect` das intrinsics explica o tracking quebrado em paisagem.
+   */
+  private reportVideoSize(event: XR8PipelineEvent): void {
+    const { videoWidth, videoHeight } = event;
+
+    if (!this.diagnostics || !videoWidth || !videoHeight) {
+      return;
+    }
+
+    this.diagnostics.setFields({
+      videoSize: `${videoWidth}x${videoHeight}`,
+      videoAspect: (videoWidth / videoHeight).toFixed(2),
+    });
   }
 
   /**
@@ -849,12 +1053,28 @@ export class EighthWallARManager {
     this.hitCursor.isVisible = value;
   }
 
+  /**
+   * O painel tem dois modos: na fase de setup traz "Reposicionar"/"Comecar";
+   * durante a partida (aberto pelo botao da barra) traz so o "OK" da escala.
+   */
   private setScalePanelVisible(value: boolean): void {
     if (!this.scalePanel) {
       return;
     }
 
     this.scalePanel.isVisible = value;
+
+    const isSetupMode = value && !this.isSetupComplete;
+
+    if (this.setupButtons) {
+      // So depois de ancorar: "Comecar" antes disso iniciaria a partida sem
+      // arena no mundo, e nao ha nada para "Reposicionar".
+      this.setupButtons.isVisible = isSetupMode && this.hasUserPlacedArenaInXR;
+    }
+
+    if (this.confirmScaleButton) {
+      this.confirmScaleButton.isVisible = value && !isSetupMode;
+    }
 
     if (this.scaleSlider && this.scaleValueText) {
       this.scaleSlider.value = this.arenaScaleInAR;
@@ -867,19 +1087,17 @@ export class EighthWallARManager {
   }
 
   private updateUI(customLabel?: string, warning = false): void {
-    if (!this.toggleSwitch) {
+    // Guard de "UI ja montada": antes do `initialize()` nao ha o que atualizar.
+    if (!this.scaleButton) {
       return;
     }
 
     this.refreshPlacementOverlay();
-    this.toggleSwitch.setState(this.isInAR);
-    this.toggleSwitch.setEnabled(this.isXR8Ready && this.isARSupported && !this.isEnteringAR);
-    this.toggleSwitch.setWarning(warning);
     this.setScaleButtonEnabled(this.isScaleButtonEnabled());
 
     if (customLabel) {
       this.hud.setArStatusVisible(true);
-      this.hud.setArStatus(customLabel);
+      this.hud.setArStatus(customLabel, warning);
       return;
     }
 
@@ -902,9 +1120,16 @@ export class EighthWallARManager {
     }
 
     if (!this.hasUserPlacedArenaInXR) {
-      // AR + arena nao posicionada: painel de escala disponivel desde o inicio
+      // Arena ainda nao ancorada: da para pre-ajustar a escala enquanto o
+      // coaching overlay pede o movimento de calibracao.
       this.setScalePanelVisible(true);
-      this.hud.setArStatus(this.trackingHintText());
+      this.hud.setArStatus(this.trackingHintText(), this.hasFallbackUnlocked);
+      return;
+    }
+
+    if (!this.isSetupComplete) {
+      this.setScalePanelVisible(true);
+      this.hud.setArStatus("RA: On | Ajuste a escala ou toque em Comecar");
       return;
     }
 

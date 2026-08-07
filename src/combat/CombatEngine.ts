@@ -54,6 +54,10 @@ export class CombatEngine {
   private readonly pointerObserver: Observer<unknown>;
   private readonly units: BaseUnit[] = [];
 
+  // Nasce ligado para nao mudar o comportamento de quem ainda nao chama
+  // `setActive`; quem desliga fora de partida e o GameFlow.
+  private isActive = true;
+
   public constructor(options: CombatEngineOptions) {
     this.arenaLayout = options.arenaLayout;
     this.arenaRoot = options.arenaRoot;
@@ -87,6 +91,12 @@ export class CombatEngine {
         return;
       }
 
+      // Fora da partida o toque nao pode cair no deploy — o mesmo evento tambem
+      // e usado pelo EighthWallARManager para ancorar a arena no posicionamento.
+      if (!this.isActive) {
+        return;
+      }
+
       const pickedPoint = pointerInfo.pickInfo?.pickedPoint ?? null;
       if (!pickedPoint) {
         return;
@@ -94,6 +104,11 @@ export class CombatEngine {
 
       this.tryDeploySelectedCardAtWorldPoint(pickedPoint);
     });
+  }
+
+  /** Fora da partida o combate nao roda nem responde a toque. */
+  public setActive(isActive: boolean): void {
+    this.isActive = isActive;
   }
 
   public dispose(): void {
@@ -156,6 +171,10 @@ export class CombatEngine {
   }
 
   private update(): void {
+    if (!this.isActive) {
+      return;
+    }
+
     const deltaSeconds = this.scene.getEngine().getDeltaTime() / 1000;
     const nowMs = performance.now();
 

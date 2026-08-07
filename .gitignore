@@ -4,8 +4,9 @@ node_modules/
 # Build output
 dist/
 
-# Artefatos do engine 8th Wall (copiados de node_modules no postinstall)
+# Artefatos do 8th Wall (copiados de node_modules no postinstall)
 public/8thwall/
+public/coaching-overlay/
 
 # Logs
 npm-debug.log*

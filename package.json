@@ -12,6 +12,7 @@
     "deploy": "npm run build && gh-pages -d dist"
   },
   "dependencies": {
+    "@8thwall/coaching-overlay": "^1.0.0",
     "@8thwall/engine-binary": "^1.0.0",
     "@babylonjs/core": "8.56.2",
     "@babylonjs/gui": "8.56.2"

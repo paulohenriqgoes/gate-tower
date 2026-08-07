@@ -103,6 +103,17 @@ export class CardDeckHud {
     this.render(this.deckSystem.getSnapshot());
   }
 
+  /** Esconde coluna de cartas e anel de cogumelos fora da partida. */
+  public setVisible(isVisible: boolean): void {
+    this.cardColumn.isVisible = isVisible;
+    this.ringContainer.isVisible = isVisible;
+
+    if (isVisible) {
+      // O blink pode ter deixado o alpha em 0.4 no instante em que sumiu.
+      this.ringContainer.alpha = 1;
+    }
+  }
+
   /** Reposiciona a coluna apos mudanca de orientacao/tamanho (notch inclusive). */
   public applyColumnMargin(): void {
     this.cardColumn.left = `${-this.hud.getRightMargin()}px`;
