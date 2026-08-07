@@ -2,8 +2,11 @@
  * Utilitarios de orientacao de tela. A politica e POR MODO DE JOGO, nao global:
  * no modo tela o jogo e desenhado para paisagem (trava nativa no Android/Chrome
  * e, onde a API nao existe, o overlay CSS de `index.html` pede a rotacao); ja o
- * modo RA roda destravado, porque em paisagem travada o tracking do 8th Wall
- * fica inutilizavel no device. Quem aplica cada politica e o `GameFlow`.
+ * modo RA roda destravado e sem tela cheia. Em device, paisagem e portrait
+ * funcionam igualmente bem na RA — o que quebra e trocar de orientacao com a
+ * sessao no ar (a cena sai esticada), entao a RA simplesmente nao pede rotacao.
+ * Quem aplica cada politica e o `GameFlow`. Historico e hipoteses em
+ * `docs/experimento-ra-landscape.md`.
  */
 
 export interface SafeAreaInsets {
@@ -119,10 +122,11 @@ export async function enterImmersiveMode(): Promise<boolean> {
 }
 
 /**
- * Solta a trava de orientacao e sai da tela cheia. Usado ao entrar em RA: em
- * paisagem travada o tracking do 8th Wall fica inutilizavel no device, e com o
- * lock ativo o SO para de emitir `orientationchange` ao virar o aparelho —
- * o que dessincroniza o que o engine reporta ao WASM da pose fisica real.
+ * Solta a trava de orientacao e sai da tela cheia. Usado ao entrar em RA, que
+ * roda sem trava e sem tela cheia: a RA nao depende de paisagem (as duas
+ * orientacoes funcionam) e mexer em fullscreen/lock redimensiona o canvas, o
+ * que e exatamente o que deixa a cena esticada durante a sessao. Chamado ANTES
+ * de subir a sessao, nunca com ela no ar.
  */
 export async function exitImmersiveMode(): Promise<void> {
   const orientation = window.screen?.orientation as LockableOrientation | undefined;

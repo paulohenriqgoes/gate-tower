@@ -49,9 +49,10 @@
         que ignora a API, ele e o que garante a orientacao correta.
 
         A classe `needs-landscape` no body e o que restringe o aviso ao modo
-        tela: em RA o jogo roda destravado (paisagem travada quebra o tracking
-        no device), entao o overlay nao pode cobrir a camera. Quem liga e
-        desliga a classe e o GameFlow.
+        tela: em RA as duas orientacoes funcionam e o que quebra e girar no meio
+        da sessao, entao pedir rotacao ali seria pedir justamente o que estica a
+        cena — alem de cobrir a camera. Quem liga e desliga a classe e o
+        GameFlow.
       */
       #rotate-prompt {
         display: none;

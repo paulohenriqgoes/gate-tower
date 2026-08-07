@@ -180,8 +180,9 @@ export class GameFlow {
   }
 
   private applyArOrientationPolicy(): void {
-    // Em RA a trava de paisagem quebra o tracking no device; quem cuida de
-    // sair da tela cheia/destravar e o proprio enterAR (exitImmersiveMode).
+    // Em RA nao se pede rotacao: as duas orientacoes funcionam, e girar com a
+    // sessao no ar estica a cena. Quem cuida de sair da tela cheia/destravar e
+    // o proprio enterAR (exitImmersiveMode).
     document.body.classList.remove(LANDSCAPE_BODY_CLASS);
   }
 

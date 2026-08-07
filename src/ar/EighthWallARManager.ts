@@ -724,12 +724,11 @@ export class EighthWallARManager implements ArSessionController {
     try {
       await this.requestMotionPermission();
 
-      // Sai da tela cheia e destrava a orientacao ANTES de subir a sessao. Em
-      // paisagem travada o tracking fica inutilizavel no device, e com o lock
-      // ativo o SO para de emitir `orientationchange` — o engine recalcula
-      // `orientation` a cada frame e entrega ao WASM, entao um lock silencioso
-      // desalinha o IMU da pose fisica real. Mexer nisso com a sessao no ar
-      // tambem redimensiona o canvas e reprojeta a cena no meio do tracking.
+      // Sai da tela cheia e destrava a orientacao ANTES de subir a sessao. A RA
+      // nao depende de paisagem — as duas orientacoes funcionam em device —,
+      // entao nao vale carregar tela cheia e trava para dentro da sessao: cada
+      // uma dessas transicoes redimensiona o canvas e reprojeta a cena no meio
+      // do tracking, que e justamente o que deixa a cena esticada.
       await exitImmersiveMode();
       await this.waitForStableViewport();
 

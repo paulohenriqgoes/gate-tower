@@ -20,6 +20,10 @@ Jogo de cartas com lanes em Realidade Aumentada (RA), inspirado na leitura de ca
 - calibracao de escala absoluta obrigatoria antes de ancorar a arena, guiada pelo coaching overlay oficial do 8th Wall
 - painel de setup em RA com ajuste de escala, "Reposicionar" e "Comecar"
 
+O historico do experimento de estabilidade em RA e de layout paisagem — o que foi
+tentado, o que cada tentativa provou e o que ainda esta aberto — esta em
+[`docs/experimento-ra-landscape.md`](docs/experimento-ra-landscape.md).
+
 ## Layout (paisagem)
 
 O jogo e desenhado para ser jogado com o celular deitado:
@@ -38,21 +42,21 @@ escolhido na tela inicial, antes da partida:
   paisagem (`requestFullscreen` + `screen.orientation.lock`) no primeiro gesto
   depois da escolha. Depois do primeiro sucesso ele nao insiste mais — o botao
   `⛶` da barra superior serve para sair e voltar.
-- **Modo RA**: roda **destravado**, sem tela cheia. Em paisagem travada o
-  tracking do 8th Wall fica inutilizavel no device (objetos deslizam a qualquer
-  movimento), e com o lock ativo o SO para de emitir `orientationchange` —
-  enquanto o engine recalcula a orientacao a cada frame e a entrega ao WASM
-  junto com o IMU. `enterAR()` chama `exitImmersiveMode()` antes de subir a
-  sessao. Se paisagem sem lock se mostrar estavel em device, o HUD atual ja
-  serve; senao a RA fica em portrait e o HUD passa a ser responsivo.
+- **Modo RA**: roda **destravado**, sem tela cheia — `enterAR()` chama
+  `exitImmersiveMode()` antes de subir a sessao. Em device, paisagem e portrait
+  funcionam igualmente bem na RA; o que quebra e **trocar de orientacao com a
+  sessao no ar** (a cena sai esticada). Por isso a RA nao pede rotacao nem
+  fullscreen: nao adianta convidar o jogador a girar. Paisagem **travada**
+  (`lock`) ainda nao foi retestada depois da calibracao obrigatoria — ver
+  `docs/experimento-ra-landscape.md`.
 - O overlay CSS "gire o celular" so aparece no modo tela (classe
   `needs-landscape` no `<body>`, aplicada pelo `GameFlow`).
 - No Safari do iPhone nao existe Fullscreen API: o botao `⛶` fica oculto e a
   tela cheia de verdade so acontece com **Compartilhar > Adicionar a Tela de
   Inicio** (o `manifest.webmanifest` e as metas `apple-mobile-web-app-*` fazem
   o atalho abrir em paisagem, sem barras do Safari).
-- Quando a trava de orientacao nao esta disponivel, um overlay CSS pede para
-  girar o aparelho.
+- No modo tela, quando a trava de orientacao nao esta disponivel, um overlay CSS
+  pede para girar o aparelho.
 
 ## Realidade Aumentada (8th Wall)
 

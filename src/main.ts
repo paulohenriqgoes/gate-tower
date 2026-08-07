@@ -255,9 +255,14 @@ async function bootstrap(): Promise<void> {
 
 	// Tela cheia e trava de orientacao NAO sao mais aplicadas no boot: elas
 	// disparavam no primeiro toque, que agora e o toque do proprio menu — antes
-	// de o jogador dizer se vai jogar em RA (onde a trava quebra o tracking) ou
-	// na tela. Quem aplica a politica de cada modo e o GameFlow.
+	// de o jogador dizer se vai jogar em RA (que roda destravada, sem tela
+	// cheia) ou na tela. Quem aplica a politica de cada modo e o GameFlow.
 
+	// Suspeito numero 1 da cena esticada ao girar o aparelho durante a RA: aqui o
+	// `resize` roda tambem com a sessao no ar (o `relayout` sai cedo porque a
+	// camera ativa e a da RA), enquanto a projecao da RA vem congelada das
+	// intrinsics do WASM. Nao mexido ainda porque falta medir em device — ver
+	// `docs/experimento-ra-landscape.md`.
 	onOrientationChange(() => {
 		engine.resize();
 		relayout();
