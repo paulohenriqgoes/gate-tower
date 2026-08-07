@@ -262,7 +262,7 @@ async function bootstrap(): Promise<void> {
 	// `resize` roda tambem com a sessao no ar (o `relayout` sai cedo porque a
 	// camera ativa e a da RA), enquanto a projecao da RA vem congelada das
 	// intrinsics do WASM. Nao mexido ainda porque falta medir em device — ver
-	// `docs/experimento-ra-landscape.md`.
+	// `docs/experimentos/ra-e-paisagem.md`.
 	onOrientationChange(() => {
 		engine.resize();
 		relayout();

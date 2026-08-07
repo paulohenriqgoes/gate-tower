@@ -6,7 +6,7 @@
  * funcionam igualmente bem na RA — o que quebra e trocar de orientacao com a
  * sessao no ar (a cena sai esticada), entao a RA simplesmente nao pede rotacao.
  * Quem aplica cada politica e o `GameFlow`. Historico e hipoteses em
- * `docs/experimento-ra-landscape.md`.
+ * `docs/experimentos/ra-e-paisagem.md`.
  */
 
 export interface SafeAreaInsets {

@@ -20,9 +20,19 @@ Jogo de cartas com lanes em Realidade Aumentada (RA), inspirado na leitura de ca
 - calibracao de escala absoluta obrigatoria antes de ancorar a arena, guiada pelo coaching overlay oficial do 8th Wall
 - painel de setup em RA com ajuste de escala, "Reposicionar" e "Comecar"
 
-O historico do experimento de estabilidade em RA e de layout paisagem — o que foi
-tentado, o que cada tentativa provou e o que ainda esta aberto — esta em
-[`docs/experimento-ra-landscape.md`](docs/experimento-ra-landscape.md).
+## Diarios de experimento
+
+Cada linha de investigacao tem um diario em [`docs/experimentos/`](docs/experimentos/README.md)
+— o que foi tentado, o que cada tentativa provou e o que ainda esta aberto,
+inclusive as conclusoes que foram desmentidas depois:
+
+- [`ra-e-paisagem.md`](docs/experimentos/ra-e-paisagem.md) — estabilidade da arena
+  em RA e layout paisagem;
+- [`ferramental-de-sessao.md`](docs/experimentos/ferramental-de-sessao.md) — como
+  o projeto registra o proprio progresso entre sessoes.
+
+Os diarios sao escritos pela skill `encerrar-sessao`
+(`.claude/skills/encerrar-sessao/SKILL.md`), acionada ao fim de cada sessao.
 
 ## Layout (paisagem)
 
@@ -48,7 +58,7 @@ escolhido na tela inicial, antes da partida:
   sessao no ar** (a cena sai esticada). Por isso a RA nao pede rotacao nem
   fullscreen: nao adianta convidar o jogador a girar. Paisagem **travada**
   (`lock`) ainda nao foi retestada depois da calibracao obrigatoria — ver
-  `docs/experimento-ra-landscape.md`.
+  `docs/experimentos/ra-e-paisagem.md`.
 - O overlay CSS "gire o celular" so aparece no modo tela (classe
   `needs-landscape` no `<body>`, aplicada pelo `GameFlow`).
 - No Safari do iPhone nao existe Fullscreen API: o botao `⛶` fica oculto e a
