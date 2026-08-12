@@ -3,7 +3,9 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 
+import { applyMatteFinish, createMatteMaterial, PALETTE, shadeHex } from "../fx/materials";
 import { BaseUnit, type BaseUnitOptions, type UnitVisualState } from "./BaseUnit";
 
 export interface CururuBombadoOptions extends Omit<
@@ -14,9 +16,12 @@ export interface CururuBombadoOptions extends Omit<
 }
 
 export class CururuBombado extends BaseUnit {
-  private readonly tongueBaseY = 1.86;
-  private readonly tongueBaseZ = 1.86;
+  // Posicoes da lingua relativas ao headNode (antes eram relativas ao
+  // visualRoot; ver createVisual).
+  private readonly tongueBaseY = -0.2;
+  private readonly tongueBaseZ = 0.8;
   private tongueMesh!: Mesh;
+  private headNode!: TransformNode;
 
   private attackAnimationElapsed = Number.POSITIVE_INFINITY;
   private hopTime = 0;
@@ -29,31 +34,43 @@ export class CururuBombado extends BaseUnit {
         max: 2000,
         min: 1000,
       },
+      // Corpo-a-corpo de um bicho grande (2.35 de profundidade): depende do
+      // tamanho dele, nao do tamanho do campo — segue igual.
       contactRange: 2.55,
       displayName: "Cururu Bombado",
       health: Math.round(options.towerMaxHealth * 0.6),
-      movementSpeed: 2.1,
+      // Tanque: o mais lento dos tres, mas ainda dentro da janela de leitura de
+      // 15-25 s — 20 unidades entre torres / 0.85 ~= 23 s de travessia. A razao
+      // antiga (2.1 contra 4.4 do javali) daria 32 s e faria a partida arrastar.
+      movementSpeed: 0.85,
     });
   }
 
   protected createVisual(): void {
-    const skinMaterial = new StandardMaterial(`${this.id}-skin-material`, this.scene);
-    skinMaterial.diffuseColor = Color3.FromHexString("#4dc3d9");
+    // Pele ja era azul-ciano (nao marrom/bege), entao vira acento da paleta
+    // sem trocar de familia de cor. Sombra/barriga derivadas dela via
+    // shadeHex: escuro nos ombros/bracos/pernas (base), claro na barriga
+    // (topo) — o "escuro na base, claro no topo" do guideline.
+    const skinMaterial = createMatteMaterial(this.scene, PALETTE.accentCururu, `${this.id}-skin-material`);
+    const shadowSkinMaterial = createMatteMaterial(
+      this.scene,
+      shadeHex(PALETTE.accentCururu, 0.55),
+      `${this.id}-shadow-skin-material`
+    );
+    const bellyMaterial = createMatteMaterial(
+      this.scene,
+      shadeHex(PALETTE.accentCururu, 1.5),
+      `${this.id}-belly-material`
+    );
+    const eyeMaterial = createMatteMaterial(this.scene, PALETTE.neutralLight, `${this.id}-eye-material`);
+    const pupilMaterial = createMatteMaterial(this.scene, PALETTE.neutralDark, `${this.id}-pupil-material`);
 
-    const shadowSkinMaterial = new StandardMaterial(`${this.id}-shadow-skin-material`, this.scene);
-    shadowSkinMaterial.diffuseColor = Color3.FromHexString("#246b8f");
-
-    const bellyMaterial = new StandardMaterial(`${this.id}-belly-material`, this.scene);
-    bellyMaterial.diffuseColor = Color3.FromHexString("#9de7f2");
-
-    const eyeMaterial = new StandardMaterial(`${this.id}-eye-material`, this.scene);
-    eyeMaterial.diffuseColor = Color3.FromHexString("#dbeafe");
-
-    const pupilMaterial = new StandardMaterial(`${this.id}-pupil-material`, this.scene);
-    pupilMaterial.diffuseColor = Color3.FromHexString("#020617");
-
+    // Lingua: emissive proprio (efeito deliberado do golpe), entao instancia
+    // dedicada em vez de createMatteMaterial — ver nota equivalente em
+    // DonaBarata.ts.
     const tongueMaterial = new StandardMaterial(`${this.id}-tongue-material`, this.scene);
     tongueMaterial.diffuseColor = Color3.FromHexString("#f472b6");
+    applyMatteFinish(tongueMaterial);
     tongueMaterial.emissiveColor = Color3.FromHexString("#ec4899").scale(0.25);
 
     const body = MeshBuilder.CreateBox(
@@ -95,6 +112,13 @@ export class CururuBombado extends BaseUnit {
     belly.position = new Vector3(0, 0.94, 0.74);
     belly.material = bellyMaterial;
 
+    // No intermediario que agrupa cabeca, queixo, olhos e lingua, para o
+    // estado "observando" do comportamento ocioso poder girar so a cabeca
+    // (ver getHeadNode()).
+    this.headNode = new TransformNode(`${this.id}-head-node`, this.scene);
+    this.headNode.parent = this.visualRoot;
+    this.headNode.position = new Vector3(0, 2.06, 1.06);
+
     const head = MeshBuilder.CreateBox(
       `${this.id}-head`,
       {
@@ -104,8 +128,7 @@ export class CururuBombado extends BaseUnit {
       },
       this.scene
     );
-    head.parent = this.visualRoot;
-    head.position = new Vector3(0, 2.06, 1.06);
+    head.parent = this.headNode;
     head.material = skinMaterial;
 
     const jaw = MeshBuilder.CreateBox(
@@ -117,8 +140,10 @@ export class CururuBombado extends BaseUnit {
       },
       this.scene
     );
-    jaw.parent = this.visualRoot;
-    jaw.position = new Vector3(0, 1.63, 1.36);
+    jaw.parent = this.headNode;
+    // Posicoes originais eram relativas ao visualRoot; reparentadas sob
+    // headNode (em (0, 2.06, 1.06)), viram a diferenca entre as duas.
+    jaw.position = new Vector3(0, -0.43, 0.3);
     jaw.material = shadowSkinMaterial;
 
     for (const x of [-0.52, 0.52]) {
@@ -131,8 +156,8 @@ export class CururuBombado extends BaseUnit {
         },
         this.scene
       );
-      eyeSocket.parent = this.visualRoot;
-      eyeSocket.position = new Vector3(x, 2.64, 1.26);
+      eyeSocket.parent = this.headNode;
+      eyeSocket.position = new Vector3(x, 0.58, 0.2);
       eyeSocket.material = eyeMaterial;
 
       const pupil = MeshBuilder.CreateBox(
@@ -144,8 +169,8 @@ export class CururuBombado extends BaseUnit {
         },
         this.scene
       );
-      pupil.parent = this.visualRoot;
-      pupil.position = new Vector3(x, 2.55, 1.56);
+      pupil.parent = this.headNode;
+      pupil.position = new Vector3(x, 0.49, 0.5);
       pupil.material = pupilMaterial;
     }
 
@@ -226,10 +251,14 @@ export class CururuBombado extends BaseUnit {
       },
       this.scene
     );
-    this.tongueMesh.parent = this.visualRoot;
+    this.tongueMesh.parent = this.headNode;
     this.tongueMesh.position = new Vector3(0, this.tongueBaseY, this.tongueBaseZ);
     this.tongueMesh.material = tongueMaterial;
     this.tongueMesh.scaling.z = 0.25;
+  }
+
+  public getHeadNode(): TransformNode | null {
+    return this.headNode;
   }
 
   protected computeAttackDamage(): number {

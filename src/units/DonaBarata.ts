@@ -4,6 +4,7 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 
+import { applyMatteFinish, createMatteMaterial, PALETTE, shadeHex } from "../fx/materials";
 import { BaseUnit, type BaseUnitOptions, type UnitVisualState } from "./BaseUnit";
 
 export interface DonaBarataOptions extends Omit<
@@ -17,6 +18,7 @@ export class DonaBarata extends BaseUnit {
   private bobNodes: TransformNode[] | undefined;
 
   private slipperRoot!: TransformNode;
+  private headNode!: TransformNode;
 
   private attackAnimationElapsed = Number.POSITIVE_INFINITY;
   private strideTime = 0;
@@ -25,33 +27,41 @@ export class DonaBarata extends BaseUnit {
     super({
       ...options,
       attackIntervalMs: 1900,
+      // Ranged: para no alcance da torre (ja resolvido pelo CombatEngine em
+      // funcao do tamanho do campo) em vez de encostar nela.
       contactRange: options.attackRange,
       displayName: "Dona Barata",
       health: 35,
-      movementSpeed: 3.9,
+      // 20 unidades entre torres / 1.15 ~= 17 s de travessia — um pouco mais
+      // lenta que o javali, como era antes (3.9 contra 4.4).
+      movementSpeed: 1.15,
     });
   }
 
   protected createVisual(): void {
-    const shellMaterial = new StandardMaterial(`${this.id}-shell-material`, this.scene);
-    shellMaterial.diffuseColor = Color3.FromHexString("#4a160e");
+    // Casco em rosa (cor de acento da carta) em vez do marrom-avermelhado
+    // original: cor dominante nao pode ser marrom pelo guideline. Asas/abdomen
+    // usam a mesma cor mais escura (shadeHex) — o "escuro na base" do
+    // guideline.
+    const shellMaterial = createMatteMaterial(this.scene, PALETTE.accentBarata, `${this.id}-shell-material`);
+    const wingMaterial = createMatteMaterial(
+      this.scene,
+      shadeHex(PALETTE.accentBarata, 0.55),
+      `${this.id}-wing-material`
+    );
+    const legMaterial = createMatteMaterial(this.scene, PALETTE.neutralDark, `${this.id}-leg-material`);
+    const eyeMaterial = createMatteMaterial(this.scene, PALETTE.neutralLight, `${this.id}-eye-material`);
+    const pupilMaterial = createMatteMaterial(this.scene, PALETTE.neutralDark, `${this.id}-pupil-material`);
 
-    const wingMaterial = new StandardMaterial(`${this.id}-wing-material`, this.scene);
-    wingMaterial.diffuseColor = Color3.FromHexString("#7c2d12");
-
-    const legMaterial = new StandardMaterial(`${this.id}-leg-material`, this.scene);
-    legMaterial.diffuseColor = Color3.FromHexString("#2b0b07");
-
-    const eyeMaterial = new StandardMaterial(`${this.id}-eye-material`, this.scene);
-    eyeMaterial.diffuseColor = Color3.FromHexString("#f8fafc");
-
-    const pupilMaterial = new StandardMaterial(`${this.id}-pupil-material`, this.scene);
-    pupilMaterial.diffuseColor = Color3.FromHexString("#111827");
-
+    // Curlers coloridos: efeito deliberado com emissive proprio por bob, por
+    // isso NAO passam por createMatteMaterial (que cacheia so pela cor e
+    // colidiria com qualquer outro uso da mesma cor) — instancia dedicada +
+    // applyMatteFinish para continuar sem brilho especular.
     const bobColors = ["#ff00ff", "#00f5ff", "#fde047"];
     const bobMaterials = bobColors.map((colorHex, index) => {
       const material = new StandardMaterial(`${this.id}-bob-material-${index}`, this.scene);
       material.diffuseColor = Color3.FromHexString(colorHex);
+      applyMatteFinish(material);
       material.emissiveColor = Color3.FromHexString(colorHex).scale(0.45);
       return material;
     });
@@ -95,6 +105,13 @@ export class DonaBarata extends BaseUnit {
     abdomen.position = new Vector3(0, 0.66, -0.88);
     abdomen.material = wingMaterial;
 
+    // No intermediario que agrupa cabeca, olhos e antenas, para o estado
+    // "observando" do comportamento ocioso poder girar so a cabeca (ver
+    // getHeadNode()).
+    this.headNode = new TransformNode(`${this.id}-head-node`, this.scene);
+    this.headNode.parent = this.visualRoot;
+    this.headNode.position = new Vector3(0, 1.02, 0.9);
+
     const head = MeshBuilder.CreateBox(
       `${this.id}-head`,
       {
@@ -104,8 +121,7 @@ export class DonaBarata extends BaseUnit {
       },
       this.scene
     );
-    head.parent = this.visualRoot;
-    head.position = new Vector3(0, 1.02, 0.9);
+    head.parent = this.headNode;
     head.material = shellMaterial;
 
     for (const x of [-0.2, 0.2]) {
@@ -117,8 +133,10 @@ export class DonaBarata extends BaseUnit {
         },
         this.scene
       );
-      eye.parent = this.visualRoot;
-      eye.position = new Vector3(x, 1.1, 1.18);
+      eye.parent = this.headNode;
+      // Posicoes originais eram relativas ao visualRoot; reparentadas sob
+      // headNode (em (0, 1.02, 0.9)), viram a diferenca entre as duas.
+      eye.position = new Vector3(x, 0.08, 0.28);
       eye.material = eyeMaterial;
 
       const pupil = MeshBuilder.CreateSphere(
@@ -129,8 +147,8 @@ export class DonaBarata extends BaseUnit {
         },
         this.scene
       );
-      pupil.parent = this.visualRoot;
-      pupil.position = new Vector3(x, 1.08, 1.28);
+      pupil.parent = this.headNode;
+      pupil.position = new Vector3(x, 0.06, 0.38);
       pupil.material = pupilMaterial;
     }
 
@@ -165,8 +183,8 @@ export class DonaBarata extends BaseUnit {
         },
         this.scene
       );
-      antenna.parent = this.visualRoot;
-      antenna.position = new Vector3(x, 1.38, 1.02);
+      antenna.parent = this.headNode;
+      antenna.position = new Vector3(x, 0.36, 0.12);
       antenna.rotation.x = -0.38;
       antenna.material = legMaterial;
     }
@@ -220,8 +238,12 @@ export class DonaBarata extends BaseUnit {
     slipperSole.parent = this.slipperRoot;
     slipperSole.material = wingMaterial;
 
+    // Mesma logica dos curlers: emissive proprio, entao instancia dedicada em
+    // vez de createMatteMaterial (evita colidir no cache com o bob amarelo,
+    // que usa a mesma cor base mas outro emissive).
     const strapMaterial = new StandardMaterial(`${this.id}-slipper-strap-material`, this.scene);
     strapMaterial.diffuseColor = Color3.FromHexString("#fde047");
+    applyMatteFinish(strapMaterial);
     strapMaterial.emissiveColor = Color3.FromHexString("#f59e0b").scale(0.24);
 
     for (const x of [-0.08, 0.08]) {
@@ -241,6 +263,10 @@ export class DonaBarata extends BaseUnit {
     }
 
     this.slipperRoot.setEnabled(false);
+  }
+
+  public getHeadNode(): TransformNode | null {
+    return this.headNode;
   }
 
   protected computeAttackDamage(): number {

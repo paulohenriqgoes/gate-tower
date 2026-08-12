@@ -3,16 +3,18 @@ import { describe, it, expect } from "vitest";
 import {
   cameraBasis,
   computeArenaCameraRadius,
-  computeHudScreenOffset,
+  computeHudVerticalOffset,
   dot,
   FRAMING_MARGIN,
-  HUD_RIGHT_FRACTION,
+  HUD_BOTTOM_FRACTION,
   type Vec3Like,
 } from "./arenaFraming";
 
-// Arena do ArenaSystem: gridX 12 * tileSize 2 = 24 de largura (X) e
-// gridZ 18 * tileSize 2 = 36 de comprimento (Z). Y cobre torres e barras.
-const ARENA_HALF_EXTENTS: Vec3Like = { x: 12, y: 3, z: 18 };
+// Arena de mesa do ArenaSystem: gridX 8 * tileSize 2 = 16 de largura (X) e
+// gridZ 12 * tileSize 2 = 24 de comprimento (Z). Y cobre torres e barras.
+// Em RA isso vira 0,53 m x 0,80 m via AR_ARENA_SCALE; aqui medimos o espaco
+// autoral, que e o que a camera do modo tela enquadra.
+const ARENA_HALF_EXTENTS: Vec3Like = { x: 8, y: 3, z: 12 };
 
 // Camera principal de main.ts.
 const ALPHA = -Math.PI / 2;
@@ -22,30 +24,31 @@ const VERTICAL_FOV = 0.8;
 const radiusFor = (
   width: number,
   height: number,
-  hudRightFraction = HUD_RIGHT_FRACTION
+  hudBottomFraction = HUD_BOTTOM_FRACTION
 ): number =>
   computeArenaCameraRadius({
     alpha: ALPHA,
     aspectRatio: width / height,
     beta: BETA,
     halfExtents: ARENA_HALF_EXTENTS,
-    hudRightFraction,
+    hudBottomFraction,
     margin: FRAMING_MARGIN,
     verticalFov: VERTICAL_FOV,
   });
 
 /**
  * Projeta os 8 cantos da arena e confere se todos caem dentro do frustum util
- * (ja descontada a faixa do HUD) na distancia informada.
+ * (ja descontado o terco inferior do HUD do FOV vertical) na distancia informada.
  */
 function isArenaFullyVisible(
   radius: number,
   aspectRatio: number,
-  hudRightFraction = HUD_RIGHT_FRACTION
+  hudBottomFraction = HUD_BOTTOM_FRACTION
 ): boolean {
   const { forward, right, up } = cameraBasis(ALPHA, BETA);
   const tanVertical = Math.tan(VERTICAL_FOV / 2);
-  const tanHorizontal = tanVertical * aspectRatio * (1 - hudRightFraction);
+  const tanVerticalUtil = tanVertical * (1 - hudBottomFraction);
+  const tanHorizontal = tanVertical * aspectRatio;
 
   for (const signX of [-1, 1]) {
     for (const signY of [-1, 1]) {
@@ -66,7 +69,7 @@ function isArenaFullyVisible(
           return false;
         }
 
-        if (Math.abs(dot(corner, up)) > tanVertical * depth) {
+        if (Math.abs(dot(corner, up)) > tanVerticalUtil * depth) {
           return false;
         }
       }
@@ -76,16 +79,22 @@ function isArenaFullyVisible(
   return true;
 }
 
+// Paisagem saiu de escopo (retrato travado, ver spec da demo); mantemos so
+// tamanhos de retrato reais + um extremo estreito. O caso verdadeiramente
+// degenerado (largura ~1px) fica de fora desta lista de proposito: o piso de
+// seguranca `safeAspect = max(aspectRatio, 0.01)` do proprio codigo de
+// producao clampa aspect ratios patologicos so para garantir um resultado
+// finito, abrindo mao da garantia de "arena inteira visivel" nesse extremo —
+// e testado separadamente abaixo, em "produz valores finitos e positivos".
 const SCREEN_SIZES: Array<[number, number]> = [
-  [844, 390], // celular em paisagem
   [390, 844], // celular em retrato
-  [1920, 1080],
-  [1024, 768],
-  [320, 900], // tela extremamente estreita
+  [428, 926], // celular grande em retrato
+  [360, 780], // celular compacto em retrato
+  [280, 1000], // retrato extremamente estreito (ainda acima do piso de safeAspect)
 ];
 
 describe("computeArenaCameraRadius", () => {
-  it("mantem a arena inteira dentro do frustum em qualquer tela", () => {
+  it("mantem a arena inteira dentro do frustum em qualquer tela retrato", () => {
     for (const [width, height] of SCREEN_SIZES) {
       const aspectRatio = width / height;
 
@@ -94,20 +103,20 @@ describe("computeArenaCameraRadius", () => {
   });
 
   it("nao deixa folga excessiva: sem a margem a arena ja encostaria na borda", () => {
-    const aspectRatio = 844 / 390;
-    const radiusSemMargem = radiusFor(844, 390) / FRAMING_MARGIN;
+    const aspectRatio = 390 / 844;
+    const radiusSemMargem = radiusFor(390, 844) / FRAMING_MARGIN;
 
     expect(isArenaFullyVisible(radiusSemMargem * 0.97, aspectRatio)).toBe(false);
   });
 
-  it("afasta mais a camera em retrato, ja que o FOV vertical e fixo", () => {
+  it("afasta mais a camera em telas mais estreitas, ja que o FOV vertical e fixo", () => {
     // Com FOVMODE_VERTICAL_FIXED o FOV horizontal encolhe junto com a largura,
-    // entao telas estreitas exigem mais distancia que as deitadas.
-    expect(radiusFor(390, 844)).toBeGreaterThan(radiusFor(844, 390));
+    // entao telas mais estreitas exigem mais distancia.
+    expect(radiusFor(360, 780)).toBeGreaterThan(radiusFor(428, 926));
   });
 
-  it("afasta a camera conforme a coluna de cartas ocupa mais largura", () => {
-    expect(radiusFor(1280, 720, 0.35)).toBeGreaterThanOrEqual(radiusFor(1280, 720, 0));
+  it("afasta a camera conforme o HUD ocupa mais altura", () => {
+    expect(radiusFor(390, 844, 0.45)).toBeGreaterThanOrEqual(radiusFor(390, 844, 0));
   });
 
   it("nunca posiciona a camera dentro da propria arena", () => {
@@ -130,16 +139,16 @@ describe("computeArenaCameraRadius", () => {
   });
 });
 
-describe("computeHudScreenOffset", () => {
-  it("cresce com a distancia da camera e com a largura reservada ao HUD", () => {
-    const base = computeHudScreenOffset(40, VERTICAL_FOV, 16 / 9, 0.22);
+describe("computeHudVerticalOffset", () => {
+  it("cresce com a distancia da camera e com a altura reservada ao HUD", () => {
+    const base = computeHudVerticalOffset(40, VERTICAL_FOV, 0.32);
 
-    expect(computeHudScreenOffset(80, VERTICAL_FOV, 16 / 9, 0.22)).toBeCloseTo(base * 2);
-    expect(computeHudScreenOffset(40, VERTICAL_FOV, 16 / 9, 0.44)).toBeCloseTo(base * 2);
+    expect(computeHudVerticalOffset(80, VERTICAL_FOV, 0.32)).toBeCloseTo(base * 2);
+    expect(computeHudVerticalOffset(40, VERTICAL_FOV, 0.64)).toBeCloseTo(base * 2);
   });
 
   it("e zero quando nao ha HUD reservando espaco", () => {
-    expect(computeHudScreenOffset(40, VERTICAL_FOV, 16 / 9, 0)).toBe(0);
+    expect(computeHudVerticalOffset(40, VERTICAL_FOV, 0)).toBe(0);
   });
 });
 

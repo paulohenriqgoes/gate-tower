@@ -1,5 +1,4 @@
 import type { TeamId, TowerLaneId } from "../battle/BattleTypes";
-import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
@@ -9,6 +8,28 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
 import { createContactShadow } from "../fx/contactShadow";
+import { applyMatteFinish, createMatteMaterial, PALETTE } from "../fx/materials";
+
+/**
+ * Arena de mesa: o maior eixo da arena mede 80 cm no mundo real.
+ *
+ * A cena continua autorada nas unidades originais (tile = 2 unidades) e a
+ * conversao para metros e UM fator unico, aplicado no root em RA. A alternativa
+ * — reautorar tudo em metros com escala 1 — obrigaria a dividir por ~30 toda
+ * constante espacial de unidades, barras de vida, blobs e animacao de spawn,
+ * espalhando numeros magicos. O preco desta escolha e a arena viver em escala
+ * ~0.03, que e onde shadow-mapping quebra; como o grounding aqui e feito por
+ * blob de contato (`src/fx/contactShadow.ts`), esse preco nao se materializa.
+ */
+export const ARENA_LENGTH_METERS = 0.8;
+/** Maior eixo da arena em unidades autorais: 12 tiles * 2 no eixo Z. */
+export const ARENA_AUTHORED_DEPTH = 24;
+/** Menor eixo da arena em unidades autorais: 8 tiles * 2 no eixo X. */
+export const ARENA_AUTHORED_WIDTH = 16;
+/** Fator unico e fixo de conversao autoral -> metros no modo RA (~0.03333). */
+export const AR_ARENA_SCALE = ARENA_LENGTH_METERS / ARENA_AUTHORED_DEPTH;
+/** Menor eixo da arena em metros (~0.533 m). */
+export const ARENA_WIDTH_METERS = ARENA_AUTHORED_WIDTH * AR_ARENA_SCALE;
 
 export interface ArenaBuildResult {
   arenaLayout: ArenaLayout;
@@ -23,8 +44,13 @@ export interface ArenaLayout {
   maxZ: number;
   minX: number;
   minZ: number;
+  /** Metade do jogador: so da para invocar em z <= este valor. */
   playerDeploymentMaxZ: number;
   unitGroundY: number;
+  /** Centro do caminho unico que liga as duas torres. */
+  laneCenterX: number;
+  /** Meia-largura do caminho (o caminho vai de -laneHalfWidth a +laneHalfWidth). */
+  laneHalfWidth: number;
 }
 
 export interface ArenaTowerDefinition {
@@ -38,9 +64,17 @@ export interface ArenaTowerDefinition {
 export class ArenaSystem {
   private readonly scene: Scene;
 
+  // 8 x 12 tiles de 2 unidades = 16 x 24 unidades autorais, que em RA viram
+  // 0,53 m x 0,80 m — a arena de mesa da demo. O grid e derivado das constantes
+  // metricas para nao existir duas fontes de verdade do tamanho da arena.
   private readonly tileSize = 2;
-  private readonly gridX = 12;
-  private readonly gridZ = 18;
+  private readonly gridX = ARENA_AUTHORED_WIDTH / this.tileSize;
+  private readonly gridZ = ARENA_AUTHORED_DEPTH / this.tileSize;
+
+  /** Meia-largura do caminho central, em unidades autorais (tiles x em {-1, 0}). */
+  private readonly laneHalfWidth = 2;
+  /** Distancia do centro ate cada torre, no eixo Z. */
+  private readonly towerZ = 10;
 
   public constructor(scene: Scene) {
     this.scene = scene;
@@ -65,20 +99,24 @@ export class ArenaSystem {
     );
     baseGround.parent = arenaRoot;
 
+    // Cores vindas da paleta unica (Etapa 9). O caminho era amarelado
+    // (#c79d3b/#e3c06e, bege-mostarda) e virou slate-violeta: cor dominante
+    // nunca pode ser marrom/bege pelo guideline, e grama+caminho juntos sao a
+    // maior area de tela da arena.
     const pathMaterial = this.createPatternMaterial(
       "path-material",
-      "#c79d3b",
-      "#e3c06e"
+      PALETTE.pathBase,
+      PALETTE.pathAccent
     );
     const riverMaterial = this.createPatternMaterial(
       "river-material",
-      "#2a6fa5",
-      "#4ea0d6"
+      PALETTE.riverBase,
+      PALETTE.riverAccent
     );
     const grassMaterial = this.createPatternMaterial(
       "grass-material",
-      "#427f44",
-      "#62a65e"
+      PALETTE.grassBase,
+      PALETTE.grassAccent
     );
 
     for (let x = -this.gridX / 2; x < this.gridX / 2; x += 1) {
@@ -99,8 +137,12 @@ export class ArenaSystem {
           z * this.tileSize + this.tileSize / 2
         );
 
+        // Caminho central unico: a faixa de tiles x em {-1, 0}, ou seja mundo
+        // x em [-2, 2]. O rio continua sendo so a faixa fina de z em {-1, 0},
+        // atravessada pelo caminho — decoracao barata que mantem a leitura de
+        // "meio de campo" sem gerar navegacao por lanes.
         const isRiver = z >= -1 && z <= 0;
-        const isPathLane = x === -3 || x === 2;
+        const isPathLane = x === -1 || x === 0;
 
         if (isRiver && !isPathLane) {
           tile.material = riverMaterial;
@@ -122,14 +164,23 @@ export class ArenaSystem {
 
     const towerMeshes = this.createTowerPlaceholders(arenaRoot);
 
+    // Limites derivados de verdade da geometria (metade da extensao do grid).
+    // Antes eram `±gridX`/`±gridZ`, que so batia por coincidencia com o grid
+    // antigo e passaria a mentir com qualquer outro tamanho de tile.
+    const halfWidth = (this.gridX * this.tileSize) / 2;
+    const halfDepth = (this.gridZ * this.tileSize) / 2;
+
     return {
       arenaLayout: {
-        maxX: this.gridX,
-        maxZ: this.gridZ,
-        minX: -this.gridX,
-        minZ: -this.gridZ,
-        playerDeploymentMaxZ: -2.2,
+        maxX: halfWidth,
+        maxZ: halfDepth,
+        minX: -halfWidth,
+        minZ: -halfDepth,
+        // O jogador ocupa a metade dele: z <= 0 (o rio marca a divisa).
+        playerDeploymentMaxZ: 0,
         unitGroundY: 0.5,
+        laneCenterX: 0,
+        laneHalfWidth: this.laneHalfWidth,
       },
       root: arenaRoot,
       ground: baseGround,
@@ -148,43 +199,39 @@ export class ArenaSystem {
   }
 
   private createTowerPlaceholders(arenaRoot: TransformNode): Mesh[] {
-    const blueTowerMaterial = new StandardMaterial("blue-tower-material", this.scene);
-    blueTowerMaterial.diffuseColor = Color3.FromHexString("#2f6fff");
+    const blueTowerMaterial = createMatteMaterial(this.scene, PALETTE.towerPlayer, "blue-tower-material");
+    const redTowerMaterial = createMatteMaterial(this.scene, PALETTE.towerEnemy, "red-tower-material");
 
-    const redTowerMaterial = new StandardMaterial("red-tower-material", this.scene);
-    redTowerMaterial.diffuseColor = Color3.FromHexString("#df3e3e");
-
-    const towerDefinitions: Array<{ lane: TowerLaneId; xPosition: number }> = [
-      { lane: "left", xPosition: -6 },
-      { lane: "center", xPosition: 0 },
-      { lane: "right", xPosition: 6 },
-    ];
+    // UMA torre por lado, ambas em x = 0, no fim do caminho central. O nome
+    // segue `tower-<cor>-<lane>` porque `buildInitialArena` deriva team/lane
+    // dele.
+    const lane: TowerLaneId = "center";
     const towers: Mesh[] = [];
 
     // Torres simples para validar os lados do campo antes dos modelos finais.
-    for (const towerDefinition of towerDefinitions) {
-      const blueTower = MeshBuilder.CreateCylinder(
-        `tower-blue-${towerDefinition.lane}`,
-        { diameter: 1.6, height: 2.8, tessellation: 24 },
-        this.scene
-      );
-      blueTower.position = new Vector3(towerDefinition.xPosition, 1.5, -14);
-      blueTower.material = blueTowerMaterial;
-      blueTower.parent = arenaRoot;
-      towers.push(blueTower);
-      this.addContactBlob(arenaRoot, towerDefinition.xPosition, -14, 2.4);
+    const blueTower = MeshBuilder.CreateCylinder(
+      `tower-blue-${lane}`,
+      { diameter: 1.6, height: 2.8, tessellation: 24 },
+      this.scene
+    );
+    blueTower.position = new Vector3(0, 1.5, -this.towerZ);
+    blueTower.material = blueTowerMaterial;
+    blueTower.parent = arenaRoot;
+    towers.push(blueTower);
+    // Blob 1.25x o diametro da torre: com a arena 1.5x menor, o antigo 2.4
+    // (1.5x) virava uma mancha grande demais para o campo.
+    this.addContactBlob(arenaRoot, 0, -this.towerZ, 2);
 
-      const redTower = MeshBuilder.CreateCylinder(
-        `tower-red-${towerDefinition.lane}`,
-        { diameter: 1.6, height: 2.8, tessellation: 24 },
-        this.scene
-      );
-      redTower.position = new Vector3(towerDefinition.xPosition, 1.5, 14);
-      redTower.material = redTowerMaterial;
-      redTower.parent = arenaRoot;
-      towers.push(redTower);
-      this.addContactBlob(arenaRoot, towerDefinition.xPosition, 14, 2.4);
-    }
+    const redTower = MeshBuilder.CreateCylinder(
+      `tower-red-${lane}`,
+      { diameter: 1.6, height: 2.8, tessellation: 24 },
+      this.scene
+    );
+    redTower.position = new Vector3(0, 1.5, this.towerZ);
+    redTower.material = redTowerMaterial;
+    redTower.parent = arenaRoot;
+    towers.push(redTower);
+    this.addContactBlob(arenaRoot, 0, this.towerZ, 2);
 
     return towers;
   }
@@ -220,6 +267,10 @@ export class ArenaSystem {
 
     const material = new StandardMaterial(name, this.scene);
     material.diffuseTexture = texture;
+    // Material texturizado: nao passa por createMatteMaterial (que trabalha
+    // com diffuseColor plano), mas ainda precisa do acabamento mate do
+    // guideline — zera o especular direto.
+    applyMatteFinish(material);
 
     return material;
   }

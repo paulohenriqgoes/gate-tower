@@ -44,22 +44,23 @@
       }
 
       /*
-        O modo tela e landscape-first. Onde screen.orientation.lock funciona
-        (Android/Chrome em fullscreen) este aviso nunca aparece; no iOS Safari,
-        que ignora a API, ele e o que garante a orientacao correta.
+        Retrato e a UNICA orientacao desta demo, nos dois modos (tela e RA):
+        travar em retrato remove a troca de orientacao no meio da sessao de RA,
+        que e o que estica a projecao (ver ar-xr-8thwall.md). Por isso este
+        aviso nao depende de classe nenhuma no body — vale sempre.
 
-        A classe `needs-landscape` no body e o que restringe o aviso ao modo
-        tela: em RA as duas orientacoes funcionam e o que quebra e girar no meio
-        da sessao, entao pedir rotacao ali seria pedir justamente o que estica a
-        cena — alem de cobrir a camera. Quem liga e desliga a classe e o
-        GameFlow.
+        Onde screen.orientation.lock funciona (Android/Chrome em fullscreen)
+        este aviso nunca aparece, porque o SO ja nao deixa girar para paisagem.
+        No iOS Safari, que nao implementa a API, este overlay CSS e a UNICA
+        garantia de que o jogo fica em pe: funciona sem JS, antes mesmo da cena
+        carregar.
       */
       #rotate-prompt {
         display: none;
       }
 
-      @media (orientation: portrait) and (pointer: coarse) {
-        body.needs-landscape #rotate-prompt {
+      @media (orientation: landscape) and (pointer: coarse) {
+        #rotate-prompt {
           display: flex;
           position: fixed;
           inset: 0;
@@ -95,11 +96,11 @@
       @keyframes rotate-hint {
         0%,
         45% {
-          transform: rotate(0deg);
+          transform: rotate(90deg);
         }
         70%,
         100% {
-          transform: rotate(90deg);
+          transform: rotate(0deg);
         }
       }
 
@@ -115,7 +116,7 @@
     <div id="rotate-prompt">
       <div class="rotate-icon">📱</div>
       <div class="rotate-title">Gire o celular</div>
-      <div class="rotate-hint">O Tower Gate foi feito para ser jogado deitado (paisagem).</div>
+      <div class="rotate-hint">O Tower Gate foi feito para ser jogado em pe (retrato).</div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

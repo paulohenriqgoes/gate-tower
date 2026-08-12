@@ -1,7 +1,7 @@
 import { Control, Rectangle, TextBlock } from "@babylonjs/gui";
 import type { Scene } from "@babylonjs/core/scene";
 
-import type { HudLayer } from "./HudLayer";
+import { TOP_ZONE_HEIGHT, type HudLayer } from "./HudLayer";
 import { isFullscreen, onOrientationChange } from "./screenOrientation";
 
 const FONT_SIZE = 13;
@@ -14,6 +14,11 @@ const TEXT_COLOR = "#e2e8f0";
  * Painel de debug em tela: viewport, orientacao e tracking. So existe atras
  * de `?debug=1` porque o celular nao tem console acessivel para conferir
  * esses numeros durante os testes de RA.
+ *
+ * Fica ancorado no canto superior direito, mas ABAIXO de `TOP_ZONE_HEIGHT`
+ * (a faixa de HP/timer do HUD de batalha) para nunca invadir a zona `top` nem
+ * a zona `thumb` (terço inferior) do `HudLayer` — o painel de debug e uma
+ * ferramenta de teste, nao faz parte do HUD minimo de batalha.
  */
 export class DiagnosticsOverlay {
   private readonly scene: Scene;
@@ -32,7 +37,7 @@ export class DiagnosticsOverlay {
 
     this.container = new Rectangle("diagnostics-overlay");
     this.container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.container.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    this.container.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     this.container.adaptWidthToChildren = true;
     this.container.adaptHeightToChildren = true;
     this.container.thickness = 0;
@@ -43,7 +48,8 @@ export class DiagnosticsOverlay {
     this.container.paddingTop = `${PANEL_PADDING}px`;
     this.container.paddingBottom = `${PANEL_PADDING}px`;
     this.container.left = `${-PANEL_MARGIN}px`;
-    this.container.top = `${-PANEL_MARGIN}px`;
+    // Comeca logo abaixo da faixa de HP/timer, nunca dentro dela.
+    this.container.top = `${TOP_ZONE_HEIGHT + PANEL_MARGIN}px`;
     // Nunca pode roubar toque do jogo: e um painel so-leitura sobre o HUD.
     this.container.isHitTestVisible = false;
     this.container.isPointerBlocker = false;

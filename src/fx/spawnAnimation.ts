@@ -3,6 +3,11 @@ import { BackEase, EasingFunction } from "@babylonjs/core/Animations/easing";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
 
+// Visibilidade da criatura durante a janela de fantasma: baixa o bastante
+// para ler como "etereo", alta o bastante para a silhueta ainda informar
+// posicao/tamanho de onde ela vai materializar.
+const GHOST_VISIBILITY = 0.32;
+
 export interface SpawnAnimationOptions {
   /** Duracao total da animacao em ms. Default 320. */
   durationMs?: number;
@@ -60,4 +65,66 @@ export function playSpawnScaleIn(
   node.scaling.copyFrom(from);
 
   scene.beginDirectAnimation(node, [anim], 0, totalFrames, false);
+}
+
+/**
+ * Fantasma (~`ghostMs`) seguido de materializacao: por `ghostMs` a criatura
+ * fica translucida/parada no lugar de spawn, depois volta a opacidade normal
+ * e toca `playSpawnScaleIn` (o "pop" de entrada ja existente).
+ *
+ * Mexe em `mesh.visibility` de CADA malha descendente de `root`, nunca em
+ * alpha de material: `src/fx/materials.ts` cacheia material por cor+cena
+ * (`createMatteMaterial`), entao abaixar o alpha de um material cacheado
+ * fantasmaria TODAS as criaturas daquela cor na cena, nao so esta instancia.
+ * `visibility` e uma propriedade por malha — seguro por construcao, sem
+ * precisar clonar nenhum material.
+ *
+ * Quem chama e responsavel por NAO deixar a unidade agir (andar/atacar)
+ * enquanto o fantasma roda — aqui so mexemos em aparencia. No `CombatEngine`
+ * isso e feito mantendo a unidade fora do array de unidades ativas ate
+ * `onMaterialized` disparar.
+ *
+ * @returns funcao de cancelamento: limpa o timer pendente e restaura a
+ * visibilidade original das malhas SEM disparar `onMaterialized` nem tocar
+ * `playSpawnScaleIn`. Uso: dispose no meio do fantasma (ex.: partida
+ * encerrada) nao deve deixar timers soltos nem malhas presas em opacidade
+ * reduzida.
+ */
+export function playGhostThenMaterialize(
+  root: TransformNode,
+  scene: Scene,
+  ghostMs = 200,
+  onMaterialized?: () => void
+): () => void {
+  const meshes = root.getChildMeshes(false);
+  const originalVisibilities = meshes.map((mesh) => mesh.visibility);
+
+  for (const mesh of meshes) {
+    mesh.visibility = GHOST_VISIBILITY;
+  }
+
+  const restoreVisibility = (): void => {
+    for (let index = 0; index < meshes.length; index += 1) {
+      meshes[index].visibility = originalVisibilities[index];
+    }
+  };
+
+  let isSettled = false;
+
+  const timeoutHandle = globalThis.setTimeout(() => {
+    isSettled = true;
+    restoreVisibility();
+    playSpawnScaleIn(root, scene);
+    onMaterialized?.();
+  }, ghostMs);
+
+  return () => {
+    if (isSettled) {
+      return;
+    }
+
+    isSettled = true;
+    globalThis.clearTimeout(timeoutHandle);
+    restoreVisibility();
+  };
 }

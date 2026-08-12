@@ -80,6 +80,90 @@ export interface GroundPlaneFit {
   normal: Vector3;
 }
 
+export interface PlaneCoverage {
+  /** Extensão dos inliers ao longo da direção `forward`, em metros. */
+  depth: number;
+  /** Extensão dos inliers na direção perpendicular a `forward`, em metros. */
+  width: number;
+  /** Quantos pontos ficaram dentro da tolerância do plano. */
+  inlierCount: number;
+}
+
+/**
+ * Mede quanto da superfície ajustada por `fitGroundPlane` os hitTests realmente
+ * cobrem, para decidir se a arena cabe ali. É a resposta a "a arena tem 80 cm;
+ * essa mesa tem 80 cm?" — a arena NUNCA é reescalada para caber.
+ *
+ * Descarta os pontos que não pertencem ao plano (mesa vs. chão ao redor: um
+ * ponto no piso fica a dezenas de centímetros do plano da mesa) e mede a caixa
+ * envolvente dos que sobraram nos DOIS eixos da arena — `forward` (o eixo longo,
+ * para onde o campo se estende) e o perpendicular.
+ *
+ * O valor devolvido é um limite INFERIOR da superfície real: ele só enxerga até
+ * onde os hitTests foram disparados.
+ *
+ * @param points    pontos do mundo (resultado de vários hitTests)
+ * @param fit       plano de referência (posição + normal)
+ * @param forward   direção horizontal do eixo longo da arena
+ * @param tolerance distância máxima ao plano para o ponto contar (em metros)
+ */
+export function measurePlaneCoverage(
+  points: Vector3[],
+  fit: GroundPlaneFit,
+  forward: Vector3,
+  tolerance: number
+): PlaneCoverage {
+  const normal = fit.normal.lengthSquared() > 1e-6
+    ? fit.normal.normalizeToNew()
+    : new Vector3(0, 1, 0);
+
+  // Projeta `forward` no plano e ortonormaliza; se degenerar (olhando reto para
+  // baixo), cai num eixo qualquer perpendicular a normal.
+  let axisDepth = forward.subtract(normal.scale(Vector3.Dot(forward, normal)));
+
+  if (axisDepth.lengthSquared() < 1e-6) {
+    axisDepth = Math.abs(normal.z) < 0.9
+      ? new Vector3(0, 0, 1).subtract(normal.scale(normal.z))
+      : new Vector3(1, 0, 0).subtract(normal.scale(normal.x));
+  }
+
+  axisDepth.normalize();
+  const axisWidth = Vector3.Cross(normal, axisDepth).normalize();
+
+  let minDepth = Number.POSITIVE_INFINITY;
+  let maxDepth = Number.NEGATIVE_INFINITY;
+  let minWidth = Number.POSITIVE_INFINITY;
+  let maxWidth = Number.NEGATIVE_INFINITY;
+  let inlierCount = 0;
+
+  for (const point of points) {
+    const offset = point.subtract(fit.position);
+
+    if (Math.abs(Vector3.Dot(offset, normal)) > tolerance) {
+      continue;
+    }
+
+    const alongDepth = Vector3.Dot(offset, axisDepth);
+    const alongWidth = Vector3.Dot(offset, axisWidth);
+
+    minDepth = Math.min(minDepth, alongDepth);
+    maxDepth = Math.max(maxDepth, alongDepth);
+    minWidth = Math.min(minWidth, alongWidth);
+    maxWidth = Math.max(maxWidth, alongWidth);
+    inlierCount += 1;
+  }
+
+  if (inlierCount === 0) {
+    return { depth: 0, width: 0, inlierCount: 0 };
+  }
+
+  return {
+    depth: maxDepth - minDepth,
+    width: maxWidth - minWidth,
+    inlierCount,
+  };
+}
+
 /**
  * Faz o fit robusto de um plano a partir de pontos 3D do mundo retornados por
  * hitTests, para estimar a superfície real do chão.

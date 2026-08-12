@@ -1,12 +1,21 @@
 /**
- * Utilitarios de orientacao de tela. A politica e POR MODO DE JOGO, nao global:
- * no modo tela o jogo e desenhado para paisagem (trava nativa no Android/Chrome
- * e, onde a API nao existe, o overlay CSS de `index.html` pede a rotacao); ja o
- * modo RA roda destravado e sem tela cheia. Em device, paisagem e portrait
- * funcionam igualmente bem na RA — o que quebra e trocar de orientacao com a
- * sessao no ar (a cena sai esticada), entao a RA simplesmente nao pede rotacao.
- * Quem aplica cada politica e o `GameFlow`. Historico e hipoteses em
- * `docs/experimentos/ra-e-paisagem.md`.
+ * Utilitarios de orientacao de tela. A politica passou a ser RETRATO PARA
+ * TODOS OS MODOS (canvas e RA) — nao e mais por modo de jogo. E a spec da
+ * demo: travar em retrato tira de escopo a rotacao no meio do caminho
+ * critico, que era a causa do esticamento da cena em RA.
+ *
+ * Por que travar ajuda especificamente a RA: com o lock de orientacao ativo o
+ * SO para de emitir `orientationchange` — o que impede justamente a troca de
+ * orientacao no meio da sessao. Isso importa porque a projecao da RA vem
+ * CONGELADA por frame a partir das intrinsics do WASM do 8th Wall, enquanto o
+ * canvas e redimensionado pelo evento de rotacao; canvas com aspecto novo
+ * contra intrinsics com aspecto velho e o que estica a cena. Sem rotacao no
+ * meio da sessao, esse descompasso simplesmente nao acontece.
+ *
+ * Onde `screen.orientation.lock` funciona (Android/Chrome em fullscreen) o
+ * lock nativo resolve; no iOS Safari, que nao implementa a API, o overlay CSS
+ * de `index.html` e a unica garantia. Quem aplica a politica e o `GameFlow`.
+ * Historico e hipoteses em `docs/experimentos/ra-e-paisagem.md`.
  */
 
 export interface SafeAreaInsets {
@@ -102,9 +111,12 @@ export async function toggleFullscreen(): Promise<void> {
 }
 
 /**
- * Entra em tela cheia e trava em paisagem. Retorna se o fullscreen foi obtido.
- * O lock de orientacao e rejeitado fora de fullscreen no Android e nem existe
- * no iOS Safari — nesses casos o overlay de rotacao assume.
+ * Entra em tela cheia e trava em retrato. Retorna se o fullscreen foi obtido.
+ * Usa o lock ESPECIFICO `"portrait-primary"`, nunca o generico `"portrait"` —
+ * o generico trava na variante em que o aparelho ja estiver (se o jogador
+ * abrir de cabeca para baixo, trava de cabeca para baixo). O lock de
+ * orientacao e rejeitado fora de fullscreen no Android e nem existe no iOS
+ * Safari — nesses casos o overlay CSS de rotacao de `index.html` assume.
  */
 export async function enterImmersiveMode(): Promise<boolean> {
   const isFullscreenActive = await enterFullscreen();
@@ -112,7 +124,7 @@ export async function enterImmersiveMode(): Promise<boolean> {
 
   if (orientation?.lock) {
     try {
-      await orientation.lock("landscape-primary");
+      await orientation.lock("portrait-primary");
     } catch {
       // Sem fullscreen o lock e recusado; o overlay de rotacao cobre o caso.
     }
@@ -122,11 +134,11 @@ export async function enterImmersiveMode(): Promise<boolean> {
 }
 
 /**
- * Solta a trava de orientacao e sai da tela cheia. Usado ao entrar em RA, que
- * roda sem trava e sem tela cheia: a RA nao depende de paisagem (as duas
- * orientacoes funcionam) e mexer em fullscreen/lock redimensiona o canvas, o
- * que e exatamente o que deixa a cena esticada durante a sessao. Chamado ANTES
- * de subir a sessao, nunca com ela no ar.
+ * Solta a trava de orientacao e sai da tela cheia. Usado ao voltar ao menu ou
+ * sair do jogo — NAO e mais o que a RA chama antes de subir a sessao: a RA
+ * agora pede o MESMO lock de retrato que o modo tela (ver `enterImmersiveMode`
+ * e `GameFlow.applyArOrientationPolicy`), entao nao ha mais um "destravar
+ * antes de entrar em RA" no fluxo normal.
  */
 export async function exitImmersiveMode(): Promise<void> {
   const orientation = window.screen?.orientation as LockableOrientation | undefined;
@@ -145,6 +157,13 @@ export async function exitImmersiveMode(): Promise<void> {
  * de orientacao so sao permitidos dentro de um gesto do usuario, e o primeiro
  * toque nem sempre e aceito. Depois do primeiro sucesso paramos de insistir:
  * quem sai da tela cheia de proposito volta pelo botao do HUD.
+ *
+ * Usado hoje apenas no modo canvas (`GameFlow.installImmersiveModeGestureOnce`).
+ * O modo RA NAO passa por aqui: ele pede o lock de retrato de forma explicita,
+ * via `await enterImmersiveMode()`, ANTES de chamar `arManager.enterAR()` —
+ * nunca com a sessao ja no ar. Fullscreen/lock redimensionam o canvas e
+ * reprojetam a cena; pedir isso no meio do tracking e ruido gratuito em cima
+ * de algo ja sensivel (ver cabecalho do arquivo).
  */
 export function installImmersiveModeOnGesture(
   target: HTMLElement,
@@ -155,12 +174,11 @@ export function installImmersiveModeOnGesture(
   }
 
   const handler = (): void => {
-    // Nunca durante a RA. O engine do 8th Wall recalcula a orientacao a cada
-    // frame e a entrega ao WASM junto com o IMU, entao ele NAO fica preso a um
-    // valor antigo — mas entrar em fullscreen com a sessao no ar redimensiona o
-    // canvas e reprojeta a cena no meio do tracking. Fora da RA isso e
-    // inofensivo; durante, e ruido gratuito em cima de um tracking ja sensivel.
-    // Quem cuida disso na RA e o proprio `enterAR`, antes de subir a sessao.
+    // Nunca durante a RA: mesmo raciocinio do docblock acima. O engine do
+    // 8th Wall recalcula a orientacao a cada frame e a entrega ao WASM junto
+    // com o IMU, entao ele NAO fica preso a um valor antigo — mas entrar em
+    // fullscreen com a sessao no ar redimensiona o canvas e reprojeta a cena
+    // no meio do tracking. Fora da RA isso e inofensivo; durante, nao.
     if (shouldSkip()) {
       return;
     }

@@ -11,7 +11,8 @@ que aquilo **ensinou**. Uma entrada sem "Provou" nao deveria estar aqui.
 
 | Tema | Arquivo | Status | Ultima atualizacao |
 | --- | --- | --- | --- |
-| Arena estavel em RA e layout paisagem | [ra-e-paisagem.md](ra-e-paisagem.md) | ativo | 2026-08-06 |
+| A demo do mundo vivo | [demo-mundo-vivo.md](demo-mundo-vivo.md) | ativo | 2026-08-12 |
+| Arena estavel em RA e layout paisagem | [ra-e-paisagem.md](ra-e-paisagem.md) | ativo | 2026-08-12 |
 | Ferramental de registro entre sessoes | [ferramental-de-sessao.md](ferramental-de-sessao.md) | ativo | 2026-08-06 |
 
 `Status` e um destes tres:

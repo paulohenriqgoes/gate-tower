@@ -3,8 +3,8 @@ import type { Engine } from "@babylonjs/core/Engines/engine";
 import type { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 
-/** Fracao da largura da tela ocupada pela coluna de cartas, na direita. */
-export const HUD_RIGHT_FRACTION = 0.22;
+/** Fracao da altura da tela ocupada pelo HUD, no terco inferior (retrato). */
+export const HUD_BOTTOM_FRACTION = 0.32;
 /** Folga em volta da arena para ela nao encostar nas bordas. */
 export const FRAMING_MARGIN = 1.08;
 
@@ -28,7 +28,7 @@ export interface ArenaCameraRadiusParams {
   /** Angulo polar da ArcRotateCamera. */
   beta: number;
   halfExtents: Vec3Like;
-  hudRightFraction: number;
+  hudBottomFraction: number;
   margin: number;
   verticalFov: number;
 }
@@ -75,26 +75,29 @@ export function cameraBasis(alpha: number, beta: number): CameraBasis {
  * A `ArcRotateCamera` usa FOVMODE_VERTICAL_FIXED: o FOV vertical e constante e o
  * horizontal cresce com o aspect ratio — por isso quanto mais estreita a tela,
  * mais longe a camera precisa ficar. Em vez de aproximar a arena por uma esfera
- * (conservador demais, deixaria o campo pequeno em paisagem), projetamos os 8
+ * (conservador demais, deixaria o campo pequeno demais), projetamos os 8
  * cantos da caixa envolvente na base da camera e resolvemos o raio minimo que
- * mantem todos dentro do frustum. A faixa da direita ocupada pela coluna de
- * cartas e descontada do FOV horizontal util.
+ * mantem todos dentro do frustum. Em retrato o HUD ocupa o terco inferior da
+ * tela, entao a faixa e descontada do FOV VERTICAL util (nao mais do
+ * horizontal, que era o caso da coluna de cartas na direita em paisagem).
  */
 export function computeArenaCameraRadius({
   alpha,
   aspectRatio,
   beta,
   halfExtents,
-  hudRightFraction,
+  hudBottomFraction,
   margin,
   verticalFov,
 }: ArenaCameraRadiusParams): number {
   const safeAspect = Math.max(aspectRatio, 0.01);
-  const safeHudFraction = Math.min(Math.max(hudRightFraction, 0), 0.9);
+  const safeHudFraction = Math.min(Math.max(hudBottomFraction, 0), 0.9);
 
   const tanVertical = Math.tan(verticalFov / 2);
-  // tan(fovH/2) = tan(fovV/2) * aspect; a faixa do HUD encolhe a metade util.
-  const tanHorizontal = tanVertical * safeAspect * (1 - safeHudFraction);
+  // A faixa do HUD encolhe a metade vertical util.
+  const tanVerticalUtil = tanVertical * (1 - safeHudFraction);
+  // tan(fovH/2) = tan(fovV/2) * aspect; sem desconto — a largura inteira segue livre.
+  const tanHorizontal = tanVertical * safeAspect;
 
   const { forward, right, up } = cameraBasis(alpha, beta);
 
@@ -113,7 +116,7 @@ export function computeArenaCameraRadius({
         // (depth negativa) exigem mais distancia.
         const depth = dot(corner, forward);
         const horizontal = Math.abs(dot(corner, right)) / tanHorizontal - depth;
-        const vertical = Math.abs(dot(corner, up)) / tanVertical - depth;
+        const vertical = Math.abs(dot(corner, up)) / tanVerticalUtil - depth;
 
         required = Math.max(required, horizontal, vertical);
       }
@@ -127,18 +130,17 @@ export function computeArenaCameraRadius({
 }
 
 /**
- * Deslocamento lateral, em unidades de mundo na distancia do alvo, que recentra
- * a arena no espaco livre a esquerda da coluna de cartas.
+ * Deslocamento VERTICAL, em unidades de mundo na distancia do alvo, que
+ * recentra a arena no espaco livre acima do HUD (terco inferior da tela).
+ * So depende do FOV vertical — nao ha mais aspect ratio envolvido, porque o
+ * desconto deixou de ser horizontal (coluna de cartas em paisagem).
  */
-export function computeHudScreenOffset(
+export function computeHudVerticalOffset(
   radius: number,
   verticalFov: number,
-  aspectRatio: number,
-  hudRightFraction: number = HUD_RIGHT_FRACTION
+  hudBottomFraction: number = HUD_BOTTOM_FRACTION
 ): number {
-  const tanHorizontal = Math.tan(verticalFov / 2) * Math.max(aspectRatio, 0.01);
-
-  return radius * tanHorizontal * hudRightFraction;
+  return radius * Math.tan(verticalFov / 2) * hudBottomFraction;
 }
 
 /**
@@ -170,7 +172,7 @@ export function frameArenaCamera(
     aspectRatio,
     beta: camera.beta,
     halfExtents: extents.halfExtents,
-    hudRightFraction: HUD_RIGHT_FRACTION,
+    hudBottomFraction: HUD_BOTTOM_FRACTION,
     margin: FRAMING_MARGIN,
     verticalFov: camera.fov,
   });
@@ -182,10 +184,14 @@ export function frameArenaCamera(
   camera.upperRadiusLimit = radius * 1.8;
   camera.radius = radius;
 
-  // Empurra a cena para a esquerda em espaco de tela, liberando a faixa das
-  // cartas sem mexer no alvo real da camera. O offset entra direto na translacao
-  // da view matrix (unidades de mundo na distancia do alvo) e x positivo joga a
-  // cena para a direita — por isso o sinal negativo.
-  camera.targetScreenOffset.x = -computeHudScreenOffset(radius, camera.fov, aspectRatio);
-  camera.targetScreenOffset.y = 0;
+  // Empurra a cena para CIMA em espaco de tela, liberando o terco inferior
+  // para o HUD sem mexer no alvo real da camera. O offset entra direto na
+  // translacao da view matrix (unidades de mundo na distancia do alvo).
+  // Sinal confirmado empiricamente (Matrix.LookAtLH + projecao + Vector3.Project):
+  // y positivo desloca o ponto projetado para um Y de tela MENOR (convencao
+  // y-down de canvas/CSS), ou seja, para CIMA — exatamente o que libera a
+  // faixa de baixo. (x positivo, por simetria, joga a cena para a direita —
+  // sem uso aqui porque em retrato nao ha desconto horizontal.)
+  camera.targetScreenOffset.x = 0;
+  camera.targetScreenOffset.y = computeHudVerticalOffset(radius, camera.fov);
 }

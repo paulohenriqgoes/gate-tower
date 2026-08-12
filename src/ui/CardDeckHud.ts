@@ -4,27 +4,34 @@ import type { Scene } from "@babylonjs/core/scene";
 
 import type { CardDeckSnapshot } from "../cards/CardDeckSystem";
 import { CardDeckSystem } from "../cards/CardDeckSystem";
-import { DiamondCard, DIAMOND_DIAGONAL } from "./DiamondCard";
+import { DiamondCard } from "./DiamondCard";
 import type { HudLayer } from "./HudLayer";
 
 // Tamanho do canvas interno para o widget circular
 const RING_CANVAS_SIZE = 128;
 // Espessura do arco de progresso
 const RING_LINE_WIDTH = 12;
-// Lado do quadrado do widget de cogumelos dentro da barra superior
+// Lado do quadrado do widget de cogumelos, logo acima da fileira de cartas
 const RING_SIZE = 84;
-// Espaco vertical entre os losangos da coluna lateral
-const CARD_SPACING = 10;
+// Espaco horizontal entre as cartas da fileira
+const CARD_SPACING = 12;
+// Espaco vertical entre o anel de cogumelos e a fileira de cartas
+const ROW_SPACING = 10;
 
-const IDLE_STATUS = "Toque em uma carta para preparar a invocacao.";
-
+/**
+ * HUD de batalha: widget circular de cogumelos + fileira horizontal de
+ * cartas, ambos dentro da zona `thumb` do `HudLayer` (terço inferior, zona do
+ * polegar). Os cogumelos ficam IMEDIATAMENTE acima da fileira — nao existe
+ * mais barra de status separada para eles.
+ */
 export class CardDeckHud {
   private readonly scene: Scene;
   private readonly deckSystem: CardDeckSystem;
   private readonly hud: HudLayer;
   private readonly cardViews = new Map<string, DiamondCard>();
   private readonly stateObserver: Observer<CardDeckSnapshot> | null;
-  private readonly cardColumn: StackPanel;
+  private readonly battleColumn: StackPanel;
+  private readonly cardRow: StackPanel;
 
   // Widget circular do cogumelo
   private readonly ringCanvas: HTMLCanvasElement;
@@ -40,13 +47,24 @@ export class CardDeckHud {
     this.deckSystem = deckSystem;
     this.hud = hud;
 
-    // --- Widget circular (slot esquerdo da barra superior) ---
+    // Coluna vertical unica dentro da zona `thumb`: cogumelos em cima,
+    // fileira de cartas embaixo, ambos centralizados.
+    this.battleColumn = new StackPanel("battle-hud-column");
+    this.battleColumn.isVertical = true;
+    this.battleColumn.spacing = ROW_SPACING;
+    this.battleColumn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    this.battleColumn.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    this.battleColumn.isPointerBlocker = false;
+    this.hud.zones.thumb.addControl(this.battleColumn);
+
+    // --- Widget circular (topo da coluna de batalha) ---
     this.ringContainer = new Rectangle("mushroom-ring-container");
     this.ringContainer.width = `${RING_SIZE}px`;
     this.ringContainer.height = `${RING_SIZE}px`;
     this.ringContainer.thickness = 0;
     this.ringContainer.background = "#00000000";
     this.ringContainer.isPointerBlocker = false;
+    this.ringContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
 
     this.ringCanvas = document.createElement("canvas");
     this.ringCanvas.width = RING_CANVAS_SIZE;
@@ -57,28 +75,31 @@ export class CardDeckHud {
     this.ringImage.width = `${RING_SIZE}px`;
     this.ringImage.height = `${RING_SIZE}px`;
     this.ringContainer.addControl(this.ringImage);
-    this.hud.fillSlot("mushrooms", this.ringContainer);
+    this.battleColumn.addControl(this.ringContainer);
 
-    // --- Coluna de cartas (borda direita, em paisagem) ---
-    this.cardColumn = new StackPanel("card-deck-column");
-    this.cardColumn.isVertical = true;
-    this.cardColumn.width = `${DIAMOND_DIAGONAL}px`;
-    this.cardColumn.spacing = CARD_SPACING;
-    this.cardColumn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-    this.cardColumn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-    // A coluna nao bloqueia o ponteiro: quem bloqueia e cada losango, cujo
-    // `contains` aplica a matriz inversa e respeita a forma girada. Assim um
-    // toque no vao entre as cartas ainda chega na arena.
-    this.cardColumn.isPointerBlocker = false;
-    this.hud.getTexture().addControl(this.cardColumn);
-    this.applyColumnMargin();
+    // --- Fileira horizontal de cartas (base da coluna de batalha) ---
+    this.cardRow = new StackPanel("card-deck-row");
+    this.cardRow.isVertical = false;
+    this.cardRow.height = "auto";
+    // Encolhe/cresce com o numero real de cartas (3 hoje, 4 numa etapa
+    // futura) para o StackPanel centralizar a fileira de verdade: sem
+    // `adaptWidthToChildren` a largura ficaria fixa e os filhos se
+    // empilhariam a partir da borda esquerda, descentralizando a fileira
+    // sempre que houver menos de 4 cartas.
+    this.cardRow.adaptWidthToChildren = true;
+    this.cardRow.spacing = CARD_SPACING;
+    this.cardRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    // A fileira nao bloqueia o ponteiro: quem bloqueia e cada carta. Um toque
+    // no vao entre elas ainda chega na arena.
+    this.cardRow.isPointerBlocker = false;
+    this.battleColumn.addControl(this.cardRow);
 
     for (const card of this.deckSystem.getSnapshot().cards) {
       const view = new DiamondCard(card, (cardId) => {
         this.deckSystem.selectCard(cardId);
       });
 
-      this.cardColumn.addControl(view.root);
+      this.cardRow.addControl(view.root);
       this.cardViews.set(card.id, view);
     }
 
@@ -103,10 +124,15 @@ export class CardDeckHud {
     this.render(this.deckSystem.getSnapshot());
   }
 
-  /** Esconde coluna de cartas e anel de cogumelos fora da partida. */
+  /**
+   * Liga/desliga o HUD de batalha inteiro (cogumelos + cartas + timer + HP):
+   * delega para `HudLayer.setBattleHudVisible`, que e quem sabe sobre as duas
+   * zonas de retrato. O `GameFlow` (fora do escopo desta etapa) so conhece
+   * este metodo, entao ele continua sendo o unico gatilho de visibilidade da
+   * partida.
+   */
   public setVisible(isVisible: boolean): void {
-    this.cardColumn.isVisible = isVisible;
-    this.ringContainer.isVisible = isVisible;
+    this.hud.setBattleHudVisible(isVisible);
 
     if (isVisible) {
       // O blink pode ter deixado o alpha em 0.4 no instante em que sumiu.
@@ -114,18 +140,12 @@ export class CardDeckHud {
     }
   }
 
-  /** Reposiciona a coluna apos mudanca de orientacao/tamanho (notch inclusive). */
-  public applyColumnMargin(): void {
-    this.cardColumn.left = `${-this.hud.getRightMargin()}px`;
-  }
-
   public dispose(): void {
     if (this.stateObserver) {
       this.deckSystem.onStateChangedObservable.remove(this.stateObserver);
     }
 
-    this.cardColumn.dispose();
-    this.ringContainer.dispose();
+    this.battleColumn.dispose();
   }
 
   private render(snapshot: CardDeckSnapshot): void {
@@ -142,15 +162,6 @@ export class CardDeckHud {
       this.isBlinking = false;
       this.ringContainer.alpha = 1;
     }
-
-    // Com o losango nao ha espaco para a descricao: ela vira o texto de status.
-    const selectedCard = snapshot.selectedCardId
-      ? this.deckSystem.getCard(snapshot.selectedCardId)
-      : null;
-
-    this.hud.setCardStatus(
-      selectedCard ? `${selectedCard.name}: ${selectedCard.summary}` : IDLE_STATUS
-    );
 
     // Atualizar cartas
     for (const card of snapshot.cards) {

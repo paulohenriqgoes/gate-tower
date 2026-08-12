@@ -10,6 +10,7 @@ import type { TeamId } from "../battle/BattleTypes";
 import type { TowerActor } from "../towers/TowerActor";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
 import { createContactShadow } from "../fx/contactShadow";
+import { IdleBehavior, type IdleBehaviorBounds } from "./idle/IdleBehavior";
 
 export interface BaseUnitOptions {
   attackIntervalMs: number;
@@ -35,6 +36,18 @@ export interface UnitVisualState {
   nowMs: number;
 }
 
+/**
+ * Contexto que o comportamento ocioso precisa para as criaturas residentes
+ * (Etapa 3): camera para o estado "observando", vizinhas para "social" e os
+ * limites da arena para "vagando". Quem monta a populacao ociosa (ex.:
+ * `ResidentPopulation`) chama `setIdleContext` antes de `setIdleEnabled(true)`.
+ */
+export interface IdleContext {
+  bounds: IdleBehaviorBounds;
+  getCameraPosition: () => Vector3 | null;
+  getNeighborPositions: () => Vector3[];
+}
+
 export abstract class BaseUnit {
   public readonly attackIntervalMs: number;
   public readonly contactRange: number;
@@ -53,6 +66,13 @@ export abstract class BaseUnit {
   protected targetTower: TowerActor | null = null;
   protected readonly healthBar: HealthBarMesh;
   protected readonly visualRoot: TransformNode;
+
+  // Modo ocioso (Etapa 3): quando ligado, update() roda IdleBehavior em vez
+  // da logica de perseguir/atacar torre. Nasce desligado para nao mudar o
+  // comportamento de unidades invocadas em partida.
+  private idleBehavior: IdleBehavior | null = null;
+  private idleContext: IdleContext | null = null;
+  private idleEnabled = false;
 
   public constructor(options: BaseUnitOptions) {
     this.attackIntervalMs = options.attackIntervalMs;
@@ -115,6 +135,15 @@ export abstract class BaseUnit {
 
   protected abstract computeAttackDamage(): number;
 
+  /**
+   * No que representa a cabeca no visual da criatura, para o estado
+   * "observando" do comportamento ocioso. `null` por padrao; cada criatura
+   * sobrescreve devolvendo o no correspondente do seu `createVisual`.
+   */
+  public getHeadNode(): TransformNode | null {
+    return null;
+  }
+
   protected updateVisual(_state: UnitVisualState): void {}
 
   protected getHealthRatio(): number {
@@ -145,6 +174,59 @@ export abstract class BaseUnit {
     return this.targetTower;
   }
 
+  /**
+   * Fornece camera/vizinhos/bounds para o `IdleBehavior`. Pode ser chamado
+   * antes ou depois de `setIdleEnabled(true)` — se ja estiver ocioso, o
+   * comportamento e recriado com o contexto novo.
+   */
+  public setIdleContext(context: IdleContext): void {
+    this.idleContext = context;
+
+    if (this.idleEnabled) {
+      this.idleBehavior?.dispose();
+      this.idleBehavior = this.createIdleBehavior();
+    }
+  }
+
+  /**
+   * Liga/desliga o modo ocioso. Ligado, `update()` roda o `IdleBehavior` em
+   * vez da logica de perseguir/atacar torre; desligado, o comportamento de
+   * combate de sempre continua intacto. Seguro chamar sem `setIdleContext`
+   * previo — usa camera/vizinhos/bounds neutros nesse caso.
+   */
+  public setIdleEnabled(enabled: boolean): void {
+    if (enabled === this.idleEnabled) {
+      return;
+    }
+
+    this.idleEnabled = enabled;
+
+    if (enabled) {
+      this.idleBehavior = this.createIdleBehavior();
+    } else {
+      this.idleBehavior?.dispose();
+      this.idleBehavior = null;
+    }
+  }
+
+  private createIdleBehavior(): IdleBehavior {
+    const context = this.idleContext;
+
+    return new IdleBehavior({
+      bounds: context?.bounds ?? {
+        maxX: Number.POSITIVE_INFINITY,
+        maxZ: Number.POSITIVE_INFINITY,
+        minX: Number.NEGATIVE_INFINITY,
+        minZ: Number.NEGATIVE_INFINITY,
+      },
+      getCameraPosition: context?.getCameraPosition ?? (() => null),
+      getNeighborPositions: context?.getNeighborPositions ?? (() => []),
+      headNode: this.getHeadNode(),
+      root: this.root,
+      visualRoot: this.visualRoot,
+    });
+  }
+
   public takeDamage(amount: number): void {
     if (!this.isAlive()) {
       return;
@@ -159,6 +241,11 @@ export abstract class BaseUnit {
   }
 
   public update(deltaSeconds: number, nowMs: number): void {
+    if (this.idleEnabled) {
+      this.idleBehavior?.update(deltaSeconds, nowMs);
+      return;
+    }
+
     if (!this.isAlive() || !this.targetTower || !this.targetTower.isAlive()) {
       this.updateVisual({
         deltaSeconds,
@@ -226,6 +313,7 @@ export abstract class BaseUnit {
   }
 
   public dispose(): void {
+    this.idleBehavior?.dispose();
     this.root.dispose(false, true);
   }
 
@@ -243,7 +331,10 @@ export abstract class BaseUnit {
       id: this.id,
       parent: this.root,
       scene: this.scene,
-      width: Scalar.Clamp(widestSpan * 0.8, 1.35, 2.1),
+      // Faixa reduzida de 1.35..2.1 para 1.1..1.7: a arena encolheu ~1.5x nos
+      // dois eixos e as criaturas nao, entao a barra antiga passava a valer 13%
+      // da largura do campo.
+      width: Scalar.Clamp(widestSpan * 0.8, 1.1, 1.7),
       yOffset: unitHeight + 0.45,
     });
   }

@@ -3,7 +3,8 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import {
   normalizeToCanvas,
   buildSampleOffsets,
-  fitGroundPlane
+  fitGroundPlane,
+  measurePlaneCoverage
 } from "./hitTestSampling";
 
 describe("normalizeToCanvas", () => {
@@ -205,5 +206,82 @@ describe("fitGroundPlane", () => {
     const result = fitGroundPlane(points);
     expect(result).not.toBeNull();
     expect(result!.position.y).toBeCloseTo(5);
+  });
+});
+
+describe("measurePlaneCoverage", () => {
+  const flatFit = {
+    position: new Vector3(0, 0, 0),
+    normal: new Vector3(0, 1, 0)
+  };
+  const forwardZ = new Vector3(0, 0, 1);
+
+  it("mede a extensao nos dois eixos de uma superficie plana", () => {
+    // Retangulo de 0.4 (X) por 1.2 (Z) no plano y = 0.
+    const points = [
+      new Vector3(-0.2, 0, -0.6),
+      new Vector3(0.2, 0, -0.6),
+      new Vector3(-0.2, 0, 0.6),
+      new Vector3(0.2, 0, 0.6)
+    ];
+
+    const coverage = measurePlaneCoverage(points, flatFit, forwardZ, 0.05);
+
+    expect(coverage.depth).toBeCloseTo(1.2);
+    expect(coverage.width).toBeCloseTo(0.4);
+    expect(coverage.inlierCount).toBe(4);
+  });
+
+  it("descarta pontos fora do plano (a mesa nao herda a extensao do chao)", () => {
+    const points = [
+      new Vector3(0, 0, -0.2),
+      new Vector3(0, 0, 0.2),
+      // Chao 70 cm abaixo da mesa: nao pode contar como extensao da mesa.
+      new Vector3(0, -0.7, -2),
+      new Vector3(0, -0.7, 2)
+    ];
+
+    const coverage = measurePlaneCoverage(points, flatFit, forwardZ, 0.05);
+
+    expect(coverage.inlierCount).toBe(2);
+    expect(coverage.depth).toBeCloseTo(0.4);
+  });
+
+  it("mede ao longo da direcao informada, nao dos eixos do mundo", () => {
+    // Faixa longa no eixo X; com forward = +X ela conta como profundidade.
+    const points = [
+      new Vector3(-0.5, 0, 0),
+      new Vector3(0.5, 0, 0),
+      new Vector3(0, 0, -0.1),
+      new Vector3(0, 0, 0.1)
+    ];
+
+    const coverage = measurePlaneCoverage(points, flatFit, new Vector3(1, 0, 0), 0.05);
+
+    expect(coverage.depth).toBeCloseTo(1);
+    expect(coverage.width).toBeCloseTo(0.2);
+  });
+
+  it("devolve zero quando nenhum ponto pertence ao plano", () => {
+    const points = [new Vector3(0, 3, 0), new Vector3(1, 3, 1)];
+
+    const coverage = measurePlaneCoverage(points, flatFit, forwardZ, 0.05);
+
+    expect(coverage.inlierCount).toBe(0);
+    expect(coverage.depth).toBe(0);
+    expect(coverage.width).toBe(0);
+  });
+
+  it("nao quebra quando forward e paralelo a normal", () => {
+    const points = [
+      new Vector3(-0.3, 0, -0.3),
+      new Vector3(0.3, 0, 0.3)
+    ];
+
+    const coverage = measurePlaneCoverage(points, flatFit, new Vector3(0, 1, 0), 0.05);
+
+    expect(coverage.inlierCount).toBe(2);
+    expect(Number.isFinite(coverage.depth)).toBe(true);
+    expect(Number.isFinite(coverage.width)).toBe(true);
   });
 });

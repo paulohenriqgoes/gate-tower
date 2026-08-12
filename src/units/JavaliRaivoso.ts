@@ -1,33 +1,38 @@
-import { Color3 } from "@babylonjs/core/Maths/math.color";
-import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 
+import { createMatteMaterial, PALETTE } from "../fx/materials";
 import { BaseUnit, type BaseUnitOptions } from "./BaseUnit";
 
 export interface JavaliRaivosoOptions extends Omit<BaseUnitOptions, "attackIntervalMs" | "contactRange" | "displayName" | "health" | "movementSpeed"> {}
 
 export class JavaliRaivoso extends BaseUnit {
+  private headNode!: TransformNode;
+
   public constructor(options: JavaliRaivosoOptions) {
     super({
       ...options,
       attackIntervalMs: 1100,
+      // Corpo-a-corpo: encosta na torre. Nao muda com a arena — depende do
+      // tamanho do bicho (1.9 de profundidade), nao do tamanho do campo.
       contactRange: 1.5,
       displayName: "Javali Raivoso",
       health: 200,
-      movementSpeed: 4.4,
+      // A distancia entre torres caiu de 28 para 20 unidades. Velocidade
+      // calibrada pelo tempo de travessia, nao pelo valor antigo: 20 / 1.3 ~=
+      // 15 s, a ponta rapida da janela de 15-25 s pedida para a leitura de jogo.
+      movementSpeed: 1.3,
     });
   }
 
   protected createVisual(): void {
-    const bodyMaterial = new StandardMaterial(`${this.id}-body-material`, this.scene);
-    bodyMaterial.diffuseColor = Color3.FromHexString("#7c4a2d");
-
-    const maneMaterial = new StandardMaterial(`${this.id}-mane-material`, this.scene);
-    maneMaterial.diffuseColor = Color3.FromHexString("#2f241d");
-
-    const fangMaterial = new StandardMaterial(`${this.id}-fang-material`, this.scene);
-    fangMaterial.diffuseColor = Color3.FromHexString("#f8fafc");
+    // Corpo em laranja (cor de acento da carta) em vez do marrom original: o
+    // guideline proibe marrom/bege como cor dominante mesmo quando o bicho e
+    // literalmente marrom na vida real.
+    const bodyMaterial = createMatteMaterial(this.scene, PALETTE.accentJavali, `${this.id}-body-material`);
+    const maneMaterial = createMatteMaterial(this.scene, PALETTE.neutralDark, `${this.id}-mane-material`);
+    const fangMaterial = createMatteMaterial(this.scene, PALETTE.neutralLight, `${this.id}-fang-material`);
 
     const body = MeshBuilder.CreateBox(
       `${this.id}-body`,
@@ -42,6 +47,12 @@ export class JavaliRaivoso extends BaseUnit {
     body.position.y = 0.82;
     body.material = bodyMaterial;
 
+    // No intermediario que agrupa cabeca + presas, para o estado "observando"
+    // do comportamento ocioso poder girar so a cabeca (ver getHeadNode()).
+    this.headNode = new TransformNode(`${this.id}-head-node`, this.scene);
+    this.headNode.parent = this.visualRoot;
+    this.headNode.position = new Vector3(0, 0.9, 1.18);
+
     const head = MeshBuilder.CreateBox(
       `${this.id}-head`,
       {
@@ -51,8 +62,7 @@ export class JavaliRaivoso extends BaseUnit {
       },
       this.scene
     );
-    head.parent = this.visualRoot;
-    head.position = new Vector3(0, 0.9, 1.18);
+    head.parent = this.headNode;
     head.material = bodyMaterial;
 
     const mane = MeshBuilder.CreateBox(
@@ -100,13 +110,24 @@ export class JavaliRaivoso extends BaseUnit {
         },
         this.scene
       );
-      fang.parent = this.visualRoot;
-      fang.position = new Vector3(x, 0.7, 1.62);
+      fang.parent = this.headNode;
+      // Posicao original (x, 0.7, 1.62) era relativa ao visualRoot; reparentada
+      // sob headNode (que fica em (0, 0.9, 1.18)), a posicao local vira a
+      // diferenca entre as duas, preservando a aparencia em repouso.
+      fang.position = new Vector3(x, -0.2, 0.44);
       fang.material = fangMaterial;
     }
   }
 
+  public getHeadNode(): TransformNode | null {
+    return this.headNode;
+  }
+
   protected computeAttackDamage(): number {
-    return Math.max(1, Math.round(this.getTotalDistanceTravelled()));
+    // O dano cresce com a distancia percorrida — uma constante espacial, entao
+    // ela acompanha o encolhimento do campo: 28 / 20 = 1.4x por unidade andada,
+    // para uma investida de ponta a ponta doer o mesmo de antes.
+    const FIELD_SHRINK_COMPENSATION = 1.4;
+    return Math.max(1, Math.round(this.getTotalDistanceTravelled() * FIELD_SHRINK_COMPENSATION));
   }
 }

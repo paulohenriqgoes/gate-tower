@@ -1,4 +1,5 @@
 import { Color3 } from "@babylonjs/core/Maths/math.color";
+import type { Material } from "@babylonjs/core/Materials/material";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
@@ -10,7 +11,12 @@ import type { BaseUnit } from "../units/BaseUnit";
 export interface TowerActorOptions {
   attackCooldownMs: number;
   attackDamage: number;
-  attackRangeMultiplier: number;
+  /**
+   * Alcance ja resolvido, em unidades autorais. Antes a torre recebia so um
+   * multiplicador do proprio diametro e derivava o alcance sozinha; com a arena
+   * de mesa quem decide o alcance e o CombatEngine, que enxerga o campo inteiro.
+   */
+  attackRange: number;
   diameter: number;
   id: string;
   lane: TowerLaneId;
@@ -23,7 +29,7 @@ export interface TowerActorOptions {
 export class TowerActor {
   public readonly attackCooldownMs: number;
   public readonly attackDamage: number;
-  public readonly attackRangeMultiplier: number;
+  public readonly attackRange: number;
   public readonly diameter: number;
   public readonly id: string;
   public readonly lane: TowerLaneId;
@@ -33,6 +39,11 @@ export class TowerActor {
 
   private readonly healthBar: HealthBarMesh;
   private readonly destroyedMaterial: StandardMaterial;
+  // Material de antes de qualquer dano (Etapa 8, `reset()`) — capturado no
+  // construtor porque `receiveDamage` troca `mesh.material` para
+  // `destroyedMaterial` quando a torre morre, e a segunda partida precisa
+  // devolver o material original, nao so a vida.
+  private readonly originalMaterial: Material | null;
 
   private health: number;
   private lastAttackAt = Number.NEGATIVE_INFINITY;
@@ -40,7 +51,7 @@ export class TowerActor {
   public constructor(options: TowerActorOptions) {
     this.attackCooldownMs = options.attackCooldownMs;
     this.attackDamage = options.attackDamage;
-    this.attackRangeMultiplier = options.attackRangeMultiplier;
+    this.attackRange = options.attackRange;
     this.diameter = options.diameter;
     this.id = options.id;
     this.lane = options.lane;
@@ -48,6 +59,7 @@ export class TowerActor {
     this.mesh = options.mesh;
     this.team = options.team;
     this.health = options.maxHealth;
+    this.originalMaterial = options.mesh.material;
 
     this.healthBar = new HealthBarMesh({
       borderColorHex: this.team === "enemy" ? "#f87171" : "#7dd3fc",
@@ -57,7 +69,9 @@ export class TowerActor {
       id: this.id,
       parent: this.mesh,
       scene: options.scene,
-      width: this.diameter * 1.35,
+      // 1.15x o diametro da torre (era 1.35x): a arena encolheu ~1.5x e a barra
+      // antiga passava a ocupar 13% da largura do campo.
+      width: this.diameter * 1.15,
       yOffset: this.resolveHealthBarOffsetY(),
     });
 
@@ -78,7 +92,7 @@ export class TowerActor {
   }
 
   public getAttackRange(): number {
-    return this.diameter * this.attackRangeMultiplier;
+    return this.attackRange;
   }
 
   public canAttack(unit: BaseUnit, nowMs: number): boolean {
@@ -119,6 +133,19 @@ export class TowerActor {
 
   public getDistanceToUnit(unit: BaseUnit): number {
     return this.mesh.position.subtract(unit.root.position).length();
+  }
+
+  /**
+   * Volta a torre ao estado de inicio de partida (Etapa 8, "a segunda
+   * partida funciona"): vida cheia, material original (nao o cinza de
+   * "destruida"), cooldown de ataque liberado. NAO mexe em posicao/malha —
+   * so o que uma partida anterior pode ter deixado sujo.
+   */
+  public reset(): void {
+    this.health = this.maxHealth;
+    this.lastAttackAt = Number.NEGATIVE_INFINITY;
+    this.mesh.material = this.originalMaterial;
+    this.updateHealthBar();
   }
 
   public dispose(): void {

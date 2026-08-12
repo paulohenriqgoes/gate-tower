@@ -6,6 +6,7 @@ import { BaseUnit } from "./BaseUnit";
 import { CururuBombado } from "./CururuBombado";
 import { DonaBarata } from "./DonaBarata";
 import { JavaliRaivoso } from "./JavaliRaivoso";
+import { TatuBola } from "./TatuBola";
 
 export class UnitFactory {
   private readonly donaBarataAttackRangeMultiplier = 0.88;
@@ -36,6 +37,15 @@ export class UnitFactory {
       case "javali-raivoso":
         return [
           new JavaliRaivoso({
+            id: this.createUnitId(cardId),
+            scene: this.scene,
+            spawnPosition,
+            team,
+          }),
+        ];
+      case "tatu-bola":
+        return [
+          new TatuBola({
             id: this.createUnitId(cardId),
             scene: this.scene,
             spawnPosition,

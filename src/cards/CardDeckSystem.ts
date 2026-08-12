@@ -26,12 +26,18 @@ export class CardDeckSystem {
   public readonly onStateChangedObservable = new Observable<CardDeckSnapshot>();
 
   private readonly cards: CardDefinition[];
+  private readonly initialMushrooms: number;
   private readonly maxMushrooms: number;
   private readonly regenerationIntervalMs: number;
 
   private mushrooms: number;
   private selectedCardId: string | null = null;
   private regenerationHandle: number | null = null;
+  // Multiplicador da taxa de regeneracao (Etapa 7: cogumelo em dobro no
+  // ultimo minuto). 2 = intervalo pela metade. Volta a 1 sozinho quando a
+  // regeneracao para (ver `stopRegeneration`) — nao precisa de quem chamou
+  // `setRegenerationMultiplier` lembrar de resetar ao sair da partida.
+  private regenerationMultiplier = 1;
 
   public constructor(options: CardDeckSystemOptions) {
     if (!options.cards.length) {
@@ -41,7 +47,8 @@ export class CardDeckSystem {
     this.cards = [...options.cards];
     this.maxMushrooms = options.maxMushrooms ?? 10;
     this.regenerationIntervalMs = options.regenerationIntervalMs ?? 1800;
-    this.mushrooms = this.clampMushrooms(options.initialMushrooms ?? 4);
+    this.initialMushrooms = this.clampMushrooms(options.initialMushrooms ?? 4);
+    this.mushrooms = this.initialMushrooms;
   }
 
   public startRegeneration(): void {
@@ -50,18 +57,18 @@ export class CardDeckSystem {
     }
 
     this.regenerationHandle = window.setInterval(() => {
-      if (this.mushrooms >= this.maxMushrooms) {
-        return;
-      }
-
-      this.mushrooms += 1;
-      this.emitState();
-    }, this.regenerationIntervalMs);
+      this.regenerateOneMushroom();
+    }, this.getEffectiveRegenerationIntervalMs());
 
     this.emitState();
   }
 
   public stopRegeneration(): void {
+    // Fim da partida (ou volta ao menu/mundo vivo) sempre volta a taxa
+    // normal — ninguem que desliga a regeneracao precisa lembrar de tambem
+    // chamar `setRegenerationMultiplier(1)` a parte.
+    this.regenerationMultiplier = 1;
+
     if (this.regenerationHandle === null) {
       return;
     }
@@ -70,8 +77,60 @@ export class CardDeckSystem {
     this.regenerationHandle = null;
   }
 
+  /**
+   * Multiplicador da taxa de regeneracao. 2 = um cogumelo a cada metade do
+   * intervalo normal (a economia do ultimo minuto, ligada por quem monta a
+   * partida a `MatchClock.onFinalMinuteObservable`).
+   *
+   * REPROGRAMA o timer em vez de deixar o ciclo em voo terminar com o
+   * intervalo antigo: se o timer atual foi armado com 1800ms e o multiplicador
+   * dobra aos 1200ms desse ciclo, esperar o `setInterval` original disparar
+   * significaria usar o intervalo ANTIGO por mais um ciclo inteiro depois da
+   * troca — exatamente o que a spec pede para evitar. A troca cancela o
+   * `setInterval` corrente e arma um novo do zero com o intervalo novo,
+   * descartando o progresso do ciclo em curso (o pior caso e um cogumelo
+   * chegar um pouco mais tarde do que chegaria se o progresso fosse
+   * preservado — aceitavel: preservar exigiria guardar o instante do ultimo
+   * tick e calcular o residuo, complexidade que este acerto de taxa nao
+   * justifica).
+   */
+  public setRegenerationMultiplier(multiplier: number): void {
+    if (multiplier <= 0) {
+      throw new Error("Multiplicador de regeneracao precisa ser positivo.");
+    }
+
+    if (this.regenerationMultiplier === multiplier) {
+      return;
+    }
+
+    this.regenerationMultiplier = multiplier;
+
+    if (this.regenerationHandle === null) {
+      return;
+    }
+
+    window.clearInterval(this.regenerationHandle);
+    this.regenerationHandle = window.setInterval(() => {
+      this.regenerateOneMushroom();
+    }, this.getEffectiveRegenerationIntervalMs());
+  }
+
   public dispose(): void {
     this.stopRegeneration();
+  }
+
+  /**
+   * Volta ao estado de inicio de partida (Etapa 8 — "os cogumelos voltam ao
+   * valor inicial?"): cogumelos no valor de construcao, nenhuma carta
+   * selecionada, multiplicador de regeneracao normal. NAO liga/desliga o
+   * timer de regeneracao — isso continua por conta de quem chama
+   * (`GameFlow`, via `startRegeneration`/`stopRegeneration`).
+   */
+  public reset(): void {
+    this.mushrooms = this.initialMushrooms;
+    this.selectedCardId = null;
+    this.regenerationMultiplier = 1;
+    this.emitState();
   }
 
   public getSnapshot(): CardDeckSnapshot {
@@ -155,6 +214,19 @@ export class CardDeckSystem {
     }
 
     this.emitState();
+  }
+
+  private regenerateOneMushroom(): void {
+    if (this.mushrooms >= this.maxMushrooms) {
+      return;
+    }
+
+    this.mushrooms += 1;
+    this.emitState();
+  }
+
+  private getEffectiveRegenerationIntervalMs(): number {
+    return this.regenerationIntervalMs / this.regenerationMultiplier;
   }
 
   private clampMushrooms(value: number): number {
