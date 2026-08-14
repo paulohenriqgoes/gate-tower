@@ -55,7 +55,11 @@ export class DiamondCard {
     this.nameText.width = "92%";
     this.nameText.height = "84px";
     this.nameText.top = `${COST_BADGE_SIZE - 4}px`;
-    this.nameText.fontSize = 16;
+    // 28 e o piso de legibilidade do projeto (ver `guiUnits.test.ts`), e ele
+    // cabe: com `textWrapping` ligado e 92% de 148px disponiveis, a palavra
+    // mais larga do catalogo ("Raivoso") ocupa ~102px dos 136px, e duas linhas
+    // somam ~67px dos 84px de altura. Nao ha aperto de geometria aqui.
+    this.nameText.fontSize = 28;
     this.nameText.color = "#f8fafc";
     this.nameText.fontFamily = "Trebuchet MS";
     this.nameText.textWrapping = true;
@@ -77,7 +81,7 @@ export class DiamondCard {
     this.costBadge.isHitTestVisible = false;
 
     this.costText = new TextBlock(`card-cost-${card.id}`, `${card.cost}`);
-    this.costText.fontSize = 18;
+    this.costText.fontSize = 28;
     this.costText.color = card.accentColor;
     this.costText.fontFamily = "Trebuchet MS";
     this.costText.fontWeight = "bold";

@@ -13,6 +13,8 @@ import type { CardDeckSystem } from "../cards/CardDeckSystem";
 import type { CombatEngine } from "../combat/CombatEngine";
 import { dissolveArena } from "../fx/arenaDissolve";
 import type { WorldTapRouter } from "../interaction/WorldTapRouter";
+import type { MushroomTower } from "../towers/MushroomTower";
+import type { ProximityTrigger, WakeStage } from "../towers/ProximityTrigger";
 import type { TowerWakeup } from "../towers/TowerWakeup";
 import type { CardDeckHud } from "../ui/CardDeckHud";
 import { HEALTH_BAR_ROOT_SUFFIX } from "../ui/HealthBarMesh";
@@ -30,6 +32,22 @@ import type { GameMode, GamePhase } from "./GameTypes";
  */
 const MATCH_OVER_HUD_HOLD_MS = 1200;
 
+/**
+ * Brilho da caverna com o jogador longe. Nao e zero de proposito: uma caverna
+ * apagada nao chama ninguem, e o Beat 4 proibe qualquer prompt de HUD — a
+ * brasa acesa no escuro e a UNICA coisa que puxa a pessoa para perto. Sobe
+ * ate 1 conforme ela se aproxima (ver `ProximityTrigger.getGlowIntensity`).
+ */
+const RESTING_GLOW = 0.55;
+/**
+ * Respiracao lenta somada ao brilho. Fica no lugar do "psiu psiu" da
+ * referencia enquanto o projeto nao tem audio (Fase 03 nao comecou): sem som,
+ * o chamado precisa ser visual, e uma brasa que pulsa le como coisa viva
+ * enquanto uma luz fixa le como cenario.
+ */
+const GLOW_PULSE_AMPLITUDE = 0.25;
+const GLOW_PULSE_PERIOD_MS = 1900;
+
 export interface GameFlowOptions {
   arManager: ArSessionController;
   arenaRoot: TransformNode;
@@ -39,6 +57,18 @@ export interface GameFlowOptions {
   combatEngine: CombatEngine;
   /** Torre que o jogador toca para acordar o inimigo (Beat 5). */
   enemyTowerMesh: Mesh;
+  /**
+   * A torre inimiga como cogumelo: e por ela que o Beat 5 por aproximacao
+   * acende a caverna, abre os olhos e faz os olhos acompanharem a camera.
+   */
+  enemyTower: MushroomTower;
+  /**
+   * Posicao da camera JA convertida ao espaco local do `arenaRoot`, ou `null`
+   * se nao houver camera ativa. Vem de fora (`main.ts`) porque la ja existe
+   * essa conversao, cacheada por frame e compartilhada com a populacao
+   * residente — refazer aqui seria uma segunda inversao de matriz por frame.
+   */
+  getCameraArenaLocalPosition: () => Vector3 | null;
   hudLayer: HudLayer;
   /**
    * Relogio de partida (Etapa 7). Injetado (nao criado aqui) porque o
@@ -53,6 +83,14 @@ export interface GameFlowOptions {
    * aparecer primeiro.
    */
   revealedEnemyCardId: string;
+  /**
+   * Gatilho de proximidade do Beat 5. Injetado (nao criado aqui) porque as
+   * distancias sao calibradas com telemetria de device e quem monta a cena
+   * precisa poder passar outra config sem mexer no fluxo.
+   */
+  proximityTrigger: ProximityTrigger;
+  /** Cada mudanca de estagio do gatilho, para a telemetria de `main.ts`. */
+  onWakeStageChanged?: (stage: WakeStage, distanceUnits: number) => void;
   /** Dona do `onBeforeRenderObservable` que a dissolucao da arena usa para escalonar a saida de cada elemento (Etapa 8). */
   scene: Scene;
   startScreen: StartScreen;
@@ -116,6 +154,15 @@ export class GameFlow {
   private matchOverHoldTimeoutHandle: number | null = null;
   private cancelArenaDissolve: (() => void) | null = null;
 
+  // Posicao da boca da caverna no espaco do `arenaRoot`, calculada uma vez.
+  // O `body` da torre nao tem rotacao nem escala propria (ele E o no que o
+  // `ArenaSystem` pendura no `arenaRoot`), entao somar a posicao local do
+  // marcador basta — nao precisa de matriz de mundo, que em RA ainda traria a
+  // escala de ~0.033 junto e faria a distancia sair em metros no meio de uma
+  // conta em unidades autorais.
+  private readonly caveMouthArenaLocal: Vector3;
+  private lastWakeStage: WakeStage = "asleep";
+
   private readonly modeSelectedObserver: Observer<GameMode>;
   private readonly arenaPlacedObserver: Observer<void>;
   private readonly sessionFailedObserver: Observer<string>;
@@ -125,6 +172,10 @@ export class GameFlow {
 
   public constructor(options: GameFlowOptions) {
     this.options = options;
+
+    this.caveMouthArenaLocal = options.enemyTower.body.position.add(
+      options.enemyTower.caveMouth.position
+    );
 
     this.enemyScriptRunner = new EnemyScriptRunner({
       onDeploy: (deployment) => this.handleEnemyDeployment(deployment),
@@ -182,6 +233,20 @@ export class GameFlow {
    * exibido fica congelado, que e o que "relogio para" pede.
    */
   public update(): void {
+    // Beat 5 por APROXIMACAO. O toque na torre continua funcionando (ver
+    // `handleWorldAliveTap`), mas deixou de ser o unico caminho — e era o
+    // unico, num gesto que falhou em quatro testes de device seguidos. A
+    // telemetria de 2026-08-14 fecha o argumento: a pessoa chegou a 25 cm da
+    // torre, ficou 3,5 s abaixo de 30 cm, e a partida nunca comecou.
+    //
+    // Aproximar-se tambem alinha a mecanica com a METRICA da demo, que e
+    // justamente o quanto a pessoa se aproxima da arena: o gesto que o teste
+    // mede passou a ser o gesto que o jogo pede.
+    if (this.phase === "world-alive") {
+      this.updateEnemyProximity();
+      return;
+    }
+
     if (this.phase !== "playing") {
       return;
     }
@@ -317,21 +382,74 @@ export class GameFlow {
    * acontece. Sem mensagem, sem dica, sem tutorial.
    */
   private handleWorldAliveTap(pickedMesh: AbstractMesh | null): void {
-    if (this.phase !== "world-alive" || this.isAwakeningEnemy) {
+    if (!this.isEnemyTowerPick(pickedMesh)) {
       return;
     }
 
-    if (!this.isEnemyTowerPick(pickedMesh)) {
+    this.awakenEnemy();
+  }
+
+  /**
+   * Estagio do gatilho de proximidade + feedback continuo da caverna. Roda por
+   * frame durante `world-alive`, e e o unico lugar que mexe no visual da torre
+   * inimiga nessa fase.
+   *
+   * O feedback e CONTINUO de proposito: a caverna nao liga num degrau ao
+   * cruzar um limiar, ela responde a cada centimetro. E o que ensina o gesto
+   * sem instrucao nenhuma — a pessoa percebe que chegar perto faz mais coisa
+   * acontecer e chega mais perto de proposito, que e exatamente o
+   * comportamento que a demo existe para medir.
+   */
+  private updateEnemyProximity(): void {
+    const { enemyTower, getCameraArenaLocalPosition, proximityTrigger } = this.options;
+    const cameraLocal = getCameraArenaLocalPosition();
+
+    if (!cameraLocal) {
+      return;
+    }
+
+    const nowMs = performance.now();
+    const distanceUnits = Vector3.Distance(cameraLocal, this.caveMouthArenaLocal);
+    const stage = proximityTrigger.update(distanceUnits, nowMs);
+    const approach = proximityTrigger.getGlowIntensity();
+
+    // Respiracao somada ao brilho de aproximacao, e nao multiplicada: pulso
+    // proporcional sumiria justo quando a caverna esta apagada, que e quando
+    // ela mais precisa chamar atencao.
+    const pulse = GLOW_PULSE_AMPLITUDE * Math.sin((nowMs / GLOW_PULSE_PERIOD_MS) * Math.PI * 2);
+
+    enemyTower.setGlow(RESTING_GLOW + (1 - RESTING_GLOW) * approach + pulse);
+    enemyTower.setEyesOpen(approach);
+    enemyTower.lookAt(cameraLocal);
+
+    if (stage !== this.lastWakeStage) {
+      this.lastWakeStage = stage;
+      this.options.onWakeStageChanged?.(stage, distanceUnits);
+    }
+
+    if (stage === "leaping") {
+      this.awakenEnemy();
+    }
+  }
+
+  /**
+   * O acordar propriamente dito, compartilhado pelos DOIS caminhos de entrada
+   * (aproximacao e toque). Idempotente por `isAwakeningEnemy`: com o gatilho
+   * de proximidade rodando por frame, isto seria chamado a cada frame depois
+   * do salto se nao fosse a guarda.
+   */
+  private awakenEnemy(): void {
+    if (this.phase !== "world-alive" || this.isAwakeningEnemy) {
       return;
     }
 
     this.isAwakeningEnemy = true;
     // Notifica ANTES da animacao: o que a metrica mede e o tempo ate a pessoa
-    // decidir tocar, nao a duracao do efeito.
+    // decidir se aproximar, nao a duracao do efeito.
     this.onEnemyAwakenedObservable.notifyObservers();
 
     void this.options.towerWakeup
-      .play(this.options.enemyTowerMesh, this.options.revealedEnemyCardId)
+      .play(this.options.enemyTower, this.options.revealedEnemyCardId)
       .then(() => {
         this.isAwakeningEnemy = false;
 
@@ -514,6 +632,12 @@ export class GameFlow {
         // enquanto a batalha nao comecou.
         cardDeckSystem.stopRegeneration();
         combatEngine.setActive(false);
+
+        // Gatilho de proximidade zerado a cada entrada no mundo vivo: ele e
+        // TERMINAL depois do salto, entao sem isto a segunda partida da mesma
+        // sessao comecaria ja disparada.
+        this.options.proximityTrigger.reset();
+        this.lastWakeStage = "asleep";
 
         // Em RA quem ancorou a arena foi o ArSessionController; reabilitar
         // aqui e inofensivo, mas mexer em posicao nao e — entao so ligamos o

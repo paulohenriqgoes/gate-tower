@@ -80,6 +80,7 @@ export class HudLayer {
   private readonly playerHealth: TowerHealthControls;
   private readonly enemyHealth: TowerHealthControls;
   private readonly timerText: TextBlock;
+  private readonly arStatusBackground: Rectangle;
 
   private safeArea: SafeAreaInsets = { bottom: 0, left: 0, right: 0, top: 0 };
 
@@ -128,7 +129,7 @@ export class HudLayer {
     this.timerText = new TextBlock("hud-match-timer", "");
     this.timerText.width = "220px";
     this.timerText.height = "48px";
-    this.timerText.fontSize = 30;
+    this.timerText.fontSize = 40;
     this.timerText.color = TIMER_COLOR;
     this.timerText.fontFamily = "Trebuchet MS";
     this.timerText.fontWeight = "bold";
@@ -141,15 +142,32 @@ export class HudLayer {
 
     this.arStatusText = new TextBlock("hud-ar-status", "");
     this.arStatusText.width = "86%";
-    this.arStatusText.height = "56px";
+    this.arStatusText.height = "150px";
     this.arStatusText.color = AR_STATUS_COLOR;
-    this.arStatusText.fontSize = 18;
+    this.arStatusText.fontSize = 40;
     this.arStatusText.fontFamily = "Trebuchet MS";
     this.arStatusText.textWrapping = true;
     this.arStatusText.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     this.arStatusText.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     this.arStatusText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     this.arStatusText.isHitTestVisible = false;
+
+    // Fundo (placa de contraste) atras do texto de posicionamento de RA.
+    // O texto vive em cima do feed da camera e precisa de contraste garantido
+    // por fundo semi-opaco, nao por cor de fonte. A geometria acompanha o mesmo
+    // sistema de safe-area que o texto ja usa.
+    this.arStatusBackground = new Rectangle("hud-ar-status-bg");
+    this.arStatusBackground.width = "90%";
+    this.arStatusBackground.height = "160px";
+    this.arStatusBackground.background = "#0f172acc";
+    this.arStatusBackground.cornerRadius = 12;
+    this.arStatusBackground.thickness = 0;
+    this.arStatusBackground.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    this.arStatusBackground.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.arStatusBackground.isHitTestVisible = false;
+    this.arStatusBackground.isPointerBlocker = false;
+    this.texture.addControl(this.arStatusBackground);
+
     this.texture.addControl(this.arStatusText);
 
     this.refreshSafeArea();
@@ -188,7 +206,7 @@ export class HudLayer {
 
     const isLastMinute = remainingMs <= TIMER_WARNING_THRESHOLD_MS;
     this.timerText.color = isLastMinute ? TIMER_WARNING_COLOR : TIMER_COLOR;
-    this.timerText.fontSize = isLastMinute ? 36 : 30;
+    this.timerText.fontSize = isLastMinute ? 48 : 40;
   }
 
   /** Barra grossa e opaca + numero. Uma de cada lado do topo. */
@@ -218,7 +236,9 @@ export class HudLayer {
     this.zones.thumb.paddingBottom = `${BASE_MARGIN + this.safeArea.bottom * scale}px`;
     this.zones.thumb.paddingLeft = `${this.safeArea.left * scale}px`;
     this.zones.thumb.paddingRight = `${this.safeArea.right * scale}px`;
-    this.arStatusText.top = `${BASE_MARGIN + this.safeArea.top * scale}px`;
+    const arStatusTop = `${BASE_MARGIN + this.safeArea.top * scale}px`;
+    this.arStatusText.top = arStatusTop;
+    this.arStatusBackground.top = arStatusTop;
   }
 
   /**
@@ -240,6 +260,9 @@ export class HudLayer {
   public setArStatus(text: string, isWarning = false): void {
     this.arStatusText.text = text;
     this.arStatusText.color = isWarning ? AR_STATUS_WARNING_COLOR : AR_STATUS_COLOR;
+    // Reavalia a placa de fundo: ela depende do texto ter conteudo, entao
+    // trocar o texto pode liga-la ou desliga-la.
+    this.refreshArStatusVisibility();
   }
 
   public setArStatusVisible(visible: boolean): void {
@@ -300,8 +323,25 @@ export class HudLayer {
     return this.texture.getSize().width / canvas.clientWidth / ratio;
   }
 
+  /**
+   * A placa de fundo segue o texto — e tambem some quando o texto esta VAZIO.
+   *
+   * Sao dois defeitos que a placa introduziu e que so aparecem no device:
+   *
+   * 1. Ela nao era escondida junto com o texto. Depois de ancorar a arena o
+   *    jogo entra em `world-alive`, que chama `setArStatusVisible(false)` — o
+   *    texto sumia e o retangulo escuro ficava na tela pelo resto da sessao.
+   *    O Beat 4 exige tela COMPLETAMENTE limpa: sem HUD, sem timer, sem
+   *    prompt. Uma caixa preta flutuando sobre a mesa e o oposto disso.
+   * 2. Mensagem vazia (`setArStatus("")`, usado entre estados do gate de
+   *    posicionamento) deixava uma placa sem nada dentro. Fundo so faz sentido
+   *    quando ha texto para contrastar.
+   */
   private refreshArStatusVisibility(): void {
-    this.arStatusText.isVisible = this.isArPlacementStatusVisible && !this.isBattleHudVisible;
+    const isVisible = this.isArPlacementStatusVisible && !this.isBattleHudVisible;
+
+    this.arStatusText.isVisible = isVisible;
+    this.arStatusBackground.isVisible = isVisible && this.arStatusText.text.length > 0;
   }
 
   private createTowerHealthControls(
@@ -345,7 +385,7 @@ export class HudLayer {
     numberText.height = "26px";
     numberText.top = `${HEALTH_BAR_HEIGHT + 4}px`;
     numberText.color = "#f8fafc";
-    numberText.fontSize = 20;
+    numberText.fontSize = 30;
     numberText.fontFamily = "Trebuchet MS";
     numberText.fontWeight = "bold";
     numberText.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;

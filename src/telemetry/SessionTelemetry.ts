@@ -32,6 +32,14 @@ export type TelemetryEvent =
       total: number;
     }
   | { type: "enemy_awakened" }
+  /**
+   * Estagio do gatilho de proximidade da torre inimiga (dorme -> espia ->
+   * salta). E o que permite calibrar as distancias com dado em vez de
+   * palpite: os limiares atuais sairam da sessao de 2026-08-14, onde a
+   * mediana de distancia foi 1,91 m e o minimo 0,25 m. Sem este evento nao ha
+   * como saber se a pessoa chegou a espiar e recuou, ou nem chegou perto.
+   */
+  | { type: "wake_stage_changed"; stage: string; distanceMeters: number }
   | { type: "camera_distance_sample"; meters: number }
   | { type: "card_deployed"; cardId: string; x: number; z: number; remainingMs: number }
   | { type: "deploy_cancelled" }

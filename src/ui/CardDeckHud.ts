@@ -19,6 +19,24 @@ const CARD_SPACING = 12;
 const ROW_SPACING = 10;
 
 /**
+ * Pulso do anel de cogumelos quando o jogador toca numa carta que nao pode
+ * pagar.
+ *
+ * Sem isto, `CardDeckSystem.selectCard` recusa em SILENCIO: a carta ja nasce
+ * esmaecida (`alpha` 0.45 no `DiamondCard`), mas em cima do feed da camera,
+ * num celular, essa diferenca some — e o jogador conclui que a carta esta
+ * quebrada. Foi exatamente o relato do device em 2026-08-14 ("as cartas nao
+ * funcionavam todas"): o deck comeca com 4 cogumelos e o Cururu custa 5, entao
+ * uma das quatro cartas e de fato inclicavel no comeco da partida, por regra.
+ *
+ * O pulso e no ANEL, nao na carta: a carta nao e o problema, a falta de
+ * cogumelo e. Apontar para a causa ensina a economia; sacudir a carta so
+ * diria "nao".
+ */
+const INSUFFICIENT_FLASH_MS = 420;
+const INSUFFICIENT_FLASH_SCALE = 0.18;
+
+/**
  * HUD de batalha: widget circular de cogumelos + fileira horizontal de
  * cartas, ambos dentro da zona `thumb` do `HudLayer` (terço inferior, zona do
  * polegar). Os cogumelos ficam IMEDIATAMENTE acima da fileira — nao existe
@@ -41,6 +59,9 @@ export class CardDeckHud {
   private isBlinking = false;
   private blinkVisible = true;
   private blinkElapsed = 0;
+  // Tempo restante do pulso de "cogumelo insuficiente". Anima ESCALA, nunca
+  // alpha — alpha ja tem dono (o blink de anel cheio) e os dois brigariam.
+  private insufficientFlashRemainingMs = 0;
 
   public constructor(scene: Scene, deckSystem: CardDeckSystem, hud: HudLayer) {
     this.scene = scene;
@@ -101,7 +122,12 @@ export class CardDeckHud {
 
     for (const card of this.deckSystem.getSnapshot().cards) {
       const view = new DiamondCard(card, (cardId) => {
-        this.deckSystem.selectCard(cardId);
+        // `selectCard` devolve false quando faltam cogumelos. Antes esse
+        // `false` era descartado e a recusa nao chegava ao jogador de forma
+        // nenhuma — ver `INSUFFICIENT_FLASH_MS`.
+        if (!this.deckSystem.selectCard(cardId)) {
+          this.insufficientFlashRemainingMs = INSUFFICIENT_FLASH_MS;
+        }
       });
 
       this.cardRow.addControl(view.root);
@@ -115,10 +141,14 @@ export class CardDeckHud {
 
     // Animação de blink via registerBeforeRender
     this.scene.registerBeforeRender(() => {
+      const deltaMs = this.scene.getEngine().getDeltaTime();
+
+      this.updateInsufficientFlash(deltaMs);
+
       if (!this.isBlinking) {
         return;
       }
-      this.blinkElapsed += this.scene.getEngine().getDeltaTime();
+      this.blinkElapsed += deltaMs;
       if (this.blinkElapsed >= 400) {
         this.blinkElapsed = 0;
         this.blinkVisible = !this.blinkVisible;
@@ -151,6 +181,33 @@ export class CardDeckHud {
     }
 
     this.battleColumn.dispose();
+  }
+
+  /**
+   * Meia onda de seno na escala do anel: cresce e volta, sem degrau nem
+   * estado residual. Quando o tempo acaba a escala e forcada de volta a 1,
+   * porque a curva so chega perto de 1 — deixar 0,999 acumularia deriva a
+   * cada toque recusado.
+   */
+  private updateInsufficientFlash(deltaMs: number): void {
+    if (this.insufficientFlashRemainingMs <= 0) {
+      return;
+    }
+
+    this.insufficientFlashRemainingMs -= deltaMs;
+
+    if (this.insufficientFlashRemainingMs <= 0) {
+      this.insufficientFlashRemainingMs = 0;
+      this.ringContainer.scaleX = 1;
+      this.ringContainer.scaleY = 1;
+      return;
+    }
+
+    const progress = 1 - this.insufficientFlashRemainingMs / INSUFFICIENT_FLASH_MS;
+    const scale = 1 + INSUFFICIENT_FLASH_SCALE * Math.sin(progress * Math.PI);
+
+    this.ringContainer.scaleX = scale;
+    this.ringContainer.scaleY = scale;
   }
 
   private render(snapshot: CardDeckSnapshot): void {

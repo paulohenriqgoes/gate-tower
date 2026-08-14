@@ -13,13 +13,17 @@ import {
 } from "@babylonjs/gui";
 
 import { CARD_CATALOG } from "../cards/cardCatalog";
+import { createCrazyRabbit, RABBIT_LEAP_DURATION_MS, type CrazyRabbit } from "./CrazyRabbit";
+import type { MushroomTower } from "./MushroomTower";
 
 const FPS = 60;
 
 // Duracao do "acordar" da torre (a spec pede 1,2 a 1,8 s).
 const WAKE_DURATION_MS = 1300;
-// A carta entra depois do primeiro tranco, quando o olhar ja foi para a torre.
-const REVEAL_DELAY_MS = 350;
+// A carta entra depois do coelho ja ter POUSADO (~1,10 s no `CrazyRabbit`):
+// ler texto exige alvo parado, e durante o voo o olhar esta perseguindo o
+// bicho. Ver `RABBIT_LEAP_DURATION_MS` — os dois numeros andam juntos.
+const REVEAL_DELAY_MS = 1150;
 // Tempo total da carta em tela, incluindo as duas transicoes de alpha. O miolo
 // legivel (alpha 1) fica em ~1,5 s, que e o que a spec pede.
 const REVEAL_DURATION_MS = 1900;
@@ -68,6 +72,10 @@ export class TowerWakeup {
   private resolveActivePlay: (() => void) | null = null;
   private isDisposed = false;
 
+  // Criado na primeira vez que a torre acorda e reaproveitado depois. Nao e
+  // construido junto com o `TowerWakeup` porque a torre so chega no `play`.
+  private rabbit: CrazyRabbit | null = null;
+
   public constructor(scene: Scene) {
     this.scene = scene;
   }
@@ -76,7 +84,7 @@ export class TowerWakeup {
    * Toca o "acordar" e a revelacao da carta. Resolve quando a cena voltou ao
    * repouso — quem chama so entra em `playing` depois disso.
    */
-  public play(towerMesh: Mesh, revealedCardId: string): Promise<void> {
+  public play(tower: MushroomTower, revealedCardId: string): Promise<void> {
     if (this.isDisposed) {
       return Promise.resolve();
     }
@@ -86,11 +94,18 @@ export class TowerWakeup {
       return this.activePlay;
     }
 
-    this.vibrate();
-    this.animateTower(towerMesh);
-    this.schedule(() => this.showReveal(revealedCardId), REVEAL_DELAY_MS);
+    const rabbit = this.ensureRabbit(tower);
 
-    const totalMs = Math.max(WAKE_DURATION_MS, REVEAL_DELAY_MS + REVEAL_DURATION_MS);
+    this.vibrate();
+    this.animateTower(tower.body);
+    rabbit.play();
+    this.schedule(() => this.showReveal(revealedCardId, rabbit), REVEAL_DELAY_MS);
+
+    const totalMs = Math.max(
+      WAKE_DURATION_MS,
+      RABBIT_LEAP_DURATION_MS,
+      REVEAL_DELAY_MS + REVEAL_DURATION_MS
+    );
 
     this.activePlay = new Promise<void>((resolve) => {
       this.resolveActivePlay = resolve;
@@ -119,6 +134,9 @@ export class TowerWakeup {
       material.dispose();
     }
     this.pulseMaterials.clear();
+
+    this.rabbit?.dispose();
+    this.rabbit = null;
 
     this.revealTexture?.dispose();
     this.revealTexture = null;
@@ -257,7 +275,15 @@ export class TowerWakeup {
    * completamente limpa, entao nada disso pode existir montado no HUD de jogo
    * antes da hora.
    */
-  private showReveal(revealedCardId: string): void {
+  private ensureRabbit(tower: MushroomTower): CrazyRabbit {
+    if (!this.rabbit) {
+      this.rabbit = createCrazyRabbit(this.scene, tower.caveMouth, tower.facingSignZ);
+    }
+
+    return this.rabbit;
+  }
+
+  private showReveal(revealedCardId: string, rabbit: CrazyRabbit): void {
     const card = CARD_CATALOG.find((entry) => entry.id === revealedCardId);
 
     if (!card) {
@@ -275,6 +301,13 @@ export class TowerWakeup {
     this.revealCost.text = `\u{1F344} ${card.cost}`;
     this.revealAccent.background = card.accentColor;
     this.revealPanel.isVisible = true;
+
+    // O painel gruda no COELHO, nao no centro da tela. A carta e o que ele
+    // trouxe de dentro da caverna — centralizada, ela vira HUD e desliga o
+    // jogador do mundo justo no instante em que a demo mais precisa dele
+    // olhando para a mesa. `linkOffsetY` negativo sobe o painel na tela.
+    this.revealPanel.linkWithMesh(rabbit.anchor);
+    this.revealPanel.linkOffsetY = -REVEAL_PANEL_HEIGHT * 0.85;
 
     const totalFrames = Math.round((REVEAL_DURATION_MS / 1000) * FPS);
     const fadeInFrames = Math.round((REVEAL_FADE_IN_MS / 1000) * FPS);
@@ -301,6 +334,10 @@ export class TowerWakeup {
   private hideReveal(): void {
     if (this.revealPanel) {
       this.revealPanel.isVisible = false;
+      // Solta o vinculo com o coelho: um controle preso a uma mesh continua
+      // sendo reposicionado a cada frame mesmo invisivel, e a mesh vai ser
+      // desligada quando ele voltar para a caverna.
+      this.revealPanel.linkWithMesh(null);
     }
   }
 

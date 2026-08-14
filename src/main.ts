@@ -7,7 +7,7 @@ import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Scene } from "@babylonjs/core/scene";
 
 import type { ArSessionController } from "./ar/ArSessionController";
-import { ArenaSystem } from "./arena/ArenaSystem";
+import { ArenaSystem, AR_ARENA_SCALE } from "./arena/ArenaSystem";
 import { ENEMY_SCRIPT } from "./battle/EnemyScript";
 import { MatchClock } from "./battle/MatchClock";
 import { CARD_CATALOG } from "./cards/cardCatalog";
@@ -17,6 +17,8 @@ import { DeploymentZone } from "./combat/DeploymentZone";
 import { GameFlow } from "./game/GameFlow";
 import { WorldTapRouter } from "./interaction/WorldTapRouter";
 import { SessionTelemetry } from "./telemetry/SessionTelemetry";
+import { createCautionSign } from "./towers/CautionSign";
+import { ProximityTrigger } from "./towers/ProximityTrigger";
 import { TowerWakeup } from "./towers/TowerWakeup";
 import { UnitFactory } from "./units/UnitFactory";
 import { ResidentPopulation } from "./units/idle/ResidentPopulation";
@@ -29,6 +31,13 @@ import { EighthWallARManager } from "./ar/EighthWallARManager";
 import { frameArenaCamera, measureArenaExtents } from "./camera/arenaFraming";
 import { FullscreenToggle } from "./ui/FullscreenToggle";
 import { onOrientationChange } from "./ui/screenOrientation";
+
+/**
+ * Divergencia em px CSS entre o canvas e o tamanho de render a partir da qual
+ * vale reprojetar mesmo com a sessao de RA no ar. Acima disso o toque comeca a
+ * cair visivelmente fora do alvo; abaixo, e arredondamento.
+ */
+const CANVAS_SYNC_TOLERANCE_PX = 2;
 
 function formatErrorTrace(error: unknown): string {
 	if (error instanceof Error) {
@@ -430,6 +439,16 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	const towerWakeup = new TowerWakeup(scene);
 	const offscreenIndicator = new OffscreenIndicator({ hud: hudLayer, scene });
 
+	// Beat 5 por aproximacao. As distancias default saem da telemetria de
+	// device de 2026-08-14 (ver `ProximityTrigger`), nao de palpite.
+	const proximityTrigger = new ProximityTrigger();
+
+	// A placa "CUIDADO" e a unica instrucao que a spec do Beat 4 permite: ela e
+	// cenario dentro do mundo, nao HUD. E ela so cumpre o papel porque e
+	// ilegivel de longe — quem quiser ler tem que chegar perto, e chegar perto
+	// E o gatilho. Encostada na torre INIMIGA, a que tem a caverna.
+	createCautionSign(scene, arena.mushroomTowers.enemy.body);
+
 	// A demo existe para medir UMA coisa: quanto tempo a pessoa fica no mundo
 	// vivo antes de acordar o inimigo (`arena_placed` -> `enemy_awakened`).
 	const telemetry = new SessionTelemetry();
@@ -442,8 +461,22 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		cardDeckSystem,
 		combatEngine,
 		enemyTowerMesh,
+		enemyTower: arena.mushroomTowers.enemy,
+		// Mesma conversao ja usada pela populacao residente: uma inversao de
+		// matriz por frame, compartilhada. Em RA o `arenaRoot` esta transladado,
+		// rotacionado e escalado em ~0.033 — sem converter, a distancia ate a
+		// caverna sairia em metros no meio de uma conta em unidades autorais.
+		getCameraArenaLocalPosition: getCameraPosition,
 		hudLayer,
 		matchClock,
+		proximityTrigger,
+		onWakeStageChanged: (stage, distanceUnits) => {
+			telemetry.log({
+				type: "wake_stage_changed",
+				stage,
+				distanceMeters: distanceUnits * AR_ARENA_SCALE,
+			});
+		},
 		// Carta que a torre revela ao acordar: a PRIMEIRA carta do script fixo
 		// do inimigo (Etapa 7) — a mesma que vai aparecer primeiro na partida.
 		revealedEnemyCardId: ENEMY_SCRIPT[0].cardId,
@@ -574,16 +607,45 @@ async function bootstrap(): Promise<void> {
 	// de o jogador dizer se vai jogar em RA (que roda destravada, sem tela
 	// cheia) ou na tela. Quem aplica a politica de cada modo e o GameFlow.
 
-	// Pula o engine.resize() enquanto a sessao de RA estiver ativa. Decisao
-	// tomada (nao mais suspeita): o engine do 8th Wall ja detecta mudanca de
-	// canvas sozinho a cada frame no pre-render e dispara `onCanvasSizeChange`
-	// por conta propria — chamar `engine.resize()` por fora e redundante, e era
-	// o principal suspeito de deixar a projecao fora de sincronia com o canvas
-	// (canvas com aspecto novo contra intrinsics congeladas com aspecto velho
-	// esticam a cena). `relayout()` continua rodando sempre: o HUD precisa
-	// reler a safe-area mesmo sem o engine.resize().
+	// Fora da RA, sempre redimensiona. DENTRO da RA, so quando o canvas CSS e o
+	// tamanho de render de fato divergiram.
+	//
+	// A regra antiga era "nunca redimensionar durante a RA", pelo motivo certo:
+	// o engine do 8th Wall detecta mudanca de canvas sozinho a cada frame, e
+	// reprojetar no meio do tracking e ruido gratuito. O que ela nao previu e
+	// que `engine.resize()` e tambem o UNICO gatilho de
+	// `engine.onResizeObservable` — e e nele que o `AdvancedDynamicTexture` de
+	// tela cheia recalcula o proprio tamanho. Pulado o resize, a textura do HUD
+	// congela no tamanho antigo enquanto o canvas muda, e o picking do GUI
+	// (`textureSize / getRenderHeight()`) passa a mapear o toque para o lugar
+	// errado: os controles aparecem e nao respondem.
+	//
+	// Prova em device (2026-08-14): entrando em RA ja em tela cheia — caso em
+	// que o resize acontece ANTES da sessao subir, quando ainda e permitido —
+	// as cartas funcionaram e a partida foi jogada ate o fim. SAINDO da tela
+	// cheia com a sessao no ar, nenhuma carta respondeu mais. E exatamente o
+	// caminho que a regra antiga deixava sem conserto.
+	//
+	// A guarda por divergencia mantem o espirito da regra: em regime normal
+	// nada acontece, e o resize so entra quando a alternativa e um ponteiro
+	// permanentemente quebrado. `relayout()` continua rodando sempre.
+	const isCanvasOutOfSync = (): boolean => {
+		const canvas = engine.getRenderingCanvas();
+
+		if (!canvas) {
+			return false;
+		}
+
+		const scaling = engine.getHardwareScalingLevel();
+
+		return (
+			Math.abs(canvas.clientWidth - engine.getRenderWidth() * scaling) > CANVAS_SYNC_TOLERANCE_PX
+			|| Math.abs(canvas.clientHeight - engine.getRenderHeight() * scaling) > CANVAS_SYNC_TOLERANCE_PX
+		);
+	};
+
 	onOrientationChange(() => {
-		if (!isArSessionActive()) {
+		if (!isArSessionActive() || isCanvasOutOfSync()) {
 			engine.resize();
 		}
 

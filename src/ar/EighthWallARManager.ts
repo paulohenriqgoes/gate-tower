@@ -1028,10 +1028,12 @@ export class EighthWallARManager implements ArSessionController {
         }
 
         hasDumpedEventKeys = true;
-        // O bundle do engine e fechado e nossa tipagem dos callbacks e parcial;
-        // este dump em tela e o que permite tipar o resto a partir do que ele
-        // realmente entrega, em vez de assumir nomes.
-        this.diagnostics?.setField("eventKeys", Object.keys(event).join(","));
+        // O dump das chaves do evento (`Object.keys(event).join(",")`) ja
+        // cumpriu o papel dele: a tipagem em `src/types/xr8.d.ts` e o
+        // `reportVideoSize` abaixo saem justamente do que ele revelou. Fica
+        // so a contagem — a lista inteira e uma linha longa demais e, no
+        // device, ela empurrava o resto do painel para fora da tela.
+        this.diagnostics?.setField("eventKeys", `${Object.keys(event).length} chaves`);
       },
       onVideoSizeChange: (event) => {
         this.reportVideoSize(event);

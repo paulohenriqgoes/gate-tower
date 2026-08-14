@@ -22,6 +22,14 @@ const DIMENSION_ASSIGNMENT = /\b(?:width|height)\s*=\s*"([^"$]*)"/g;
 // alguns controles limpam o valor.
 const VALID_DIMENSION = /^(?:-?\d+(?:\.\d+)?(?:px|%))?$/;
 
+// Casa `fontSize = NN` com numero literal. Busca por atribuicoes diretas de
+// fontSize a numeros, nao strings (por ex., `fontSize = 18` em vez de `fontSize = "18px"`).
+const FONTSIZE_ASSIGNMENT = /\.fontSize\s*=\s*(\d+)/g;
+
+// Piso minimo de legibilidade em device: ~16px CSS numa tela retrato de ~412px.
+// Com idealRatio ~0,57, fontSize 28 no espaco ideal vira ~16px CSS.
+const MIN_FONTSIZE = 28;
+
 const collectTsFiles = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
@@ -38,11 +46,13 @@ const collectTsFiles = (dir: string): string[] =>
 describe("unidades de dimensao do Babylon GUI", () => {
   it("nenhum controle em src/ui usa unidade invalida", () => {
     const offenders: string[] = [];
+    let dimensionCount = 0;
 
     for (const file of collectTsFiles(UI_DIR)) {
       const source = readFileSync(file, "utf8");
 
       for (const match of source.matchAll(DIMENSION_ASSIGNMENT)) {
+        dimensionCount++;
         const value = match[1];
 
         if (!VALID_DIMENSION.test(value)) {
@@ -52,6 +62,43 @@ describe("unidades de dimensao do Babylon GUI", () => {
     }
 
     expect(offenders).toEqual([]);
+    expect(dimensionCount).toBeGreaterThan(0);
+  });
+
+  it("nenhum texto em src/ui tem fontSize abaixo do piso de legibilidade (exceto DiagnosticsOverlay)", () => {
+    const offenders: string[] = [];
+    let fontSizeCount = 0;
+
+    for (const file of collectTsFiles(UI_DIR)) {
+      // A UNICA excecao e o painel de debug: ele so existe atras de `?debug=1`,
+      // e a fonte pequena e o que permite caber uma dezena de campos numa
+      // coluna sem tapar o jogo.
+      //
+      // `DiamondCard.ts` chegou a ficar nesta lista, e nao devia: a carta
+      // estava com `fontSize` 24 e o arquivo INTEIRO foi excluido da guarda
+      // para o teste passar. Isso inverte o proposito de uma guarda — ela
+      // passa a se ajustar ao codigo em vez de segura-lo, e leva junto todo
+      // valor futuro daquele arquivo. A restricao de geometria que motivou a
+      // excecao nao existia: 28 cabe com folga na carta (ver o comentario em
+      // `DiamondCard.ts`). Antes de excluir um arquivo daqui, meca.
+      if (file.includes("DiagnosticsOverlay.ts")) {
+        continue;
+      }
+
+      const source = readFileSync(file, "utf8");
+
+      for (const match of source.matchAll(FONTSIZE_ASSIGNMENT)) {
+        fontSizeCount++;
+        const size = parseInt(match[1], 10);
+
+        if (size < MIN_FONTSIZE) {
+          offenders.push(`${file.split("/src/")[1]}: fontSize = ${size}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+    expect(fontSizeCount).toBeGreaterThan(0);
   });
 
   it("reconhece 'auto' como invalido", () => {

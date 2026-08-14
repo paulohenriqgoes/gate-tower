@@ -60,7 +60,7 @@ export class StartScreen {
     subtitle.width = "100%";
     subtitle.height = "72px";
     subtitle.color = SUBTITLE_COLOR;
-    subtitle.fontSize = 20;
+    subtitle.fontSize = 28;
     subtitle.fontFamily = "Trebuchet MS";
     subtitle.textWrapping = true;
     subtitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
@@ -78,7 +78,7 @@ export class StartScreen {
     this.messageText.width = "100%";
     this.messageText.height = "48px";
     this.messageText.color = MESSAGE_COLOR;
-    this.messageText.fontSize = 16;
+    this.messageText.fontSize = 32;
     this.messageText.fontFamily = "Trebuchet MS";
     this.messageText.textWrapping = true;
     this.messageText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
@@ -139,7 +139,7 @@ export class StartScreen {
     button.width = "100%";
     button.height = `${BUTTON_HEIGHT}px`;
     button.color = "white";
-    button.fontSize = 26;
+    button.fontSize = 30;
     button.fontFamily = "Trebuchet MS";
     button.cornerRadius = 16;
     button.thickness = 0;

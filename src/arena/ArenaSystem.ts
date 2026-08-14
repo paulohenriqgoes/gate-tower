@@ -8,7 +8,8 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
 import { createContactShadow } from "../fx/contactShadow";
-import { applyMatteFinish, createMatteMaterial, PALETTE } from "../fx/materials";
+import { applyMatteFinish, PALETTE } from "../fx/materials";
+import { createMushroomTower, type MushroomTower } from "../towers/MushroomTower";
 
 /**
  * Arena de mesa: o maior eixo da arena mede 80 cm no mundo real.
@@ -37,6 +38,13 @@ export interface ArenaBuildResult {
   ground: Mesh;
   towerDefinitions: ArenaTowerDefinition[];
   towerMeshes: Mesh[];
+  /**
+   * As torres como cogumelos, indexadas por time. `towerMeshes` continua
+   * entregando so o mesh (e o que o combate precisa); quem precisa acender a
+   * caverna, abrir os olhos ou saber onde fica a boca — o Beat 5 por
+   * aproximacao — precisa do objeto inteiro.
+   */
+  mushroomTowers: Record<TeamId, MushroomTower>;
 }
 
 export interface ArenaLayout {
@@ -162,7 +170,8 @@ export class ArenaSystem {
     // grid ficam escondidos em RA (isVisible=false tiraria a mesh do picking).
     baseGround.visibility = 0;
 
-    const towerMeshes = this.createTowerPlaceholders(arenaRoot);
+    const mushroomTowers = this.createTowers(arenaRoot);
+    const towerMeshes = [mushroomTowers.player.body, mushroomTowers.enemy.body];
 
     // Limites derivados de verdade da geometria (metade da extensao do grid).
     // Antes eram `±gridX`/`±gridZ`, que so batia por coincidencia com o grid
@@ -195,45 +204,31 @@ export class ArenaSystem {
         };
       }),
       towerMeshes,
+      mushroomTowers,
     };
   }
 
-  private createTowerPlaceholders(arenaRoot: TransformNode): Mesh[] {
-    const blueTowerMaterial = createMatteMaterial(this.scene, PALETTE.towerPlayer, "blue-tower-material");
-    const redTowerMaterial = createMatteMaterial(this.scene, PALETTE.towerEnemy, "red-tower-material");
-
+  private createTowers(arenaRoot: TransformNode): Record<TeamId, MushroomTower> {
     // UMA torre por lado, ambas em x = 0, no fim do caminho central. O nome
-    // segue `tower-<cor>-<lane>` porque `buildInitialArena` deriva team/lane
-    // dele.
+    // do `body` segue `tower-<cor>-<lane>` porque `buildInitialArena` deriva
+    // team/lane dele — `createMushroomTower` cuida disso internamente.
     const lane: TowerLaneId = "center";
-    const towers: Mesh[] = [];
 
-    // Torres simples para validar os lados do campo antes dos modelos finais.
-    const blueTower = MeshBuilder.CreateCylinder(
-      `tower-blue-${lane}`,
-      { diameter: 1.6, height: 2.8, tessellation: 24 },
-      this.scene
-    );
-    blueTower.position = new Vector3(0, 1.5, -this.towerZ);
-    blueTower.material = blueTowerMaterial;
-    blueTower.parent = arenaRoot;
-    towers.push(blueTower);
+    // Etapa 2: cilindro placeholder virou cogumelo (`MushroomTower.ts`) —
+    // aqui so troca a fabrica, o resto (blob de contato, parentesco no
+    // `arenaRoot`) continua igual. `root` E o proprio `body`, de proposito:
+    // o combate le `mesh.position` esperando a posicao em espaco de arena.
+    const player = createMushroomTower(this.scene, { lane, team: "player", x: 0, z: -this.towerZ });
+    player.root.parent = arenaRoot;
     // Blob 1.25x o diametro da torre: com a arena 1.5x menor, o antigo 2.4
     // (1.5x) virava uma mancha grande demais para o campo.
     this.addContactBlob(arenaRoot, 0, -this.towerZ, 2);
 
-    const redTower = MeshBuilder.CreateCylinder(
-      `tower-red-${lane}`,
-      { diameter: 1.6, height: 2.8, tessellation: 24 },
-      this.scene
-    );
-    redTower.position = new Vector3(0, 1.5, this.towerZ);
-    redTower.material = redTowerMaterial;
-    redTower.parent = arenaRoot;
-    towers.push(redTower);
+    const enemy = createMushroomTower(this.scene, { lane, team: "enemy", x: 0, z: this.towerZ });
+    enemy.root.parent = arenaRoot;
     this.addContactBlob(arenaRoot, 0, this.towerZ, 2);
 
-    return towers;
+    return { player, enemy };
   }
 
   /** Sombra de contato (blob) sob uma torre, para ancora-la ao piso. */
