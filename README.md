@@ -9,30 +9,46 @@ pessoas reais testando, se *a pessoa acredita que apareceu um mundo vivo na mesa
 dela*. Registro da investigacao em
 [`docs/experimentos/demo-mundo-vivo.md`](docs/experimentos/demo-mundo-vivo.md).
 
-### Bloqueadores conhecidos (2026-08-12, vistos em device)
+### Bloqueadores conhecidos (2026-08-14, vistos em device)
 
 Leia isto antes de mexer em qualquer coisa:
 
-1. **As cartas nao aparecem quando a batalha comeca** — nao da para jogar.
-   Causa-raiz identificada: `src/ui/CardDeckHud.ts:83` faz
-   `cardRow.height = "auto"`, e **o Babylon GUI nao tem unidade `auto`** — o
-   valor vira `NaN` em silencio.
-2. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
-   antigo). A camera liga e mais nada acontece. Suspeito nomeado: o projeto
-   **nunca chama `XR8.run()` nem `XR8.stop()`** — o ciclo de vida inteiro esta
-   delegado ao `xrCameraBehavior`, entao "sair da RA" solta a camera do Babylon
-   mas nao para o engine. Bloqueia testar com varias pessoas seguidas.
-3. **Colocar a arena em RA exige insistencia** e o aviso "aponte para uma
-   superficie maior" nao diz o que fazer.
-4. **O Beat 5 so funciona por tras da torre inimiga** — o toque nao pega de onde
-   o jogador olha.
+1. **Em RA o toque na carta nao registra** — as cartas aparecem, mas nao
+   respondem, entao a batalha em RA nao existe. Em **modo tela funciona**.
+   Substituiu o bug do `NaN` como o motivo de "nao da para jogar". Hipoteses e
+   teste que as decide na hipotese 6 de
+   [`docs/experimentos/demo-mundo-vivo.md`](docs/experimentos/demo-mundo-vivo.md).
+2. **As mensagens de status sao ilegiveis** — "extremamente pequena, nao da para
+   ler". Enquanto isso durar, nenhum texto de feedback chega ao jogador.
+3. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
+   antigo, nao tocado ate agora). A camera liga e mais nada acontece. Suspeito
+   nomeado: o projeto **nunca chama `XR8.run()` nem `XR8.stop()`** — o ciclo de
+   vida inteiro esta delegado ao `xrCameraBehavior`, entao "sair da RA" solta a
+   camera do Babylon mas nao para o engine. Bloqueia testar com varias pessoas
+   seguidas.
+4. **O Beat 5 nao e intuitivo** — o toque na torre inimiga nao pega de onde o
+   jogador olha (terceira confirmacao em device).
+5. **Colocar a arena numa mesa/bancada continua sem veredito** — funciona no
+   chao; na mesa o usuario nao conseguiu antes da inversao do gate e nao
+   retestou depois.
 
 ### Entregue
 
-Compila, com 111 testes de logica pura passando. **O que foi confirmado em
+Compila, com 160 testes de logica pura passando. **O que foi confirmado em
 device e o que so compila esta separado na tabela "Estado atual" do diario** —
 consulte antes de assumir que algo funciona.
 
+- **colocacao da arena por contorno fantasma** (`src/ar/ArenaGhost.ts`): o
+  contorno real de 0,53 m x 0,80 m aparece deitado na superficie e muda de cor
+  conforme da para ancorar ali, antes do toque. O toque so confirma. **Confirmado
+  em device no chao (2026-08-14): zero recusas, ancorou no primeiro toque**
+- **o gate de colocacao recusa por prova contraria, nao por falta de prova**
+  (`src/ar/placementGate.ts`): sonda de hitTest sem leitura nao reprova nada;
+  so reprovam duas ou mais sondas que batam em superficie real fora do plano
+  (a borda da mesa). A politica anterior, que exigia confirmacao positiva,
+  produziu 79 recusas e zero ancoragens em dois testes de device
+- **partida completa de ponta a ponta rodando em device** (2026-08-14): ancorar,
+  explorar, acordar o inimigo e chegar ao fim da partida
 - arena de mesa metrica: 16 x 24 unidades autorais que em RA valem **0,53 m x 0,80 m**, com escala **fixa** (sem slider)
 - **uma torre de cada lado** (`tower-blue-center` em z = -10, `tower-red-center` em z = +10) e **caminho central unico** (mundo x em [-2, 2]) atravessando a faixa de rio
 - a superficie detectada e **medida** antes de ancorar: se nao couber a arena de 80 cm, o toque nao posiciona e o jogo pede uma superficie maior — a arena nunca e reescalada para caber
@@ -114,11 +130,20 @@ de jogo quando a spec da demo tirou paisagem de escopo.
   para metros e a constante `AR_ARENA_SCALE` (`0.8 / 24 ≈ 0.0333`), exportada por
   `src/arena/ArenaSystem.ts`. O slider de escala foi removido: ele so serviria
   para o jogador desmentir o tamanho da arena.
-- Antes de ancorar, o app **mede a extensao da superficie**: uma segunda rodada
-  de hitTests, mais larga que a do fit, mede a caixa envolvente dos pontos que
-  pertencem ao plano detectado, nos dois eixos da arena. Se a superficie nao
-  comporta os 0,53 m x 0,80 m, o toque nao posiciona nada e a tela pede "Aponte
-  para uma superficie maior". A arena **nunca** e reescalada para caber.
+- Antes de ancorar, o jogador ve o **contorno real da arena** deitado na
+  superficie, acompanhando o centro da tela. O ponto mirado e o **centro** da
+  arena. A cor do contorno diz se da para ancorar ali, e **o toque so confirma o
+  que o contorno mostra** — ele nao mede nada por conta propria, e ancora no
+  mesmo fit de plano que estava sendo exibido.
+- A avaliacao roda em **dois ritmos**: a pose do contorno acompanha a tela a cada
+  frame (1 hitTest central), e o veredito e recalculado a cada 200 ms (fit de
+  plano + 8 sondas nos cantos e meios de borda do contorno).
+- **O gate recusa por prova contraria, nao por falta de prova.** Uma sonda que
+  nao devolve leitura nao reprova nada: o hitTest do SLAM fica mudo o tempo todo
+  em incidencia rasa, e tratar esse silencio como "nao cabe" recusou 79 toques em
+  dois testes de device sem ancorar uma vez. So reprovam **duas ou mais** sondas
+  que batam em superficie real fora do plano — o degrau que denuncia a borda da
+  mesa. A arena **nunca** e reescalada para caber.
 - A orientacao de tela nao e mais responsabilidade do AR Manager: quem aplica a
   politica e o `GameFlow`, **antes** de subir a sessao. Com a sessao no ar nao se
   pede tela cheia nem `screen.orientation.lock` — as duas coisas redimensionam o
@@ -146,19 +171,23 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 
 | Concluida | Fase | Tarefa | Objetivo |
 | --- | --- | --- | --- |
-| [~] | 01 | POC | AR mode, Arena com escala, posicionar tropas — ancoragem funciona, mas **circular por tras da arena drifta** e o criterio de deslize nao foi remedido depois da arena virar 80 cm |
+| [~] | 01 | POC | AR mode, Arena com escala, posicionar tropas — **posicionar a arena funciona no chao** (confirmado em device 2026-08-14, no primeiro toque); falta veredito em **mesa**, e o criterio de deslize continua **nao medido** depois da arena virar 80 cm |
 | [x] | 02 | Inimigos | Bot inimigo por **script fixo** (`src/battle/EnemyScript.ts`) — confirmado em device: foi a IA que destruiu a torre do jogador e encerrou a partida |
 | [0] | 03 | Sons e Musica | Adicionar musica de fundo e sons para ataques. |
 | [x] | 04 | Tela inicial e Final game | Menu inicial entregue; o fim de partida virou a **dissolucao da arena** (a spec da demo proibe tela de resultado) — confirmado em device |
 
 ## Criterio de Conclusao da Fase 01
 
-- Arena ancorada em RA com estabilidade visual.
+- Arena ancorada em RA com estabilidade visual. **Ancorar funciona no chao**
+  (device, 2026-08-14); em mesa, sem veredito.
 - Sem jitter perceptivel durante movimentos naturais do dispositivo.
-- Entrada e saida do modo RA sem perder posicionamento da arena.
+- Entrada e saida do modo RA sem perder posicionamento da arena. **Bloqueado**
+  pelo bug da segunda sessao de RA (bloqueador 3).
 - **Deslize de no maximo ~2 cm com o celular circulando a mesa por 60 s** (o
   criterio do Beat 3 da spec da demo). **Ainda nao medido** depois da arena
-  passar a ter 80 cm com escala fixa.
+  passar a ter 80 cm com escala fixa. O usuario relatou (2026-08-14, no chao)
+  que "indo devagar da para dar a volta na arena" — encorajador, mas nao e
+  medicao.
 
 ## Como Rodar
 

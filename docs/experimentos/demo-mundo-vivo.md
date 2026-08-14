@@ -3,7 +3,7 @@
 Diario da demo que existe para responder **uma unica pergunta**, com pessoas
 reais testando: *a pessoa acredita que apareceu um mundo vivo na mesa dela?*
 Registra o que foi construido para responder isso, o que o primeiro teste em
-device mostrou, e o que continua aberto. Ultima atualizacao: **2026-08-12**.
+device mostrou, e o que continua aberto. Ultima atualizacao: **2026-08-14**.
 
 ## Objetivo
 
@@ -150,7 +150,134 @@ O que quebrou ou ficou ruim, na ordem em que atrapalha:
 a estes achados — eles apareceram no primeiro teste em device, depois da
 implementacao, e o conserto ficou para a proxima sessao por decisao do usuario.
 
-## Estado atual (2026-08-12)
+### (sem commit) — fantasma da arena e inversao do gate de colocacao (2026-08-14)
+
+**Feito:** a interacao de colocar a arena foi refeita inteira, e duas correcoes
+pequenas entraram no fim.
+
+- **`src/ar/ArenaGhost.ts` (novo):** o torus verde (`createHitCursor`) saiu e no
+  lugar entrou o contorno real da arena — moldura de barras de 0,53 m x 0,80 m
+  com marcadores de canto, deitada na superficie, colorida por estado. As
+  dimensoes vem de `ARENA_WIDTH_METERS`/`ARENA_LENGTH_METERS`, nunca proprias.
+- **`src/ar/placementGate.ts` (novo):** logica pura com seis estados
+  (`waiting-tracking`, `searching`, `out-of-frame`, `too-small`, `ready`,
+  `ready-degraded`), histerese na saida de `ready` e `canPlace` como unica
+  resposta a "esse toque ancora?".
+- **`hitTestSampling.ts`:** `buildFootprintProbes` (4 cantos + 4 meios de borda)
+  e `measureFootprintCoverage`, que substituem o anel circular de ~31 amostras
+  de `measurePlaneCoverage` por 8 sondas no contorno real da arena.
+- **`EighthWallARManager.ts`:** loop de preview com **dois ritmos** — pose do
+  fantasma por frame (1 hitTest central), veredito a cada 200 ms (fit + 8
+  sondas). O toque deixou de medir: ele CONFIRMA o que o contorno mostra,
+  ancorando no `previewFit` da ultima avaliacao aprovada.
+- **Telemetria:** evento `placement_rejected` com `reason`, `inFrame`,
+  `onPlane`, `offPlane` e `total`.
+- **Mira:** o ponto mirado passou a ancorar o **centro** da arena. Antes ancorava
+  as costas da torre azul, deslocando o contorno ~40 cm a frente do ponto
+  apontado; `getPlacementAnchorLocal` foi removido.
+- **`CardDeckHud.ts:83`:** `height = "auto"` trocado por `${CARD_HEIGHT}px`, mais
+  o teste-guarda `src/ui/guiUnits.test.ts`, que varre `src/ui/**` atras de
+  unidade invalida em `width`/`height`.
+- **`main.ts`:** `stopCameraSampling()` no `match_ended`.
+
+Verificacao automatizada ao fim: `npx tsc --noEmit` limpo, `npm test` com 160
+testes passando (13 arquivos), `npm run build` sem erro.
+
+**Resultado em device (tres rodadas, Android/Chrome, 2026-08-13 e 2026-08-14):**
+
+| Rodada | Politica do gate | Recusas | Ancorou? |
+|---|---|---|---|
+| 1 (2026-08-13, ~09:22) | prova positiva, plano do anel central | 21 (`too-small` 15, `out-of-frame` 6) | **nao** |
+| 2 (2026-08-13, ~09:48) | prova positiva + refit + tolerancia 6 cm | 58, **todas** `too-small` | **nao** |
+| 3 (2026-08-14, ~00:25) | veto (prova contraria) | **0** | **sim, aos 48,2 s** |
+
+**Provou:**
+
+1. **Um gate que exige prova positiva nao funciona sobre o hitTest do SLAM.** A
+   rodada 1 recusou 15 toques por `too-small` com o aparelho apontado para o
+   **chao de uma cozinha** — uma superficie onde cabe qualquer coisa. Isso e a
+   prova de que o problema era a medicao, e nao a superficie, e derrubou de uma
+   vez a leitura de que bastava afrouxar limiar ou encolher a arena.
+
+2. **A causa raiz da medicao errada era extrapolacao de plano.** O fit vinha de
+   um anel de 4 cm de raio no centro da tela e era usado para julgar cantos a
+   40 cm de distancia — 10x o raio que o produziu. Um erro de 3 graus na normal
+   vira 2 cm na ponta; 5 graus viram 4,4 cm, e a tolerancia era de 4 cm. O
+   conserto foi refazer o fit sobre os proprios acertos das sondas.
+
+3. **Silencio de sensor nao e evidencia.** Era essa a falha conceitual embaixo de
+   tudo: sonda sem leitura contava igual a sonda reprovada. `FootprintCoverage`
+   passou a separar `offPlane` (superficie real fora do plano — a borda da mesa)
+   de "nao mediu nada", e o gate so recusa com `offPlane >= 2`. Depois disso a
+   arena ancorou no **primeiro toque**.
+
+4. **A hipotese 3 desta lista estava certa.** Feedback continuo antes do toque —
+   o contorno do tamanho real, colorido por estado — era mesmo o conserto da
+   interacao. Com ele, e sem nenhuma recusa, a colocacao deixou de exigir
+   insistencia.
+
+5. **O `NaN` em `CardDeckHud.ts:83` era mesmo a causa das cartas invisiveis.**
+   Confirmado em device pelo usuario apos a correcao: "os HUD das cartas vidas e
+   cogumelo apareceram". O bloqueador 1 fecha.
+
+6. **Mas renderizar nao e poder jogar.** No mesmo teste: **em RA o toque na carta
+   nao registra**; em modo tela as cartas funcionam. E um bug NOVO e diferente
+   do `NaN`, e e ele que hoje impede a batalha em RA.
+
+7. **A escala de 80 cm foi elogiada, nao criticada.** Palavras do usuario sobre o
+   chao: "isso deixou o tamanho dos bichos muito legal". Isso e um argumento
+   **contra** encolher a arena, que estava sendo cogitado.
+
+8. **A primeira partida completa aconteceu.** `arena_placed` aos 48,2 s,
+   `enemy_awakened` aos 119,9 s, `match_ended` aos 234,8 s. O intervalo da
+   metrica principal foi de **71,6 s** (a spec considera validado acima de 30 s)
+   e a camera chegou a **0,51 m** da arena. **Ressalva obrigatoria:** quem testou
+   foi o autor do jogo, explorando o proprio sistema — o numero nao vale como
+   leitura da metrica, que exige alguem que nao conhece o jogo. Vale so como
+   prova de que o funil inteiro roda de ponta a ponta.
+
+9. **A partida terminou 0 x 100 para a IA.** Coerente com o jogador nao ter
+   conseguido jogar carta nenhuma (achado 6).
+
+10. **As mensagens de status sao pequenas demais para serem lidas.** Palavras do
+    usuario: "extremamente pequena", "fininha", "nao da para ler". Todo o
+    trabalho de tornar as mensagens acionaveis (`placementMessage`) e inutil
+    enquanto elas nao forem legiveis.
+
+11. **Circular a arena funciona indo devagar.** Usuario: "se for devagar da para
+    dar a volta na arena e ir atras da torre". Observado **no chao**, em uma
+    rodada. Nao generaliza para mesa nem dispensa a medicao de deslize do Beat 3.
+
+12. **O Beat 5 continua nao intuitivo** — confirmado pela terceira vez. Explorar,
+    por outro lado, o usuario descreveu como intuitivo.
+
+13. **A telemetria continuava amostrando depois do fim da partida:** 45 amostras
+    identicas de 58,17 m apos `match_ended`, com a arena ja fora do estado de RA,
+    onde "metros" nao quer dizer nada.
+
+**Nao resolveu:**
+
+- **Remover `FEATURE_POINT` das sondas, sob a politica de prova positiva.**
+  Esperava-se reduzir falso positivo; o resultado foi a rodada 2 com 58 recusas
+  **todas** `too-small`. A memoria de referencia do projeto ja avisava que
+  superficies "costumam demorar/faltar" — tirar o ultimo recurso deixou as sondas
+  mudas, e sonda muda reprovava. A exclusao foi **mantida**, mas so porque a
+  polaridade mudou: sob veto, um ponto solto no ar seria um veto falso.
+- **Afrouxar os numeros** (tolerancia 4 -> 6 cm, `MIN_IN_FRAME_PROBES` 8 -> 6).
+  Sozinho nao resolveu — a rodada 2 ja tinha os dois e falhou em 58 toques.
+- **Encolher a arena.** Cogitado pelo usuario nas duas primeiras rodadas e **nao
+  feito**, porque a evidencia do chao mostrou que o problema era medicao. O
+  achado 7 depois confirmou que teria sido o ajuste errado.
+
+**Cuidado ao ler esta etapa:** a rodada 1 -> rodada 2 mudou **cinco** coisas de
+uma vez (refit do plano, rotacao alinhada ao piso, remocao de `FEATURE_POINT`,
+tolerancia, limiar de quadro) e o resultado piorou de forma nao isolavel. E o
+mesmo padrao do `ed93779` registrado em `ra-e-paisagem.md`, cometido de novo e
+de forma consciente — a justificativa dada na hora foi que as cinco produziam o
+mesmo sintoma e nenhuma seria observavel isolada. A rodada 2 -> rodada 3, essa
+sim, mudou **so** a polaridade do gate, e e dela que sai a atribuicao do achado 1.
+
+## Estado atual (2026-08-14)
 
 | | Situacao |
 |---|---|
@@ -158,16 +285,22 @@ implementacao, e o conserto ficou para a proxima sessao por decisao do usuario.
 | Estetica das criaturas | Aprovada pelo usuario |
 | Fim de partida + dissolucao da arena (Beat 7) | **Funciona** — confirmado em device e elogiado |
 | IA por script e vitoria por torre destruida | **Funciona** — confirmado em device (foi a IA que encerrou a partida) |
-| Cartas na batalha | **Quebra** — causa-raiz identificada (`CardDeckHud.ts:83`) |
-| Segunda sessao de RA sem recarregar | **Quebra** — bug antigo; camera liga e mais nada |
-| Colocar a arena em RA | **Ruim** — exige insistencia; aviso nao acionavel |
-| Beat 5 (tocar a torre inimiga) | **Ruim** — so funciona por tras da torre |
+| Cartas renderizando no HUD | **Funciona** — confirmado em device (2026-08-14) apos a correcao do `NaN` |
+| **Tocar a carta em RA** | **Quebra** — o toque nao registra; em modo tela funciona |
+| Colocar a arena em RA (chao) | **Funciona** — confirmado em device (2026-08-14): 0 recusas, ancorou aos 48,2 s |
+| Colocar a arena em RA (mesa/bancada) | **Nao confirmado** — o usuario nao conseguiu antes da inversao do gate, e nao retestou depois |
+| Legibilidade das mensagens de status | **Quebra** — "extremamente pequena, nao da para ler" |
+| Segunda sessao de RA sem recarregar | **Quebra** — bug antigo; camera liga e mais nada. Nao tocado nesta sessao |
+| Beat 5 (tocar a torre inimiga) | **Ruim** — confirmado de novo; nao intuitivo |
+| Explorar a arena | **Funciona** e o usuario descreveu como intuitivo |
+| Andar em volta da arena | Parcial — **funciona indo devagar** no chao (2026-08-14); deslize nao medido |
 | Nascimento da arena | Funciona, mas "seco" — sem impacto |
-| Andar em volta da arena | Parcial — drift ao passar para tras (ver `ra-e-paisagem.md`) |
+| Escala de 80 cm | **Aprovada no chao** — "deixou o tamanho dos bichos muito legal" |
 | Comportamento ocioso das criaturas | Compila, logica testada (unit); **nao avaliado em device** |
-| Invocacao em dois toques | Compila; **nao exercitada** (bloqueada pelo bug das cartas) |
-| Timer de 3 min e cogumelo dobrado | Compila; **nao observados** (a partida acabou por torre destruida antes) |
-| Metrica principal (`arena_placed` -> `enemy_awakened`) | **Nao medida** — nenhuma sessao completa ainda |
+| Invocacao em dois toques | **Nao exercitada em RA** — bloqueada pelo toque na carta |
+| Timer de 3 min e cogumelo dobrado | Compila; **nao observados** |
+| Partida completa de ponta a ponta | **Roda** — confirmado em device (2026-08-14), mas o jogador perdeu 0 x 100 sem jogar carta |
+| Metrica principal (`arena_placed` -> `enemy_awakened`) | **Ainda nao medida com validade** — 71,6 s registrados, mas com o autor testando o proprio jogo |
 
 ## Hipoteses vivas
 
@@ -192,70 +325,104 @@ Em ordem de suspeita, com o teste que decide cada uma:
    engine subir. Atencao: hoje **nenhum dos dois metodos esta declarado** em
    `src/types/xr8.d.ts` — a tipagem precisa acompanhar.
 
-2. **A medicao de extensao do plano e severa demais e e o que trava a
-   colocacao.** Ela dispara ~31 `hitTest` extras num anel largo (raio 0.42) e
-   reprova quando a cobertura medida fica abaixo de `0.9 x 0.80 m` de
-   profundidade ou `0.9 x 0.533 m` de largura. A extensao medida e um **limite
-   inferior** (so enxerga onde os hitTests bateram), entao mesa boa pode
-   reprovar. **Teste:** abrir com `?debug=1` e ler `surfaceDepth`,
-   `surfaceWidth` e `surfaceInliers` (ja instrumentados) a cada toque recusado.
-   Se os valores ficarem logo abaixo do limiar numa mesa que claramente cabe, a
-   hipotese esta confirmada e o conserto e afrouxar o limiar ou trocar o
-   criterio.
+2. **RESOLVIDA (2026-08-14) — a medicao de extensao do plano era severa demais.**
+   Era, mas por um motivo mais fundo do que o limiar: o plano vinha extrapolado
+   de um anel de 4 cm, e o gate exigia prova positiva de um sensor que fica mudo.
+   Ver a entrada de 2026-08-14. O texto original fica registrado acima na
+   entrada de 2026-08-12.
 
-3. **O aviso "aponte para uma superficie maior" nao e acionavel porque e
-   binario e tardio.** Ele so aparece **depois** do toque recusado, e nao diz o
-   quanto falta nem para onde ir. **Teste:** substituir por feedback continuo
-   antes do toque (um retangulo do tamanho real da arena, projetado no chao,
-   verde quando cabe e vermelho quando nao) e ver se a colocacao passa a
-   acontecer no primeiro toque.
+3. **RESOLVIDA (2026-08-14) — o aviso binario e tardio nao era acionavel.** O
+   teste proposto era exatamente o contorno do tamanho real colorido por estado,
+   e ele foi implementado (`ArenaGhost`): a colocacao passou a acontecer no
+   primeiro toque, com zero recusas na rodada 3. **Ressalva:** confirmado so no
+   chao.
 
 4. **O picking da torre inimiga esta obstruido pela frente.** Candidatos
-   concretos: a `DeploymentZone` (mesh nova nesta sessao, filha do `arenaRoot`,
-   com offset Y de 0.22 unidades autorais) ou a barra de vida da torre, ambas
-   entre a camera e a torre quando se olha do lado do jogador. **Teste:** logar
+   concretos: a `DeploymentZone` (filha do `arenaRoot`, com offset Y de 0.22
+   unidades autorais) ou a barra de vida da torre, ambas entre a camera e a
+   torre quando se olha do lado do jogador. **Teste:** logar
    `pickInfo.pickedMesh.name` em cada toque durante `world-alive` e ver o que
    esta sendo acertado quando o toque "nao pega". Se vier o nome de outra mesh,
    a hipotese esta confirmada e o conserto e `isPickable = false` nela.
 
-5. **O bug das cartas pode nao ser o unico do HUD novo.** O HUD foi reescrito
-   inteiro (de barra-em-paisagem para zonas de retrato) e nenhum teste o
-   instancia. A altura `NaN` foi encontrada; nao ha garantia de que e a unica.
-   **Teste:** depois de corrigir a linha 83, percorrer a partida inteira em
-   device conferindo cada elemento do HUD minimo (cogumelos, 4 cartas, HP das
-   duas torres, timer) e o comportamento no ultimo minuto.
+5. **PARCIALMENTE RESOLVIDA (2026-08-14) — o bug das cartas nao era o unico do
+   HUD novo.** A altura `NaN` foi corrigida e as cartas aparecem, mas a
+   percorrida em device achou mais dois defeitos: o toque na carta nao funciona
+   em RA (hipotese 6) e as mensagens de status sao ilegiveis (hipotese 7).
 
-## Proximos passos
+6. **O toque na carta nao chega ao HUD em RA porque o `AdvancedDynamicTexture` de
+   tela cheia continua apontando para a camera anterior.** O `enterAR` troca
+   `scene.activeCamera` por uma `FreeCamera` nova e descarta a antiga no
+   `exitAR`; o Babylon resolve o ponteiro do GUI de tela cheia por
+   `scene.cameraToUseForPointers` (com fallback na `activeCamera`), e nada no
+   projeto atualiza isso na troca. Em modo tela a camera nunca troca — que e
+   exatamente o modo onde as cartas funcionam. **Suspeita alta, mas e hipotese:
+   nao foi verificada no codigo do Babylon nem em device.** **Teste:** logar
+   `scene.cameraToUseForPointers?.name` e o resultado de
+   `advancedTexture.pick`/`_pointerObserver` no toque durante `playing` em RA;
+   se apontar para a camera velha (ou nula), a hipotese esta confirmada.
+   Candidata alternativa: o `WorldTapRouter`, dono unico de
+   `scene.onPointerObservable`, consumindo o POINTERDOWN antes do GUI.
 
-Priorizados por desbloqueio: os tres primeiros sao o que separa a demo de poder
-ser testada com uma pessoa de verdade.
+7. **As mensagens de status estao pequenas porque `arStatusText` nao acompanha o
+   espaco ideal do HUD em retrato.** O `HudLayer` usa `useSmallestIdeal` com
+   `idealWidth = 720` em retrato, e ha memoria do projeto registrando que 1 px
+   do espaco ideal vale ~0,54 px CSS no celular — o mesmo fator que ja obrigou os
+   botoes do painel de setup a irem para 84 px. O `arStatusText` tem
+   `height = "56px"` e nenhum `fontSize` explicito. **Teste:** medir o tamanho
+   renderizado em device e comparar com os ~44 px CSS recomendados; corrigir por
+   `fontSize` em px do espaco ideal.
 
-**1. Corrigir a altura da fileira de cartas** (`src/ui/CardDeckHud.ts:83`).
-Trocar `"auto"` por um valor valido em px do espaco ideal, ou usar
-`adaptHeightToChildren`. E uma linha, e sem ela nao existe batalha. Depois,
-percorrer o HUD inteiro em device (hipotese 5).
+8. **Colocar a arena numa mesa/bancada continua sem veredito.** O usuario nao
+   conseguiu nas rodadas 1 e 2 e **nao retestou** depois da inversao do gate. A
+   explicacao dele foi de distancia: "o tamanho da arena exige uma distancia e
+   isso dificultou colocar ela na mesa/bancada" — no chao, com 1,70 m de altura,
+   ele conseguiu. **Teste:** repetir a rodada 3 numa mesa e ler `offPlane` no
+   JSON. Se vier `offPlane >= 2`, a mesa realmente nao comporta os 80 cm e a
+   decisao passa a ser de geometria; se vier tudo zerado e mesmo assim recusar,
+   o problema e outro.
 
-**2. Encerrar a sessao de RA de verdade** (hipotese 1). Sem isso **nao da para
-testar com mais de uma pessoa seguida** sem recarregar o app entre uma e outra —
-o que na pratica inviabiliza a sessao de testes que a demo inteira existe para
-produzir. Isso promove um bug antigo e tolerado ao caminho critico: ele deixou
-de ser incomodo de desenvolvimento e virou bloqueio de metodologia.
+## Proximos passos (atualizados em 2026-08-14)
 
-**3. Refazer a interacao de colocar a arena.** Medir primeiro (hipotese 2) para
-saber se e o limiar; e independentemente disso, trocar o aviso binario por
-feedback continuo antes do toque (hipotese 3). Este e o momento em que a pessoa
-decide se o sistema funciona ou nao — e hoje ele parece quebrado.
+Colocar a arena saiu do caminho critico. O que impede a demo agora e **jogar**.
 
-**4. Consertar o alvo do Beat 5** (hipotese 4). O gesto e bom; o alvo e que nao
-esta pegando de onde o jogador olha.
+**1. Fazer o toque na carta funcionar em RA** (hipotese 6). Hoje a batalha em RA
+nao existe: as cartas aparecem e nao respondem. E o sucessor direto do bug do
+`NaN` — mesmo sintoma para o jogador ("nao da para jogar"), causa diferente.
+Comecar pelo diagnostico, nao pelo conserto: as duas causas candidatas
+(`cameraToUseForPointers` e o `WorldTapRouter`) pedem consertos opostos.
 
-**4. Dar um nascimento a arena.** O `playSpawnScaleIn` atual nao entrega o
-momento. Este e o primeiro instante em que o mundo aparece na mesa — e a demo
-inteira existe para medir a reacao a esse instante. Vale mais do que parece.
+**2. Tornar as mensagens de status legiveis** (hipotese 7). Barato e desbloqueia
+todo o resto do feedback: enquanto nao der para ler, nenhuma mensagem acionavel
+que se escreva chega ao jogador.
 
-**5. So entao medir a metrica principal.** Rodar uma sessao completa com alguem
-que nao conhece o jogo, gravando **a mao e o corpo da pessoa, nao a tela**, e ler
-o intervalo `arena_placed` -> `enemy_awakened` no JSON exportado.
+**3. Retestar a colocacao numa mesa** (hipotese 8). E o unico dado que falta para
+decidir se a arena de 80 cm fica ou encolhe — e o achado 7 da entrada de
+2026-08-14 (o elogio ao tamanho das criaturas no chao) e um argumento forte para
+ela ficar.
 
-**6. Retestar o critério do Beat 3** (arena nao desliza mais que ~2 cm em 60 s
-circulando a mesa). Nao foi medido nesta sessao.
+**4. Encerrar a sessao de RA de verdade** (hipotese 1). Continua sem conserto e
+continua sendo o que impede testar com varias pessoas seguidas sem recarregar o
+app. Nao foi tocado nesta sessao.
+
+**5. Consertar o alvo do Beat 5** (hipotese 4). Terceira confirmacao em device de
+que o gesto e bom e o alvo nao pega de onde o jogador olha.
+
+**6. Dar um nascimento a arena.** O `playSpawnScaleIn` atual nao entrega o
+momento. Este e o primeiro instante em que o mundo aparece — e a demo inteira
+existe para medir a reacao a esse instante.
+
+**7. So entao medir a metrica principal.** Rodar uma sessao completa com alguem
+que **nao conhece o jogo**, gravando a mao e o corpo da pessoa, nao a tela. Os
+71,6 s registrados em 2026-08-14 nao servem: quem testou foi o autor.
+
+**8. Retestar o criterio do Beat 3** (arena nao desliza mais que ~2 cm em 60 s
+circulando). O relato de que "indo devagar da para dar a volta" e encorajador,
+mas nao e medicao.
+
+**9. Verificar que o teste-guarda de unidades do GUI nao passa vazio.**
+`src/ui/guiUnits.test.ts` varre `src/ui/**` atras de unidade invalida em
+`width`/`height`. O teste passa, e ele prova que o validador rejeita `"auto"` —
+mas **nao foi verificado que o scanner encontra alguma atribuicao**, entao ele
+pode estar passando por nao achar nada. Confirmar contando as ocorrencias, ou
+reintroduzindo `"auto"` temporariamente para ver o teste falhar.
