@@ -4,7 +4,7 @@ import type { Scene } from "@babylonjs/core/scene";
 
 import type { CardDeckSnapshot } from "../cards/CardDeckSystem";
 import { CardDeckSystem } from "../cards/CardDeckSystem";
-import { DiamondCard } from "./DiamondCard";
+import { CARD_HEIGHT, DiamondCard } from "./DiamondCard";
 import type { HudLayer } from "./HudLayer";
 
 // Tamanho do canvas interno para o widget circular
@@ -80,7 +80,12 @@ export class CardDeckHud {
     // --- Fileira horizontal de cartas (base da coluna de batalha) ---
     this.cardRow = new StackPanel("card-deck-row");
     this.cardRow.isVertical = false;
-    this.cardRow.height = "auto";
+    // NUNCA "auto": o Babylon GUI nao tem essa unidade. O regex de
+    // `ValueAndUnit` casa string vazia contra "auto", `parseFloat("")` devolve
+    // NaN, e a fileira inteira deixa de renderizar — sem erro, sem aviso, e
+    // sem o `tsc` pegar, porque `height` e `string`. Foi o bug que impediu
+    // jogar em duas sessoes de device.
+    this.cardRow.height = `${CARD_HEIGHT}px`;
     // Encolhe/cresce com o numero real de cartas (3 hoje, 4 numa etapa
     // futura) para o StackPanel centralizar a fileira de verdade: sem
     // `adaptWidthToChildren` a largura ficaria fixa e os filhos se
