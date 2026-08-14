@@ -88,15 +88,43 @@ Use `XR8.XrController.hitTest()` para estimar a posição 3D correspondente a um
 ```ts
 canvas.addEventListener("touchstart", (e) => {
   const touch = e.touches[0];
-  const x = touch.clientX / window.innerWidth;
-  const y = touch.clientY / window.innerHeight;
-  const results = XR8.XrController.hitTest(x, y, ["FEATURE_POINT"]);
+  // px CSS, sempre — ver o gotcha de normalização no Passo 3.
+  const x = touch.clientX / canvas.clientWidth;
+  const y = touch.clientY / canvas.clientHeight;
+  // Peça os TRÊS tipos, nesta ordem de preferência. Ver abaixo por quê.
+  const results = XR8.XrController.hitTest(x, y, [
+    "DETECTED_SURFACE",
+    "ESTIMATED_SURFACE",
+    "FEATURE_POINT",
+  ]);
   if (results.length > 0) {
     const { position, rotation } = results[0];
     // posicione sua mesh Babylon.js usando position/rotation
   }
 });
 ```
+
+Detalhes da API que não estão documentados no repo do engine (apurados por
+engenharia reversa de `dist/xr.js` e `dist/xr-slam.js`):
+
+- **Assinatura:** `hitTest(x, y, includedTypes)`, com `x`/`y` normalizados em
+  `[0,1]` e `(0,0)` no **topo-esquerdo**. Retorna
+  `{ type, position: {x,y,z}, rotation: {x,y,z,w}, distance }[]`. Vive no chunk
+  `xr-slam.js`.
+- **As coordenadas batem direto com o mundo do Babylon.** O módulo Babylon do
+  8th Wall ativa `scene.useRightHandedSystem` e dirige a projeção e a pose 6DoF
+  por frame — não há flip de Z a aplicar.
+- **Superfície costuma demorar ou faltar.** `DETECTED_SURFACE` e
+  `ESTIMATED_SURFACE` simplesmente não existem em boa parte dos pontos, ainda
+  mais em incidência rasa (cantos distantes de um retângulo grande). Por isso os
+  três tipos, com `FEATURE_POINT` como último recurso.
+- **Mas `FEATURE_POINT` depende de como você usa a resposta.** Um feature point
+  é um ponto solto no espaço, não uma superfície. Se o hitTest serve para
+  **posicionar** (achar algum lugar plausível), inclua-o. Se serve para
+  **reprovar** (decidir que ali *não* dá), exclua-o — senão um ponto no ar vira
+  um veto falso. Errar essa distinção custou duas sessões de device neste
+  projeto: primeiro por incluí-lo num gate de prova positiva, depois por
+  removê-lo sem inverter a polaridade do gate.
 
 Se o jogo não precisa de ancoragem livre no mundo (por exemplo, um filtro de rosto ou um efeito de céu), desabilite o SLAM explicitamente antes de `XR8.run()` — isso economiza processamento em dispositivos mais fracos: `XR8.XrController.configure({ disableWorldTracking: true })`.
 
@@ -150,7 +178,9 @@ Receita (não precisa de reancoragem contínua — ela é pro item 1 e costuma i
 - **`hitTest` estoura o WASM se chamado cedo demais.** Chamar `XR8.XrController.hitTest` antes do SLAM ter pose lança `RuntimeError: memory access out of bounds` — e no render loop isso **mata o app inteiro**. Faça gate: só chame quando o `trackingStatus === "NORMAL"` (via `onUpdate` → `event.processCpuResult.reality.trackingStatus`), e envolva toda chamada em `try/catch` como rede de segurança. Cuidado: `LIMITED` pode ter pose mas deixar o tracking instável demais para posicionar bem — prefira `NORMAL`.
 - **Normalização de coordenadas do `hitTest`.** As coords são `[0,1]`. Normalize por `canvas.clientWidth/clientHeight` (**px CSS**), **nunca** por `engine.getRenderWidth/Height()` (px de dispositivo, ×devicePixelRatio ~3 no mobile). Misturar faz o hitTest mirar no lugar errado.
 - **Celular não tem console acessível.** Não dá pra depender de `console.log` no device. Jogue estado crítico (ex.: `trackingStatus`) **na própria tela** (um `TextBlock`/GUI). Isso desbloqueia o diagnóstico remoto.
-- **Tilt: o "up" do SLAM às vezes não bate com o piso.** Se a arena parece levemente inclinada (um lado "pra cima"), alinhe o *up* do conteúdo à **normal medida** no fit do plano — com um clamp (ex.: rejeitar normais > ~12° da vertical, que são ruído) pra nunca tombar.
+- **Tilt: o "up" do SLAM às vezes não bate com o piso.** Se a arena parece levemente inclinada (um lado "pra cima"), alinhe o *up* do conteúdo à **normal medida** no fit do plano — com um clamp (ex.: rejeitar normais > ~12° da vertical, que são ruído) pra nunca tombar. **Isso vale para o preview tanto quanto para o objeto final:** um contorno de pré-visualização deitado na horizontal do *mundo*, enquanto o conteúdo real vai deitar na normal do *piso*, aparece visivelmente torto e ainda desloca qualquer amostragem derivada da pose dele.
+- **Não extrapole um plano para além do raio que o produziu.** Um fit tirado de um anel de ~4 cm no centro da tela, usado para julgar pontos a 40 cm de distância, amplia qualquer erro de normal por 10x: 3° viram 2 cm na ponta, 5° viram 4,4 cm. Se você precisa avaliar uma área grande, **refaça o fit sobre os próprios pontos daquela área** — um estimador robusto (mediana+MAD) aguenta os outliers bem melhor do que a extrapolação aguenta o erro angular.
+- **Silêncio do sensor não é evidência.** É a armadilha mais cara desta lista, porque não parece um bug. Um hitTest que não devolve nada significa "não sei", não "não tem superfície aí" — e a diferença decide a polaridade de qualquer gate que você construir em cima. Um gate que exige **prova positiva** de N amostras confirmadas recusa o tempo todo em ambiente real; um que exige **prova contrária** (amostras que bateram numa superfície *fora* do plano esperado, o degrau que denuncia a borda de uma mesa) recusa quando deve. Neste projeto a primeira política produziu 79 recusas e zero posicionamentos em dois testes de device, incluindo apontando para o chão de uma cozinha; a inversão ancorou no primeiro toque.
 
 ### Passo 4 — grounding: faça parecer que está no chão
 

@@ -100,3 +100,9 @@ Navegadores bloqueiam autoplay de áudio antes de uma interação do usuário �
 ## GUI (HUD, menus)
 
 `@babylonjs/gui` oferece dois modos: **fullscreen 2D** (`AdvancedDynamicTexture.CreateFullscreenUI`) para HUD e menus tradicionais, e **GUI 3D** (ancorada a uma mesh no mundo) para displays diegéticos (ex.: um placar dentro da cena 3D). Para HUD comum (vida, munição, menu de pause), fullscreen 2D é mais simples e suficiente na maioria dos casos.
+
+### Três armadilhas do GUI 2D que só aparecem no device
+
+- **`width`/`height` aceitam apenas `px` e `%`.** Qualquer outra unidade é engolida **em silêncio**: o regex de `ValueAndUnit` casa string vazia contra, digamos, `"auto"`, `parseFloat("")` devolve `NaN`, e o controle simplesmente não renderiza. Não lança, não avisa no console, e o `tsc` não pega porque a propriedade é tipada como `string`. Um HUD inteiro pode sumir por causa de uma linha assim, com build verde e a suíte passando — vale um teste que varra o código-fonte da UI atrás de literais inválidos.
+- **`idealWidth`/`idealHeight` mudam a escala física de tudo.** Com `useSmallestIdeal`, o Babylon divide pela largura em retrato e pela altura em paisagem. Num celular retrato com `idealWidth = 720`, 1 px do espaço ideal vale ~0,54 px CSS — ou seja, **todo valor em px que você escreve encolhe quase pela metade na tela real**. As consequências práticas: um alvo de toque precisa de ~82 px no espaço ideal para chegar aos 44 px CSS recomendados, e um texto sem `fontSize` explícito facilmente vira ilegível. Não confie em como parece no desktop.
+- **Trocar a câmera ativa quebra o ponteiro do GUI de tela cheia.** O `AdvancedDynamicTexture` fullscreen resolve toques por `scene.cameraToUseForPointers`, com fallback na `activeCamera`. Se o app troca de câmera em runtime (entrar em AR, alternar modos), o GUI pode continuar apontando para a câmera antiga — sintoma: os controles **aparecem** normalmente e **não respondem**, só num dos modos.
