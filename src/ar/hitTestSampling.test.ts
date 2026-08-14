@@ -4,7 +4,9 @@ import {
   normalizeToCanvas,
   buildSampleOffsets,
   fitGroundPlane,
-  measurePlaneCoverage
+  measurePlaneCoverage,
+  buildFootprintProbes,
+  measureFootprintCoverage
 } from "./hitTestSampling";
 
 describe("normalizeToCanvas", () => {
@@ -283,5 +285,100 @@ describe("measurePlaneCoverage", () => {
     expect(coverage.inlierCount).toBe(2);
     expect(Number.isFinite(coverage.depth)).toBe(true);
     expect(Number.isFinite(coverage.width)).toBe(true);
+  });
+});
+
+describe("buildFootprintProbes", () => {
+  it("devolve 8 offsets", () => {
+    const probes = buildFootprintProbes(0.533, 0.8);
+    expect(probes.length).toBe(8);
+  });
+
+  it("os 4 primeiros sao os cantos, na ordem horaria documentada", () => {
+    const probes = buildFootprintProbes(0.533, 0.8);
+    const halfWidth = 0.533 / 2;
+    const halfLength = 0.8 / 2;
+
+    expect(probes[0]).toEqual({ dx: halfWidth, dz: halfLength });
+    expect(probes[1]).toEqual({ dx: halfWidth, dz: -halfLength });
+    expect(probes[2]).toEqual({ dx: -halfWidth, dz: -halfLength });
+    expect(probes[3]).toEqual({ dx: -halfWidth, dz: halfLength });
+  });
+
+  it("os 4 ultimos sao os meios de borda, na ordem horaria documentada", () => {
+    const probes = buildFootprintProbes(0.533, 0.8);
+    const halfWidth = 0.533 / 2;
+    const halfLength = 0.8 / 2;
+
+    expect(probes[4]).toEqual({ dx: 0, dz: halfLength });
+    expect(probes[5]).toEqual({ dx: halfWidth, dz: 0 });
+    expect(probes[6]).toEqual({ dx: 0, dz: -halfLength });
+    expect(probes[7]).toEqual({ dx: -halfWidth, dz: 0 });
+  });
+});
+
+describe("measureFootprintCoverage", () => {
+  const flatFit = {
+    position: new Vector3(0, 0, 0),
+    normal: new Vector3(0, 1, 0)
+  };
+
+  it("8 sondas em quadro e no plano => inFrame 8, onPlane 8, total 8", () => {
+    const probes = buildFootprintProbes(0.533, 0.8).map((offset, i) => ({
+      // Espalha as sondas dentro do quadro em posicoes normalizadas validas;
+      // o valor exato nao importa, so precisa estar dentro de [0,1].
+      screenX: 0.5 + i * 0.01,
+      screenY: 0.5 + i * 0.01,
+      hit: new Vector3(offset.dx, 0, offset.dz)
+    }));
+
+    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+
+    expect(coverage).toEqual({ inFrame: 8, offPlane: 0, onPlane: 8, total: 8 });
+  });
+
+  it("2 sondas fora de [0,1] => inFrame 6", () => {
+    const probes = buildFootprintProbes(0.533, 0.8).map((offset, i) => ({
+      screenX: i < 2 ? -0.1 : 0.5,
+      screenY: i < 2 ? 1.5 : 0.5,
+      hit: new Vector3(offset.dx, 0, offset.dz)
+    }));
+
+    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+
+    expect(coverage.inFrame).toBe(6);
+  });
+
+  // Este e o caso que o gate usa como PROVA CONTRARIA: superficie real
+  // encontrada num degrau abaixo do plano = a mesa acabou ali.
+  it("sondas no chao ~70cm abaixo contam em offPlane, nao em onPlane", () => {
+    const probes = buildFootprintProbes(0.533, 0.8).map(offset => ({
+      screenX: 0.5,
+      screenY: 0.5,
+      hit: new Vector3(offset.dx, -0.7, offset.dz)
+    }));
+
+    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+
+    expect(coverage.inFrame).toBe(8);
+    expect(coverage.onPlane).toBe(0);
+    expect(coverage.offPlane).toBe(8);
+  });
+
+  // E este e o caso que NAO pode ser tratado como prova de nada: o hitTest
+  // falhou. Silencio do sensor nao e evidencia de que a superficie acabou.
+  it("sonda sem hit nao conta nem em onPlane nem em offPlane", () => {
+    const probes = buildFootprintProbes(0.533, 0.8).map(() => ({
+      screenX: 0.5,
+      screenY: 0.5,
+      hit: null as Vector3 | null
+    }));
+
+    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+
+    expect(coverage.inFrame).toBe(8);
+    expect(coverage.onPlane).toBe(0);
+    expect(coverage.offPlane).toBe(0);
+    expect(coverage.total).toBe(8);
   });
 });

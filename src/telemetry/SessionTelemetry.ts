@@ -17,6 +17,20 @@
 
 export type TelemetryEvent =
   | { type: "arena_placed" }
+  /**
+   * Toque que nao ancorou, com o motivo vindo do gate de posicionamento
+   * (`too-small`, `out-of-frame`, ...). Existe porque "colocar a arena exige
+   * insistencia" era so relato: sem contar as recusas e o motivo delas, nao da
+   * para saber se o conserto funcionou.
+   */
+  | {
+      type: "placement_rejected";
+      reason: string;
+      inFrame: number;
+      onPlane: number;
+      offPlane: number;
+      total: number;
+    }
   | { type: "enemy_awakened" }
   | { type: "camera_distance_sample"; meters: number }
   | { type: "card_deployed"; cardId: string; x: number; z: number; remainingMs: number }

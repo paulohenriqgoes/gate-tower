@@ -1,5 +1,22 @@
 import type { Observable } from "@babylonjs/core/Misc/observable";
 
+import type { PlacementPreviewState } from "./placementGate";
+
+/**
+ * Recusa de ancoragem com a medicao que a produziu. As contagens vao junto
+ * porque o motivo sozinho nao discrimina: `too-small` com `offPlane: 4` e uma
+ * borda de mesa de verdade, enquanto `too-small` com tudo zerado e o hitTest
+ * nao tendo devolvido nada — dois problemas opostos sob o mesmo rotulo, e foi
+ * preciso um teste de device inteiro para descobrir qual dos dois era.
+ */
+export interface PlacementRejection {
+  reason: PlacementPreviewState;
+  inFrame: number;
+  onPlane: number;
+  offPlane: number;
+  total: number;
+}
+
 /**
  * Contrato da sessao de RA visto pelo fluxo de jogo. Existe para inverter a
  * dependencia: o `GameFlow` fala com esta abstracao, nunca com o engine do
@@ -26,6 +43,12 @@ export interface ArSessionController {
    * sessao de teste.
    */
   readonly onTrackingStatusChangedObservable: Observable<XR8TrackingStatus>;
+  /**
+   * Toque que nao ancorou, com o estado do preview que o recusou. Mesma razao
+   * de existir do observable acima: alimentar a telemetria da sessao de teste
+   * sem que o AR Manager precise conhecer a telemetria.
+   */
+  readonly onPlacementRejectedObservable: Observable<PlacementRejection>;
 
   /** Engine carregado e device compativel. */
   isARAvailable(): boolean;

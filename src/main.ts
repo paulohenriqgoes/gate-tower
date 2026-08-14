@@ -151,6 +151,13 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 		telemetry.startCameraSampling(measureCameraDistanceMeters);
 	});
 
+	// Recusas de ancoragem sao contadas desde o primeiro toque, e nao so depois
+	// de ancorar: o que se quer medir aqui e justamente quantas tentativas o
+	// jogador gasta ANTES de conseguir.
+	const placementRejectedObserver = arManager.onPlacementRejectedObservable.add((rejection) => {
+		telemetry.log({ ...rejection, type: "placement_rejected" });
+	});
+
 	const enemyAwakenedObserver = gameFlow.onEnemyAwakenedObservable.add(() => {
 		telemetry.log({ type: "enemy_awakened" });
 	});
@@ -165,6 +172,12 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 
 	const matchOverObserver = gameFlow.onMatchOverObservable.add((payload) => {
 		telemetry.log({ type: "match_ended", ...payload });
+		// A amostragem de distancia media o Beat 4 e a partida; depois do fim ela
+		// so registra ruido. Na primeira partida completa em device ela continuou
+		// rodando e gravou 45 amostras identicas de 58,17 m — a arena ja tinha
+		// voltado ao estado fora de RA, onde "metros" nao quer dizer nada.
+		telemetry.stopCameraSampling();
+		isTrackingMonitorActive = false;
 	});
 
 	const trackingObserver = arManager.onTrackingStatusChangedObservable.add((status) => {
@@ -189,6 +202,7 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 
 	return () => {
 		arManager.onArenaPlacedObservable.remove(arenaPlacedObserver);
+		arManager.onPlacementRejectedObservable.remove(placementRejectedObserver);
 		arManager.onTrackingStatusChangedObservable.remove(trackingObserver);
 		gameFlow.onEnemyAwakenedObservable.remove(enemyAwakenedObserver);
 		combatEngine.onCardDeployedObservable.remove(cardDeployedObserver);

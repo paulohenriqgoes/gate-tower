@@ -165,6 +165,124 @@ export function measurePlaneCoverage(
 }
 
 /**
+ * Offsets em METROS, no espaço local da arena (dx = eixo da largura,
+ * dz = eixo do comprimento), dos 8 pontos a testar: 4 cantos + 4 meios de
+ * borda do retângulo que a arena vai ocupar. Substitui o anel circular de
+ * `buildSampleOffsets` quando quem se quer amostrar é um contorno retangular
+ * — um círculo genérico reprova mesas boas cujos cantos ficam fora do raio
+ * mas cuja área retangular real cabe.
+ *
+ * Ordem estável (sentido horário, começando no canto frente-direita):
+ *   0: canto frente-direita  (+dx, +dz)
+ *   1: canto trás-direita    (+dx, -dz)
+ *   2: canto trás-esquerda   (-dx, -dz)
+ *   3: canto frente-esquerda (-dx, +dz)
+ *   4: meio da borda frente  ( 0, +dz)
+ *   5: meio da borda direita (+dx,  0)
+ *   6: meio da borda trás    ( 0, -dz)
+ *   7: meio da borda esquerda(-dx,  0)
+ */
+export function buildFootprintProbes(width: number, length: number): { dx: number; dz: number }[] {
+  const halfWidth = width / 2;
+  const halfLength = length / 2;
+
+  return [
+    // 4 cantos, sentido horário a partir do canto frente-direita.
+    { dx: halfWidth, dz: halfLength },
+    { dx: halfWidth, dz: -halfLength },
+    { dx: -halfWidth, dz: -halfLength },
+    { dx: -halfWidth, dz: halfLength },
+    // 4 meios de borda, mesmo sentido horário a partir da borda da frente.
+    { dx: 0, dz: halfLength },
+    { dx: halfWidth, dz: 0 },
+    { dx: 0, dz: -halfLength },
+    { dx: -halfWidth, dz: 0 },
+  ];
+}
+
+export interface FootprintCoverage {
+  /** Sondas cuja projeção de tela caiu DENTRO do canvas. */
+  inFrame: number;
+  /** Sondas em quadro cujo hitTest bateu dentro da tolerância do plano ajustado. */
+  onPlane: number;
+  /**
+   * Sondas em quadro que bateram em superfície REAL, porém fora da tolerância
+   * — o degrau que denuncia a borda da mesa (o chão ~70 cm abaixo).
+   *
+   * É a contagem que importa para decidir, e ela é diferente de
+   * `inFrame - onPlane`: uma sonda que não bateu em nada não é prova de que a
+   * superfície acabou, é ausência de leitura. O hitTest do SLAM falha o tempo
+   * todo nos cantos distantes, em incidência rasa; tratar esse silêncio como
+   * "não cabe" recusou 79 toques em dois testes de device, um deles apontando
+   * para o chão de uma cozinha.
+   */
+  offPlane: number;
+  /** Sempre 8 — total de sondas avaliadas. */
+  total: number;
+}
+
+/**
+ * Mede quantas das 8 sondas do contorno da arena (`buildFootprintProbes`)
+ * caem dentro do quadro da câmera e, dentre essas, quantas realmente
+ * pertencem ao plano ajustado (`fit`). É a versão "por contorno" de
+ * `measurePlaneCoverage`: em vez de medir a caixa envolvente de um anel de
+ * hitTests genérico, testa exatamente os 8 pontos que a arena vai ocupar.
+ *
+ * Uma sonda fora do quadro (screenX/screenY fora de [0,1], já normalizados
+ * como `normalizeToCanvas` faz) não conta em nada. Uma sonda em quadro cujo
+ * hitTest não bateu em superfície nenhuma (`hit === null`) conta em
+ * `inFrame` mas não em `onPlane` — ela não pode ser tratada como "a mesa vai
+ * até ali" só porque a câmera enxerga aquele pixel.
+ *
+ * @param probes           sondas já projetadas na tela e já testadas (ou não)
+ * @param fit              plano de referência (posição + normal)
+ * @param toleranceMeters  distância máxima ao plano para a sonda contar como "no plano"
+ */
+export function measureFootprintCoverage(
+  probes: { screenX: number; screenY: number; hit: Vector3 | null }[],
+  fit: GroundPlaneFit,
+  toleranceMeters: number
+): FootprintCoverage {
+  // Mesmo cálculo de normal (com fallback) que `measurePlaneCoverage` usa —
+  // mantém a noção de "distância ao plano" idêntica nas duas medições.
+  const normal = fit.normal.lengthSquared() > 1e-6
+    ? fit.normal.normalizeToNew()
+    : new Vector3(0, 1, 0);
+
+  let inFrame = 0;
+  let onPlane = 0;
+  let offPlane = 0;
+
+  for (const probe of probes) {
+    const isInFrame =
+      probe.screenX >= 0 && probe.screenX <= 1 &&
+      probe.screenY >= 0 && probe.screenY <= 1;
+
+    if (!isInFrame) {
+      continue;
+    }
+
+    inFrame += 1;
+
+    if (probe.hit === null) {
+      // Em quadro, mas o hitTest não bateu em nenhuma superfície ali.
+      continue;
+    }
+
+    const offset = probe.hit.subtract(fit.position);
+    const distanceToPlane = Math.abs(Vector3.Dot(offset, normal));
+
+    if (distanceToPlane <= toleranceMeters) {
+      onPlane += 1;
+    } else {
+      offPlane += 1;
+    }
+  }
+
+  return { inFrame, offPlane, onPlane, total: probes.length };
+}
+
+/**
  * Faz o fit robusto de um plano a partir de pontos 3D do mundo retornados por
  * hitTests, para estimar a superfície real do chão.
  *
