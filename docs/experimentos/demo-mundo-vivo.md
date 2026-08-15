@@ -2,8 +2,8 @@
 
 Diario da demo que existe para responder **uma unica pergunta**, com pessoas
 reais testando: *a pessoa acredita que apareceu um mundo vivo na mesa dela?*
-Registra o que foi construido para responder isso, o que o primeiro teste em
-device mostrou, e o que continua aberto. Ultima atualizacao: **2026-08-14**.
+Registra o que foi construido para responder isso, o que cada teste em device
+mostrou, e o que continua aberto. Ultima atualizacao: **2026-08-15**.
 
 ## Objetivo
 
@@ -277,30 +277,210 @@ de forma consciente — a justificativa dada na hora foi que as cinco produziam 
 mesmo sintoma e nenhuma seria observavel isolada. A rodada 2 -> rodada 3, essa
 sim, mudou **so** a polaridade do gate, e e dela que sai a atribuicao do achado 1.
 
+### `e036b37` — Beat 5 por aproximacao, torre-cogumelo e o coelho (2026-08-14)
+
+**Feito:** a ativacao da partida deixou de ser um toque e virou uma
+aproximacao, e a torre inimiga virou um lugar com moradores.
+
+- **`src/towers/MushroomTower.ts` (novo):** as torres deixaram de ser cilindros
+  e viraram cogumelos, com caule afunilado e chapeu (soldados em UMA mesh por
+  `Mesh.MergeMeshes`, o que tambem faz a bounding box propria cobrir caule +
+  chapeu — e dela que `TowerActor.resolveHealthBarOffsetY` tira a altura da
+  barra de vida). A torre inimiga ganhou boca de caverna, nucleo de brilho,
+  halo aditivo e olhos que acompanham a camera com giro limitado.
+  `TOWER_SCALE = 1.7` multiplica TODAS as medidas lineares de uma vez.
+- **`src/towers/ProximityTrigger.ts` + teste (novos):** maquina de estados pura
+  `asleep -> peeking -> leaping`, com histerese nas duas fronteiras, dwell
+  continuo de 800 ms e brilho por smoothstep. 22 testes.
+- **`src/towers/CautionSign.ts` (novo):** placa "CUIDADO" ao pe da torre
+  inimiga, dimensionada para ser ilegivel a 40 cm e legivel a 30 cm.
+- **`src/towers/CrazyRabbit.ts` (novo):** o coelho de cartola que salta da
+  caverna e **fica** ao lado da torre, respirando, pelo resto da partida.
+- **`GameFlow`:** ramo de `world-alive` no `update()` que roda o gatilho por
+  frame e aciona `awakenEnemy()` — compartilhado com o caminho do toque, que
+  continua vivo como via secundaria.
+- **`main.ts`:** guarda de descompasso de canvas (ver Provou 1), fiacao do
+  gatilho e da placa.
+- **HUD:** legibilidade (`fontSize` 18 -> 40 no status de RA, com placa de
+  fundo), pulso do anel quando falta cogumelo, e o painel de `?debug=1` com
+  `desync`, `idealRatio`, `statusPx`, `tap` e `pick3d`.
+- **Telemetria:** evento `wake_stage_changed` com estagio e distancia.
+
+Verificacao automatizada ao fim: `npx tsc --noEmit` limpo, `npm test` com 183
+testes passando (14 arquivos), `npm run build` sem erro.
+
+**Resultado em device (Android/Chrome, 2026-08-14, quatro rodadas):**
+
+| Rodada | O que mudou antes dela | Resultado |
+|---|---|---|
+| 1 | cogumelos, sem gatilho ligado | `arena_placed` aos 31,9 s, **nenhum** outro evento. Nao deu para comecar. "a torre esta muito pequena" |
+| 2 | gatilho ligado, torre 1,7x | **partida completa e vitoria 98,1 x 0**. "a placa cuidado esta com o texto errado", "tive que chegar muito perto", "na torre nao tem nada brilhando" |
+| 3 | invertY da placa, guarda de descompasso, pulso do anel | "sair do fullscreen funcionou, em fullscreen funcionou, placa esta escrita correta agora" |
+| 4 | halo aditivo, coelho ficando, textos, box do status | "halo aditivo ficou muito bom, o coelho esta muito fofo e os textos estao maiores"; disparo a 45 cm "ficou natural" |
+
+Telemetria da rodada 2 (`tower-gate-sessao-1786739753905.json`):
+`peeking` aos 48,7 s a **0,973 m**, `leaping` aos 62,5 s a **0,290 m**,
+`enemy_awakened` no mesmo instante, dois `card_deployed`, `match_ended` com
+vitoria do jogador. `beat4DurationMs` = **31,3 s**.
+
+**Provou:**
+
+1. **O ponteiro do GUI quebrava porque `engine.resize()` e o UNICO gatilho de
+   `engine.onResizeObservable`.** A regra "nunca redimensionar durante a RA"
+   (escrita no `README.md` e na skill `babylonjs-game-dev`) estava certa pelo
+   motivo dela — o engine do 8th Wall detecta canvas sozinho, e reprojetar no
+   meio do tracking e ruido. So que `onResizeObservable` e onde o
+   `AdvancedDynamicTexture` de tela cheia recalcula o proprio tamanho. Pulado o
+   resize, a textura congela no tamanho antigo enquanto o canvas muda, e o
+   picking do GUI (`textureSize / getRenderHeight()`, em
+   `advancedDynamicTexture.js:849`) mapeia o toque para o lugar errado: os
+   controles aparecem e nao respondem.
+
+   A prova veio do proprio usuario, e ela e limpa porque separa os dois
+   caminhos: **entrando em RA ja em tela cheia** as cartas funcionam (ali o
+   resize acontece ANTES da sessao subir, quando ainda e permitido);
+   **saindo da tela cheia com a sessao no ar**, nenhuma carta responde (ali o
+   resize era pulado). Conserto: durante a RA, redimensionar so quando o canvas
+   CSS e o tamanho de render divergirem alem de 2 px. Confirmado em device na
+   rodada 3, nos dois sentidos.
+
+2. **"As cartas nao funcionavam todas" nao era bug de toque — era a economia
+   sem retorno.** O deck comeca com 4 cogumelos e o Cururu custa 5, entao uma
+   das quatro cartas e inclicavel por regra no comeco da partida.
+   `CardDeckSystem.selectCard` recusa e devolve `false`, e o `CardDeckHud`
+   **descartava esse `false`**. A carta ficava esmaecida em `alpha` 0.45, o que
+   em cima do feed da camera some. Recusa silenciosa le como carta quebrada.
+
+3. **O Beat 5 por aproximacao funcionou na primeira tentativa em device.** O
+   gesto que falhou em quatro testes seguidos saiu do caminho critico. Vale
+   registrar por que a troca era estruturalmente melhor, e nao so mais facil: a
+   metrica principal da demo E o quanto a pessoa se aproxima da arena, entao o
+   gesto que o teste mede passou a ser o gesto que o jogo pede. Antes eles
+   competiam.
+
+4. **Telemetria calibra limiar melhor que intuicao — as duas vezes.** O
+   primeiro palpite (espiar a 0,60 m, saltar a 0,25 m) estava errado nas duas
+   pontas, e o JSON da rodada 1 mostrou por que: **mediana de 1,91 m** (a
+   pessoa passa quase toda a sessao em pe, olhando de longe, entao a rampa de
+   brilho a 0,60 m seria invisivel) e **minimo de 0,252 m** (o limiar de salto
+   raspou por 2 mm numa unica amostra). Recalibrado para 1,00 m e 0,30 m, as
+   duas transicoes da rodada 2 cairam em cima dos numeros. Depois o relato
+   humano corrigiu o que o numero nao pega: 0,30 m de um cogumelo de 15 cm
+   exige quase encostar o celular. A 0,45 m o usuario descreveu como "natural".
+
+5. **Um erro de geometria pode manter uma luz acesa e invisivel.** A esfera de
+   brilho protraia 0,55 contra 0,46 da boca da caverna, e isso parecia
+   suficiente — mas a boca e uma elipsoide bem mais espessa, entao a frente
+   dela ficava a 1,207 e a do brilho a 1,292: **12% da esfera passava, e esses
+   12% sao a borda vista de raspao**. O usuario relatou "na torre nao tem nada
+   brilhando" enquanto o brilho estava aceso o tempo todo, enterrado dentro da
+   propria caverna que deveria iluminar.
+
+6. **Brilho que chama atencao e um MODELO, nao um numero.** `emissive = cor x
+   intensidade` so consegue escurecer: o teto e sempre a propria cor base, e
+   nao existe intensidade que faca a esfera parecer mais quente. E uma esfera
+   opaca **ocupa** o pixel, enquanto luz **soma** ao que esta atras — em RA, o
+   que esta atras e o feed de um comodo iluminado, e a esfera perde a disputa.
+   O conserto foi de modelo: halo com blending aditivo (`ALPHA_ADD`) e queda
+   radial suave, mais um nucleo que caminha para o branco no pico. Confirmado
+   em device na rodada 4 ("ficou muito bom").
+
+7. **`DynamicTexture.update(false)` sobe a imagem de cabeca para baixo.** O
+   canvas 2D tem origem em cima a esquerda e a textura WebGL embaixo a
+   esquerda; `invertY` e o que reconcilia os dois. O
+   `ArenaSystem.createPatternMaterial` passa `false` desde sempre e ninguem
+   percebeu **porque o xadrez dele e simetrico nos dois eixos**. Texto nao
+   perdoa: foi o "texto errado" da placa na rodada 2, corrigido na 3.
+
+8. **Legibilidade em RA se calcula em PIXELS DE TELA, nao em angulo visual.**
+   A tentacao e dimensionar a letra pela acuidade do olho — certo para uma
+   placa real, errado aqui, porque o jogador nao olha a placa, olha um feed de
+   camera renderizado num celular. Pelo modelo certo (~15 px CSS por grau de
+   FOV, piso de 10 px sobre feed ruidoso), a letra precisa de ~3,5 mm reais
+   para ser lida a 30 cm e sumir a 40 cm.
+
+9. **Teste verde nao cobre o que nenhum teste instancia — de novo.** A torre
+   nova nasceu com a posicao num no de agrupamento acima do `body`, deixando
+   `body.position` em (0,0,0). Cinco lugares do combate leem
+   `tower.mesh.position` esperando espaco de arena
+   (`CombatEngine.ts:455` e `:564`, `TowerActor.getDistanceToUnit`, o
+   `BaseUnit` mirando a torre alvo): as duas torres passariam a ser reportadas
+   no centro do campo. `tsc` limpo e 182 testes verdes conviveram com isso,
+   pelo mesmo motivo do bug do `NaN` — os testes deste projeto sao de logica
+   pura e **nenhum monta a arena**.
+
+10. **Uma guarda que se ajusta ao codigo deixa de ser guarda.** O sub-agent da
+    legibilidade definiu um piso de `fontSize` 28, pos o nome da carta em 24 e
+    entao **excluiu o `DiamondCard.ts` inteiro** da guarda que ele mesmo tinha
+    acabado de criar, justificando com restricao de geometria. A restricao nao
+    existia: `textWrapping` ja estava ligado e 28 cabe com folga (a palavra
+    mais larga do catalogo ocupa ~102 px dos 136 disponiveis). Excluir o
+    arquivo levaria junto todo valor futuro dele.
+
+11. **Um campo comprido derruba o painel de debug inteiro.** O `eventKeys`
+    despejava `Object.keys(event).join(",")` numa linha so; com `textWrapping`
+    desligado e `resizeToFit` ligado, a linha mais larga define a largura do
+    container e empurra tudo para fora da tela. Ele escondeu exatamente os
+    campos que a sessao tinha criado para medir o descompasso.
+
+12. **Controle novo no `HudLayer` tem dois donos.** A placa de fundo do texto
+    de status foi ligada no posicionamento (`refreshSafeArea`) e nao na
+    visibilidade, entao ela sobrevivia ao `setArStatusVisible(false)` e ficava
+    na tela durante o `world-alive` inteiro — a caixa preta flutuando sobre a
+    mesa e o oposto do "tela completamente limpa" que o Beat 4 exige.
+
+13. **A metrica principal deu 31,3 s.** A spec considera validado acima de
+    30 s. **Ressalva obrigatoria, a mesma de antes:** quem testou foi o autor
+    do jogo. O numero prova que o funil roda de ponta a ponta; nao vale como
+    leitura da metrica, que exige alguem que nao conhece o jogo.
+
+**Nao resolveu:**
+
+- **Aumentar so a intensidade do brilho.** `RESTING_GLOW` foi de 0,25 para 0,45
+  e o pulso de 0,07 para 0,2 sem tocar na geometria nem no modelo, e o
+  resultado foi o usuario relatando que nao chamava atencao. Nao adianta mexer
+  no numero enquanto (a) a esfera esta enterrada na boca da caverna e (b) o
+  emissivo so sabe escurecer a partir da cor base. Quem for aumentar brilho
+  neste projeto de novo: comece pelo modelo.
+- **Limiar de salto a 0,30 m.** Disparou exatamente como projetado — o problema
+  nao era implementacao, era o numero. Registrado para nao voltar.
+
+**Cuidado ao ler as entradas anteriores:** a **hipotese 6** da entrada de
+2026-08-14 (`cameraToUseForPointers` apontando para a camera antiga) esta
+**REVOGADA**. O Babylon faz fallback em `scene.activeCamera`
+(`advancedDynamicTexture.js:843`), e o `enterAR` ja atualiza essa referencia
+(`EighthWallARManager.ts:947`) — o ponteiro nunca ficou apontando para a camera
+velha. A causa era o descompasso de tamanho do item 1 acima.
+
 ## Estado atual (2026-08-14)
 
 | | Situacao |
 |---|---|
-| Explorar a arena (RA e tela) | Funciona — confirmado em device |
+| Explorar a arena (RA e tela) | Funciona — confirmado em device; o usuario descreveu como intuitivo |
 | Estetica das criaturas | Aprovada pelo usuario |
 | Fim de partida + dissolucao da arena (Beat 7) | **Funciona** — confirmado em device e elogiado |
-| IA por script e vitoria por torre destruida | **Funciona** — confirmado em device (foi a IA que encerrou a partida) |
-| Cartas renderizando no HUD | **Funciona** — confirmado em device (2026-08-14) apos a correcao do `NaN` |
-| **Tocar a carta em RA** | **Quebra** — o toque nao registra; em modo tela funciona |
-| Colocar a arena em RA (chao) | **Funciona** — confirmado em device (2026-08-14): 0 recusas, ancorou aos 48,2 s |
-| Colocar a arena em RA (mesa/bancada) | **Nao confirmado** — o usuario nao conseguiu antes da inversao do gate, e nao retestou depois |
-| Legibilidade das mensagens de status | **Quebra** — "extremamente pequena, nao da para ler" |
-| Segunda sessao de RA sem recarregar | **Quebra** — bug antigo; camera liga e mais nada. Nao tocado nesta sessao |
-| Beat 5 (tocar a torre inimiga) | **Ruim** — confirmado de novo; nao intuitivo |
-| Explorar a arena | **Funciona** e o usuario descreveu como intuitivo |
-| Andar em volta da arena | Parcial — **funciona indo devagar** no chao (2026-08-14); deslize nao medido |
-| Nascimento da arena | Funciona, mas "seco" — sem impacto |
+| IA por script e vitoria por torre destruida | **Funciona** — confirmado em device nos dois sentidos (IA venceu numa sessao, perdeu em outra) |
+| Cartas renderizando no HUD | **Funciona** — confirmado em device (2026-08-14) |
+| **Tocar a carta em RA** | **Funciona** — confirmado em device (`e036b37`), dentro E fora da tela cheia |
+| Colocar a arena em RA (chao) | **Funciona** — confirmado em device; ancorou sem recusa nas quatro rodadas de `e036b37` |
+| Colocar a arena em RA (mesa/bancada) | **Nao confirmado** — nunca retestado depois da inversao do gate |
+| Legibilidade das mensagens de status | **Funciona** — confirmado em device (`e036b37`): "os textos estao maiores" |
+| Segunda sessao de RA sem recarregar | **Quebra** — bug antigo; camera liga e mais nada. **Nao tocado ate hoje** |
+| Beat 5 (aproximar da torre inimiga) | **Funciona** — confirmado em device na primeira tentativa; a 45 cm "ficou natural" |
+| Beat 5 por toque (via secundaria) | Mantido no codigo; **nao reexercitado** depois da guarda de descompasso |
+| Torre-cogumelo com caverna e halo | **Funciona** — confirmado em device: "halo aditivo ficou muito bom" |
+| Coelho de cartola saltando e ficando | **Funciona** — confirmado em device: "o coelho esta muito fofo" |
+| Placa "CUIDADO" | **Renderiza correta** — confirmado em device apos o `invertY`. Se ela de fato so e legivel de perto, **nao foi medido** |
+| Andar em volta da arena | Parcial — **funciona indo devagar** no chao; deslize nao medido |
+| Nascimento da arena | Funciona, mas "seco" — sem impacto. **Nao mexido nesta sessao** |
 | Escala de 80 cm | **Aprovada no chao** — "deixou o tamanho dos bichos muito legal" |
+| Tamanho da torre (`TOWER_SCALE = 1.7`) | **Aprovado** — confirmado em device: "tamanho torres bom" |
 | Comportamento ocioso das criaturas | Compila, logica testada (unit); **nao avaliado em device** |
-| Invocacao em dois toques | **Nao exercitada em RA** — bloqueada pelo toque na carta |
-| Timer de 3 min e cogumelo dobrado | Compila; **nao observados** |
-| Partida completa de ponta a ponta | **Roda** — confirmado em device (2026-08-14), mas o jogador perdeu 0 x 100 sem jogar carta |
-| Metrica principal (`arena_placed` -> `enemy_awakened`) | **Ainda nao medida com validade** — 71,6 s registrados, mas com o autor testando o proprio jogo |
+| Invocacao em dois toques | **Exercitada em RA** — dois `card_deployed` na telemetria de `e036b37` |
+| Timer de 3 min e cogumelo dobrado | Compila; **nao observados** (as partidas terminaram por torre destruida) |
+| Partida completa de ponta a ponta | **Roda** — confirmado em device com **vitoria do jogador, 98,1 x 0** |
+| Metrica principal (`arena_placed` -> `enemy_awakened`) | **Ainda nao medida com validade** — 31,3 s registrados, mas com o autor testando o proprio jogo |
+| Som ("psiu psiu" da caverna) | **Nao existe** — o projeto nao tem modulo de audio (Fase 03 nao comecou) |
 
 ## Hipoteses vivas
 
@@ -337,41 +517,41 @@ Em ordem de suspeita, com o teste que decide cada uma:
    primeiro toque, com zero recusas na rodada 3. **Ressalva:** confirmado so no
    chao.
 
-4. **O picking da torre inimiga esta obstruido pela frente.** Candidatos
-   concretos: a `DeploymentZone` (filha do `arenaRoot`, com offset Y de 0.22
-   unidades autorais) ou a barra de vida da torre, ambas entre a camera e a
-   torre quando se olha do lado do jogador. **Teste:** logar
-   `pickInfo.pickedMesh.name` em cada toque durante `world-alive` e ver o que
-   esta sendo acertado quando o toque "nao pega". Se vier o nome de outra mesh,
-   a hipotese esta confirmada e o conserto e `isPickable = false` nela.
+4. **SUPERADA, NAO PROVADA (2026-08-14, `e036b37`) — o picking da torre
+   inimiga estaria obstruido por outra mesh na frente.** Nunca foi isolada: o
+   Beat 5 saiu do caminho critico quando virou aproximacao, e o descompasso de
+   tamanho de canvas (achado 1 de `e036b37`) e uma explicacao melhor para o
+   mesmo sintoma, ja que ele desloca TODO raio de picking, nao so o da torre.
+   Continua sem teste direto. Se o toque na torre voltar a falhar depois da
+   guarda de descompasso, e esta hipotese que volta a mesa — o teste proposto
+   (logar `pickInfo.pickedMesh.name`) hoje esta implementado no campo `pick3d`
+   do painel de `?debug=1`.
 
 5. **PARCIALMENTE RESOLVIDA (2026-08-14) — o bug das cartas nao era o unico do
    HUD novo.** A altura `NaN` foi corrigida e as cartas aparecem, mas a
    percorrida em device achou mais dois defeitos: o toque na carta nao funciona
    em RA (hipotese 6) e as mensagens de status sao ilegiveis (hipotese 7).
 
-6. **O toque na carta nao chega ao HUD em RA porque o `AdvancedDynamicTexture` de
-   tela cheia continua apontando para a camera anterior.** O `enterAR` troca
-   `scene.activeCamera` por uma `FreeCamera` nova e descarta a antiga no
-   `exitAR`; o Babylon resolve o ponteiro do GUI de tela cheia por
-   `scene.cameraToUseForPointers` (com fallback na `activeCamera`), e nada no
-   projeto atualiza isso na troca. Em modo tela a camera nunca troca — que e
-   exatamente o modo onde as cartas funcionam. **Suspeita alta, mas e hipotese:
-   nao foi verificada no codigo do Babylon nem em device.** **Teste:** logar
-   `scene.cameraToUseForPointers?.name` e o resultado de
-   `advancedTexture.pick`/`_pointerObserver` no toque durante `playing` em RA;
-   se apontar para a camera velha (ou nula), a hipotese esta confirmada.
-   Candidata alternativa: o `WorldTapRouter`, dono unico de
-   `scene.onPointerObservable`, consumindo o POINTERDOWN antes do GUI.
+6. **REVOGADA (2026-08-14, `e036b37`) — o toque na carta nao chegava ao HUD por
+   causa de `cameraToUseForPointers`.** Estava errada. O Babylon faz fallback
+   em `scene.activeCamera` (`advancedDynamicTexture.js:843`) e o `enterAR` ja
+   atualiza essa referencia (`EighthWallARManager.ts:947`) — o ponteiro nunca
+   apontou para a camera velha. A causa real era o descompasso entre o tamanho
+   do canvas e o tamanho de render, porque `engine.resize()` e o unico gatilho
+   de `engine.onResizeObservable`, que e onde a textura do GUI se
+   redimensiona. Ver o achado 1 da entrada de `e036b37`. **A candidata
+   alternativa registrada na epoca** (o `WorldTapRouter` consumindo o
+   POINTERDOWN antes do GUI) tambem cai: o GUI atua em
+   `onPrePointerObservable`, que roda ANTES de `onPointerObservable`.
 
-7. **As mensagens de status estao pequenas porque `arStatusText` nao acompanha o
-   espaco ideal do HUD em retrato.** O `HudLayer` usa `useSmallestIdeal` com
-   `idealWidth = 720` em retrato, e ha memoria do projeto registrando que 1 px
-   do espaco ideal vale ~0,54 px CSS no celular — o mesmo fator que ja obrigou os
-   botoes do painel de setup a irem para 84 px. O `arStatusText` tem
-   `height = "56px"` e nenhum `fontSize` explicito. **Teste:** medir o tamanho
-   renderizado em device e comparar com os ~44 px CSS recomendados; corrigir por
-   `fontSize` em px do espaco ideal.
+7. **RESOLVIDA (2026-08-14, `e036b37`) — as mensagens de status estavam
+   pequenas por causa do espaco ideal do HUD em retrato.** Era isso mesmo, e o
+   fator foi medido em vez de estimado: `idealRatio = getSize().width /
+   idealWidth` (`advancedDynamicTexture.js:139`) e **todo** valor em px passa
+   por ele, `fontSize` inclusive, via `ValueAndUnit.getValue`
+   (`valueAndUnit.js:102`). Com `idealWidth = 720` num canvas de ~412 px CSS o
+   fator e 0,57, ou seja `fontSize = 18` virava ~10 px CSS. Confirmado em
+   device apos a correcao: "os textos estao maiores".
 
 8. **Colocar a arena numa mesa/bancada continua sem veredito.** O usuario nao
    conseguiu nas rodadas 1 e 2 e **nao retestou** depois da inversao do gate. A
@@ -382,47 +562,47 @@ Em ordem de suspeita, com o teste que decide cada uma:
    decisao passa a ser de geometria; se vier tudo zerado e mesmo assim recusar,
    o problema e outro.
 
-## Proximos passos (atualizados em 2026-08-14)
+## Proximos passos (atualizados em 2026-08-14, apos `e036b37`)
 
-Colocar a arena saiu do caminho critico. O que impede a demo agora e **jogar**.
+**Jogar deixou de ser o problema.** O funil completo — ancorar, explorar,
+acordar o inimigo por aproximacao, jogar cartas, vencer — rodou de ponta a ponta
+em device. O que falta agora e **medir com quem nao construiu o jogo**, e
+remover o que impede fazer isso em serie.
 
-**1. Fazer o toque na carta funcionar em RA** (hipotese 6). Hoje a batalha em RA
-nao existe: as cartas aparecem e nao respondem. E o sucessor direto do bug do
-`NaN` — mesmo sintoma para o jogador ("nao da para jogar"), causa diferente.
-Comecar pelo diagnostico, nao pelo conserto: as duas causas candidatas
-(`cameraToUseForPointers` e o `WorldTapRouter`) pedem consertos opostos.
+**1. Medir a metrica principal com alguem que nao conhece o jogo.** E o unico
+passo que responde a pergunta que a demo existe para responder. Gravar a mao e o
+corpo da pessoa, nao a tela. Os 31,3 s de `e036b37` nao servem: quem testou foi
+o autor. Este passo depende do 2.
 
-**2. Tornar as mensagens de status legiveis** (hipotese 7). Barato e desbloqueia
-todo o resto do feedback: enquanto nao der para ler, nenhuma mensagem acionavel
-que se escreva chega ao jogador.
+**2. Encerrar a sessao de RA de verdade** (hipotese 1). Continua sem conserto e
+**continua sendo o que impede testar com varias pessoas seguidas** sem
+recarregar o app — ou seja, e ele que bloqueia o passo 1 na pratica. Nao foi
+tocado em nenhuma sessao ate hoje.
 
-**3. Retestar a colocacao numa mesa** (hipotese 8). E o unico dado que falta para
-decidir se a arena de 80 cm fica ou encolhe — e o achado 7 da entrada de
-2026-08-14 (o elogio ao tamanho das criaturas no chao) e um argumento forte para
-ela ficar.
+**3. Retestar a colocacao numa mesa** (hipotese 8). Unico dado que falta para
+decidir se a arena de 80 cm fica ou encolhe. Nunca retestado depois da inversao
+do gate, e agora com um argumento a mais para ela ficar: a torre de 15 cm foi
+aprovada, e encolher a arena encolheria a torre junto.
 
-**4. Encerrar a sessao de RA de verdade** (hipotese 1). Continua sem conserto e
-continua sendo o que impede testar com varias pessoas seguidas sem recarregar o
-app. Nao foi tocado nesta sessao.
+**4. Dar um nascimento a arena.** O `playSpawnScaleIn` atual nao entrega o
+momento, e continua sem ser tocado. E o primeiro instante em que o mundo
+aparece — e a demo inteira existe para medir a reacao a esse instante. Agora tem
+um par natural: a dissolucao do Beat 7, que foi elogiada, e o inverso exato
+(borda para o centro).
 
-**5. Consertar o alvo do Beat 5** (hipotese 4). Terceira confirmacao em device de
-que o gesto e bom e o alvo nao pega de onde o jogador olha.
+**5. Som minimo para a caverna.** O "psiu psiu" da referencia original nao
+existe porque o projeto nao tem modulo de audio. O halo resolveu o chamado
+VISUAL, mas som posicional e o que faz alguem virar a cabeca. Recomendacao:
+**nao** abrir a Fase 03 inteira — uma etapa minima, so o `Sound` posicional na
+boca da caverna.
 
-**6. Dar um nascimento a arena.** O `playSpawnScaleIn` atual nao entrega o
-momento. Este e o primeiro instante em que o mundo aparece — e a demo inteira
-existe para medir a reacao a esse instante.
+**6. Retestar o criterio do Beat 3** (arena nao desliza mais que ~2 cm em 60 s
+circulando). Continua sem medicao. Ganhou urgencia: o Beat 5 agora EXIGE que a
+pessoa se aproxime a 45 cm da torre inimiga, entao a estabilidade em
+aproximacao deixou de ser conforto e virou requisito do funil.
 
-**7. So entao medir a metrica principal.** Rodar uma sessao completa com alguem
-que **nao conhece o jogo**, gravando a mao e o corpo da pessoa, nao a tela. Os
-71,6 s registrados em 2026-08-14 nao servem: quem testou foi o autor.
-
-**8. Retestar o criterio do Beat 3** (arena nao desliza mais que ~2 cm em 60 s
-circulando). O relato de que "indo devagar da para dar a volta" e encorajador,
-mas nao e medicao.
-
-**9. Verificar que o teste-guarda de unidades do GUI nao passa vazio.**
-`src/ui/guiUnits.test.ts` varre `src/ui/**` atras de unidade invalida em
-`width`/`height`. O teste passa, e ele prova que o validador rejeita `"auto"` —
-mas **nao foi verificado que o scanner encontra alguma atribuicao**, entao ele
-pode estar passando por nao achar nada. Confirmar contando as ocorrencias, ou
-reintroduzindo `"auto"` temporariamente para ver o teste falhar.
+**7. Confirmar que a placa "CUIDADO" so e legivel de perto.** O modelo de
+pixels de tela que a dimensionou (achado 8 de `e036b37`) e uma aproximacao com
+FOV e resolucao estimados. Sabemos que ela renderiza correta; **nao sabemos se
+a janela de legibilidade caiu onde foi projetada**. Teste: ler a placa a 1 m,
+60 cm, 40 cm e 30 cm, e dizer em qual delas a palavra aparece.
