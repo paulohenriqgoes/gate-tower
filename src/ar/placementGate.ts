@@ -1,20 +1,43 @@
-import type { ProbeCoverage } from "./hitTestSampling";
-
 /**
  * Estados do preview de fechamento da arena.
  *
  * A v3 trocou a pergunta do gate. Antes era "cabe um retangulo de 80 cm nessa
  * superficie?", e os estados falavam de contorno (`out-of-frame`,
- * `too-small`). Agora a arena nasce NO JOGADOR, entao a pergunta virou "da
- * para fechar um arco de 2,2 m ao redor de quem esta aqui?" — e ela se decompoe
- * em achar o piso, confirmar que o device esta a altura de alguem em pe, e nao
- * ter prova de obstaculo no entorno imediato.
+ * `too-small`). Agora a arena nasce NO JOGADOR, entao a pergunta virou "da para
+ * fechar um arco de 2,2 m ao redor de quem esta aqui?" — e ela se decompoe em
+ * achar o piso e confirmar que o device esta a altura de alguem em pe.
+ *
+ * ## Por que nao existe um estado de obstaculo
+ *
+ * Existiu: `blocked`, alimentado por dez sondas de hitTest dentro do raio
+ * minimo de colocacao. O primeiro teste em device mediu **1 sonda em quadro de
+ * 10**, sempre — as sondas ficam no chao a menos de 90 cm de quem segura o
+ * celular a 1,20 m olhando para a frente, o que e ~55 graus abaixo do
+ * horizonte, fora da borda inferior da tela. Com uma sonda em quadro o limiar
+ * (minimo 2) era inalcancavel: a regra NUNCA podia disparar.
+ *
+ * Nao foi consertada, foi removida, por tres razoes que valem registro:
+ *
+ * 1. Acumular leituras entre frames seria o conserto obvio e esta ERRADO aqui:
+ *    as sondas vivem no espaco local da arena e o contorno gira com o jogador,
+ *    entao a sonda de indice 3 e um azimute fixo em relacao ao ROSTO dele, nao
+ *    um ponto fixo do mundo. Somar leituras por indice misturaria lugares
+ *    diferentes.
+ * 2. Este stack nao tem oclusao real (plano §5). Um movel "dentro" da arena ja
+ *    e invisivel para o jogo — a regra protegia contra um problema estetico.
+ * 3. A pergunta "esse lugar esta livre?" tem casa natural na Etapa 6, no anel
+ *    de colocacao: la o jogador ESTA olhando para o ponto, a sonda cai no
+ *    centro da tela, e a resposta muda onde a tropa nasce. Aqui ela era
+ *    irrespondivel e inconsequente.
+ *
+ * A assimetria que fechou a decisao: um "blocked" falso ja custou 79 recusas e
+ * zero ancoragens em dois testes de device. Um bloqueio ausente custa o jogador
+ * ver um cogumelo dentro do sofa.
  */
 export type PlacementPreviewState =
   | "waiting-tracking"  // trackingStatus !== "NORMAL" — quem fala e o coaching overlay do 8th Wall
   | "searching"         // sem fit de plano na faixa de chao a frente
   | "bad-height"        // piso achado, mas a altura do device nao e a de alguem em pe
-  | "blocked"           // PROVA CONTRARIA: sondas bateram em superficie fora do piso
   | "ready"
   | "ready-degraded";   // escape de ambiente com pouca textura; precisao reduzida
 
@@ -33,38 +56,6 @@ export const MIN_DEVICE_HEIGHT_M = 0.8;
 export const MAX_DEVICE_HEIGHT_M = 2.0;
 
 /**
- * Piso ABSOLUTO de sondas com prova contraria para reprovar. Existe para que um
- * unico outlier do SLAM nunca reprove um chao bom — foi assim que o gate se
- * comportava antes da inversao da politica, e custou 79 recusas e zero
- * ancoragens em dois testes de device.
- */
-export const MIN_BLOCKING_PROBES = 2;
-
-/**
- * Fracao das sondas EM QUADRO que precisa dar prova contraria para reprovar.
- *
- * O limiar e uma FRACAO, e nao o `2` herdado da contagem de 8 sondas do
- * contorno retangular: a quantidade de sondas mudou (agora sao aneis dentro do
- * raio minimo de colocacao) e vai mudar de novo quando o arco for reajustado.
- * Um numero absoluto amarrado a uma contagem que nao existe mais e um limiar
- * que ninguem sabe mais recalibrar.
- *
- * O denominador e `inFrame`, e nao `total`: sonda fora do quadro nao foi
- * testada, entao nao pode diluir nem endurecer o criterio. 0,25 preserva a
- * severidade medida em device — com as 8 sondas antigas, `ceil(0,25 * 8) = 2`,
- * exatamente o limiar que funcionou.
- */
-export const BLOCKING_PROBE_FRACTION = 0.25;
-
-/**
- * Quantas sondas com prova contraria reprovam, dado quantas estao em quadro.
- * Nunca menos que `MIN_BLOCKING_PROBES`.
- */
-export function blockingProbeThreshold(inFrameProbes: number): number {
-  return Math.max(MIN_BLOCKING_PROBES, Math.ceil(BLOCKING_PROBE_FRACTION * Math.max(0, inFrameProbes)));
-}
-
-/**
  * Quantos frames de falha consecutivos até sair de ready/ready-degraded.
  * A 5 Hz (5 updates por segundo), ~2 strikes = ~400 ms.
  */
@@ -80,11 +71,6 @@ export interface ResolvePreviewStateInput {
    * assim ele fica livre de Babylon.
    */
   deviceHeightM: number | null;
-  /**
-   * Sondas de desobstrucao. `null` significa "nao medi" (nao houve piso para
-   * projetar as sondas contra), e NAO reprova — ver a regra 4.
-   */
-  coverage: ProbeCoverage | null;
   previous: PlacementPreviewState;
   consecutiveFailures: number;
 }
@@ -107,7 +93,6 @@ export function resolvePreviewState(input: ResolvePreviewStateInput): ResolvePre
     trackingStatus,
     hasFallbackUnlocked,
     deviceHeightM,
-    coverage,
     previous,
     consecutiveFailures
   } = input;
@@ -126,7 +111,7 @@ export function resolvePreviewState(input: ResolvePreviewStateInput): ResolvePre
   }
 
   // Histerese na SAIDA de ready/ready-degraded: uma reprovacao isolada nao
-  // derruba o estado. Vale para as regras 2, 3 e 4 — inclusive `searching`,
+  // derruba o estado. Vale para as regras 2 e 3 — inclusive `searching`,
   // porque o hitTest do SLAM falha em frames avulsos e sem isso o arco
   // piscaria com o proprio ruido da medicao. Entrar em ready continua imediato.
   const holdOrFail = (failed: PlacementPreviewState): ResolvePreviewStateOutput => {
@@ -154,17 +139,6 @@ export function resolvePreviewState(input: ResolvePreviewStateInput): ResolvePre
   // Regra 3: a altura do device denuncia piso errado ou escala nao convergida.
   if (deviceHeightM < MIN_DEVICE_HEIGHT_M || deviceHeightM > MAX_DEVICE_HEIGHT_M) {
     return holdOrFail("bad-height");
-  }
-
-  // Regra 4: PROVA CONTRARIA de obstaculo no entorno imediato.
-  //
-  // Repare no que NAO esta aqui: `coverage === null` (nao medi) e
-  // `coverage.onPlane === 0` (mediram e nada respondeu) nao reprovam nada.
-  // Silencio do sensor e "nao sei", nunca "nao pode" — inverter isso reproduz
-  // o bug que custou 79 recusas e zero ancoragens em dois testes de device.
-  // So reprova sonda que BATEU em superficie real fora do plano do piso.
-  if (coverage !== null && coverage.offPlane >= blockingProbeThreshold(coverage.inFrame)) {
-    return holdOrFail("blocked");
   }
 
   // Caso contrário: da para fechar. Se fallback está ativo, ready-degraded;
@@ -200,8 +174,6 @@ export function placementMessage(state: PlacementPreviewState): string | null {
       return "Aponte o celular para o chao a sua frente";
     case "bad-height":
       return "Fique de pe e segure o celular na frente do corpo";
-    case "blocked":
-      return "Abra espaco a sua volta";
     case "ready":
       return null;
     case "ready-degraded":
@@ -223,8 +195,6 @@ export function placementReason(state: PlacementPreviewState): string {
       return "piso-nao-encontrado";
     case "bad-height":
       return "altura-do-device-fora-da-faixa";
-    case "blocked":
-      return "obstaculo-no-entorno";
     case "ready":
     case "ready-degraded":
       return "ok";

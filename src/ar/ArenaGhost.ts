@@ -15,14 +15,7 @@ import {
   type SectorId,
 } from "../arena/ArenaArc";
 import { applyMatteFinish } from "../fx/materials";
-import { buildClearanceProbeOffsets } from "./hitTestSampling";
 import type { PlacementPreviewState } from "./placementGate";
-
-// Sondas de desobstrucao projetadas a partir da pose atual. Dois aneis com
-// defasagem entre eles (ver `buildClearanceProbeOffsets`) — 10 sondas cobrindo
-// o arco dentro do raio minimo de colocacao.
-const PROBE_RINGS = 2;
-const PROBE_PER_RING = 5;
 
 // Espessura radial e altura das barras. A altura e minuscula de proposito: o
 // contorno tem que ler como TINTA no chao, nao como uma cerca — qualquer volume
@@ -140,36 +133,11 @@ export class ArenaGhost {
    * a MESMA que o fechamento vai aplicar no `arenaRoot`, inclusive o
    * alinhamento a normal real do piso: quando a world-up do SLAM nao bate com o
    * chao (o caso comum), um contorno deitado na horizontal do mundo aparece
-   * visivelmente torto em relacao ao piso — e as sondas tiradas da pose dele
-   * vao parar longe da superficie.
+   * visivelmente torto em relacao ao piso real.
    */
   public setPose(position: Vector3, rotation: Quaternion): void {
     this.root.rotationQuaternion = rotation;
     this.root.position.copyFrom(position);
-  }
-
-  /**
-   * Pontos de MUNDO das sondas de desobstrucao na pose atual, para quem consome
-   * projetar cada um na tela e disparar um hitTest.
-   *
-   * Os offsets NAO sao redefinidos aqui: quem os possui e
-   * `buildClearanceProbeOffsets`, o mesmo modulo de `measureProbeCoverage`.
-   * Duas listas de sondas em arquivos diferentes divergiriam no primeiro ajuste
-   * do arco — e a divergencia seria silenciosa, porque a contagem de cobertura
-   * nao depende da ordem.
-   */
-  public getProbePoints(): Vector3[] {
-    // Forca a world matrix a refletir a pose atual mesmo se `getProbePoints`
-    // for chamado logo apos `setPose`, antes do proximo tick de render.
-    this.root.computeWorldMatrix(true);
-    const worldMatrix = this.root.getWorldMatrix();
-
-    return buildClearanceProbeOffsets(
-      MIN_PLACE_RADIUS_M,
-      PROBE_RINGS,
-      PROBE_PER_RING,
-      ARENA_ARC_DEG
-    ).map(({ dx, dz }) => Vector3.TransformCoordinates(new Vector3(dx, 0, dz), worldMatrix));
   }
 
   /** Visibilidade externa (ex.: esconder o fantasma inteiro apos fechar a arena). */
@@ -354,10 +322,9 @@ export class ArenaGhost {
 
   /**
    * Uma cor por VEREDITO, nao uma por estado: verde fecha, ambar fecha com
-   * ressalva, vermelho tem uma recusa concreta que o jogador consegue
-   * desfazer (levantar, abrir espaco), branco pulsando e "ainda medindo".
-   * Distinguir `blocked` de `bad-height` por cor nao ajudaria ninguem — quem
-   * explica qual dos dois e o texto de `placementMessage`.
+   * ressalva, vermelho tem uma recusa concreta que o jogador consegue desfazer
+   * (ficar de pe, segurar o celular na frente do corpo), branco pulsando e
+   * "ainda medindo".
    */
   private materialForState(state: PlacementPreviewState): StandardMaterial {
     switch (state) {
@@ -365,7 +332,6 @@ export class ArenaGhost {
         return this.materialReady;
       case "ready-degraded":
         return this.materialReadyDegraded;
-      case "blocked":
       case "bad-height":
         return this.materialRefused;
       case "searching":

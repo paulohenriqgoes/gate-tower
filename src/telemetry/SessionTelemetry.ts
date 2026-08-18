@@ -18,19 +18,29 @@
 export type TelemetryEvent =
   | { type: "arena_placed" }
   /**
-   * Toque que nao ancorou, com o motivo vindo do gate de posicionamento
-   * (`too-small`, `out-of-frame`, ...). Existe porque "colocar a arena exige
-   * insistencia" era so relato: sem contar as recusas e o motivo delas, nao da
-   * para saber se o conserto funcionou.
+   * Toque que nao fechou a arena, com o motivo vindo do gate
+   * (`searching`, `bad-height`, `waiting-tracking`) e a altura de device
+   * medida. Existe porque "colocar a arena exige insistencia" era so relato:
+   * sem contar as recusas e o motivo delas, nao da para saber se o conserto
+   * funcionou.
    */
   | {
       type: "placement_rejected";
       reason: string;
-      inFrame: number;
-      onPlane: number;
-      offPlane: number;
-      total: number;
+      deviceHeightM: number | null;
     }
+  /**
+   * Arena devolvida ao jogador depois de uma relocalizacao do SLAM, com quanto
+   * ela tinha se afastado em metros.
+   *
+   * E o evento que mede a correcao: a sessao de 2026-08-18 registrou saltos de
+   * 0,53 m, 1,44 m e 2,53 m em recuperacoes sucessivas, mas so deu para
+   * descobrir isso cruzando `tracking_recovered` com a serie de
+   * `camera_distance_sample` na mao. Com este evento o numero vem direto, e da
+   * para saber se a reancoragem esta segurando ou se os saltos continuam
+   * crescendo.
+   */
+  | { type: "arena_reanchored"; offsetM: number }
   | { type: "enemy_awakened" }
   /**
    * Estagio do gatilho de proximidade da torre inimiga (dorme -> espia ->

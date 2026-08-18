@@ -3,12 +3,9 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import {
   normalizeToCanvas,
   buildSampleOffsets,
-  buildClearanceProbeOffsets,
   buildFloorBandSamples,
-  fitGroundPlane,
-  measureProbeCoverage
+  fitGroundPlane
 } from "./hitTestSampling";
-import { ARENA_ARC_DEG, MIN_PLACE_RADIUS_M, sectorOf, toArc } from "../arena/ArenaArc";
 
 describe("normalizeToCanvas", () => {
   it("should normalize center (50, 50) of 100x100 canvas to (0.5, 0.5)", () => {
@@ -261,144 +258,5 @@ describe("buildFloorBandSamples", () => {
   it("devolve lista vazia para grade degenerada, sem quebrar", () => {
     expect(buildFloorBandSamples(0, 3, 0.6, 0.9, 0.2)).toEqual([]);
     expect(buildFloorBandSamples(3, 0, 0.6, 0.9, 0.2)).toEqual([]);
-  });
-});
-
-describe("buildClearanceProbeOffsets", () => {
-  const RINGS = 2;
-  const PER_RING = 5;
-
-  it("devolve rings x perRing sondas", () => {
-    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
-
-    expect(offsets.length).toBe(RINGS * PER_RING);
-  });
-
-  it("nenhuma sonda passa do raio minimo de colocacao", () => {
-    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
-
-    for (const { dx, dz } of offsets) {
-      expect(toArc({ x: dx, z: dz }).radiusM).toBeLessThanOrEqual(MIN_PLACE_RADIUS_M + 1e-9);
-    }
-  });
-
-  // O que esta ATRAS do jogador nao recebe conteudo, entao nao pode reprovar o
-  // fechamento da arena — uma parede as costas e o caso normal, nao um erro.
-  it("nenhuma sonda cai fora do arco da arena", () => {
-    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
-
-    for (const { dx, dz } of offsets) {
-      expect(sectorOf(toArc({ x: dx, z: dz }).azimuthDeg)).not.toBeNull();
-    }
-  });
-
-  it("cobre os tres setores do arco", () => {
-    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
-    const sectors = new Set(offsets.map(({ dx, dz }) => sectorOf(toArc({ x: dx, z: dz }).azimuthDeg)));
-
-    expect(sectors).toEqual(new Set(["left", "center", "right"]));
-  });
-
-  it("usa raios diferentes por anel, todos positivos", () => {
-    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
-    const radii = new Set(
-      offsets.map(({ dx, dz }) => Number(toArc({ x: dx, z: dz }).radiusM.toFixed(6)))
-    );
-
-    expect(radii.size).toBe(RINGS);
-
-    for (const radius of radii) {
-      expect(radius).toBeGreaterThan(0);
-    }
-  });
-
-  // Sem defasagem os dois aneis ficam alinhados no mesmo azimute e uma quina de
-  // movel passa entre as sondas sem ser vista por nenhuma delas.
-  it("defasa os aneis pares para nao alinhar as sondas no mesmo raio", () => {
-    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
-    const azimuths = offsets.map(({ dx, dz }) =>
-      Number(toArc({ x: dx, z: dz }).azimuthDeg.toFixed(4))
-    );
-
-    expect(new Set(azimuths).size).toBeGreaterThan(PER_RING);
-  });
-
-  it("devolve lista vazia para configuracao degenerada, sem quebrar", () => {
-    expect(buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, 0, 5, ARENA_ARC_DEG)).toEqual([]);
-    expect(buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, 2, 0, ARENA_ARC_DEG)).toEqual([]);
-  });
-});
-
-describe("measureProbeCoverage", () => {
-  const flatFit = {
-    position: new Vector3(0, 0, 0),
-    normal: new Vector3(0, 1, 0)
-  };
-
-  const PROBES = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, 2, 5, ARENA_ARC_DEG);
-
-  it("sondas em quadro e no plano contam como onPlane", () => {
-    const probes = PROBES.map((offset, i) => ({
-      // Posicoes de tela validas quaisquer; so precisam estar dentro de [0,1].
-      screenX: 0.4 + i * 0.01,
-      screenY: 0.6 + i * 0.01,
-      hit: new Vector3(offset.dx, 0, offset.dz)
-    }));
-
-    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
-
-    expect(coverage).toEqual({
-      inFrame: PROBES.length,
-      offPlane: 0,
-      onPlane: PROBES.length,
-      total: PROBES.length
-    });
-  });
-
-  it("sondas fora de [0,1] nao contam em nada", () => {
-    const probes = PROBES.map((offset, i) => ({
-      screenX: i < 2 ? -0.1 : 0.5,
-      screenY: i < 2 ? 1.5 : 0.5,
-      hit: new Vector3(offset.dx, 0, offset.dz)
-    }));
-
-    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
-
-    expect(coverage.inFrame).toBe(PROBES.length - 2);
-    expect(coverage.onPlane).toBe(PROBES.length - 2);
-    expect(coverage.offPlane).toBe(0);
-  });
-
-  // Este e o caso que o gate usa como PROVA CONTRARIA: superficie real num
-  // degrau acima do piso = tem um movel ali.
-  it("sondas num degrau acima do piso contam em offPlane, nao em onPlane", () => {
-    const probes = PROBES.map(offset => ({
-      screenX: 0.5,
-      screenY: 0.7,
-      hit: new Vector3(offset.dx, 0.45, offset.dz)
-    }));
-
-    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
-
-    expect(coverage.inFrame).toBe(PROBES.length);
-    expect(coverage.onPlane).toBe(0);
-    expect(coverage.offPlane).toBe(PROBES.length);
-  });
-
-  // E este e o caso que NAO pode ser tratado como prova de nada: o hitTest
-  // falhou. Silencio do sensor nao e evidencia de que ha obstaculo.
-  it("sonda sem hit nao conta nem em onPlane nem em offPlane", () => {
-    const probes = PROBES.map(() => ({
-      screenX: 0.5,
-      screenY: 0.7,
-      hit: null as Vector3 | null
-    }));
-
-    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
-
-    expect(coverage.inFrame).toBe(PROBES.length);
-    expect(coverage.onPlane).toBe(0);
-    expect(coverage.offPlane).toBe(0);
-    expect(coverage.total).toBe(PROBES.length);
   });
 });

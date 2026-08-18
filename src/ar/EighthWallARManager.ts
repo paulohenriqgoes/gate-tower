@@ -8,19 +8,24 @@ import { Observable } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 import { Button, Control, Ellipse, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui";
 
-import type { ArenaAnchor, ArSessionController, PlacementRejection } from "./ArSessionController";
+import type {
+  ArenaAnchor,
+  ArenaReanchor,
+  ArSessionController,
+  PlacementRejection,
+} from "./ArSessionController";
 import { ArenaGhost } from "./ArenaGhost";
 import { arenaRootYawRad, headingDegFromForward, relativeYawDeg } from "./arenaHeading";
 import { installBabylonGlobalsForXR8 } from "./babylonRuntimeGlobals";
 import {
   buildFloorBandSamples,
   fitGroundPlane,
-  measureProbeCoverage,
   type GroundPlaneFit,
-  type ProbeCoverage,
 } from "./hitTestSampling";
 import {
   canPlace,
+  MAX_DEVICE_HEIGHT_M,
+  MIN_DEVICE_HEIGHT_M,
   placementMessage,
   placementReason,
   resolvePreviewState,
@@ -50,24 +55,22 @@ const FLOOR_BAND_Y_BOTTOM = 0.92;
 const FLOOR_BAND_X_INSET = 0.18;
 const MIN_INLIERS = 3;
 
-// Distancia maxima ao plano ajustado para um ponto contar como "mesma
-// superficie". Subiu de 4 para 6 cm depois do primeiro teste em device: com o
-// plano ja refeito sobre o contorno inteiro, o que sobra de erro e o proprio
-// ruido do hitTest em incidencia rasa nos cantos distantes, e 4 cm ficava
-// dentro dele. 6 cm ainda separa a mesa do chao (~70 cm abaixo) com folga.
-const COVERAGE_PLANE_TOLERANCE_METERS = 0.06;
-
-// Tipos aceitos nas sondas de desobstrucao. Sem FEATURE_POINT de proposito —
-// ver `measureClearanceAtGhost`.
-const PROBE_HITTEST_TYPES: XR8HitTestType[] = ["DETECTED_SURFACE", "ESTIMATED_SURFACE"];
-
-// A avaliacao de "da pra fechar aqui?" custa 12 hitTests da faixa de piso + 10
-// sondas de desobstrucao. A 60 fps isso seria ~1300 hitTests por segundo e
-// derrubaria o device. Entao o preview tem DOIS ritmos: a POSE do contorno
-// acompanha o jogador a cada frame (puro calculo sobre o ultimo piso medido,
-// ZERO hitTest) e o VEREDITO — a cor do contorno — e recalculado neste
-// intervalo.
+// A avaliacao de "da pra fechar aqui?" custa os 12 hitTests da faixa de piso. A
+// 60 fps isso seria ~700 hitTests por segundo e derrubaria o device. Entao o
+// preview tem DOIS ritmos: a POSE do contorno acompanha o jogador a cada frame
+// (puro calculo sobre o ultimo piso medido, ZERO hitTest) e o VEREDITO — a cor
+// do contorno — e recalculado neste intervalo.
 const PREVIEW_EVAL_INTERVAL_MS = 200;
+
+/**
+ * Espera entre o SLAM voltar a NORMAL e a reancoragem medir o piso.
+ *
+ * A pose logo apos a relocalizacao ainda esta assentando; medir no primeiro
+ * frame de NORMAL captura o transiente e reancora num lugar que deixa de valer
+ * meio segundo depois. 400 ms e o suficiente para a pose estabilizar sem que o
+ * jogador veja a arena parada no lugar errado por muito tempo.
+ */
+const REANCHOR_SETTLE_MS = 400;
 // Preferir superficie detectada; FEATURE_POINT e ultimo recurso.
 const HITTEST_TYPES: XR8HitTestType[] = ["DETECTED_SURFACE", "ESTIMATED_SURFACE", "FEATURE_POINT"];
 
@@ -110,6 +113,13 @@ const SETUP_BUTTON_WIDTH = 140;
  */
 export class EighthWallARManager implements ArSessionController {
   public readonly onArenaClosedObservable = new Observable<ArenaAnchor>();
+  /**
+   * Arena devolvida ao jogador depois de uma relocalizacao do SLAM, com quanto
+   * ela tinha se afastado. O numero e o ponto: e a medida direta do problema
+   * que esta correcao existe para tratar, e sem ele a proxima sessao de device
+   * so saberia dizer "pareceu melhor".
+   */
+  public readonly onArenaReanchoredObservable = new Observable<ArenaReanchor>();
   public readonly onSessionFailedObservable = new Observable<string>();
   public readonly onAvailabilityChangedObservable = new Observable<boolean>();
   public readonly onTrackingStatusChangedObservable = new Observable<XR8TrackingStatus>();
@@ -168,8 +178,19 @@ export class EighthWallARManager implements ArSessionController {
   private previewOrigin: Vector3 | null = null;
   // Heading (graus, convencao de `arenaHeading`) do device na ultima pose.
   private previewHeadingDeg = 0;
-  private previewCoverage: ProbeCoverage | null = null;
   private lastPreviewEvalMs = 0;
+
+  /**
+   * Instante (ms de `performance.now`) em que a reancoragem pos-relocalizacao
+   * deve rodar, ou `null` quando nao ha nenhuma pendente.
+   *
+   * Existe como agendamento, e nao como chamada direta no callback do pipeline,
+   * por duas razoes: o callback roda DENTRO do tick do engine (disparar 12
+   * hitTests ali e o tipo de coisa que derruba o WASM, e o proprio codigo ja
+   * evita parar a sessao de dentro do tick), e a pose precisa de um tempo para
+   * assentar depois da relocalizacao.
+   */
+  private pendingReanchorAtMs: number | null = null;
 
   public constructor(
     scene: Scene,
@@ -209,6 +230,7 @@ export class EighthWallARManager implements ArSessionController {
 
     this.hasClosedArena = false;
     this.anchor = null;
+    this.pendingReanchorAtMs = null;
     this.arenaRoot.setEnabled(false);
     this.resetPreview();
     this.setSetupPanelVisible(false);
@@ -526,6 +548,10 @@ export class EighthWallARManager implements ArSessionController {
 
       if (!this.isInAR || this.hasClosedArena) {
         ghost.setVisible(false);
+        // Com a arena fechada o contorno some, mas o loop continua servindo
+        // para uma coisa: devolver a arena ao jogador depois que o SLAM
+        // relocaliza.
+        this.runPendingReanchor();
         return;
       }
 
@@ -553,6 +579,75 @@ export class EighthWallARManager implements ArSessionController {
       this.lastPreviewEvalMs = nowMs;
       this.evaluatePreview();
     });
+  }
+
+  /**
+   * Executa a reancoragem agendada, se ja passou o tempo de assentamento.
+   *
+   * A regra que mais importa aqui e o que NAO se refaz: o `forwardYawDeg` da
+   * ancora e preservado. So a ORIGEM se move. Redefinir o azimute 0 pela
+   * direcao atual do celular giraria a arena debaixo do jogador — o flanco
+   * esquerdo viraria o direito no meio da partida, o que e pior do que o
+   * problema que estamos corrigindo. Corrigimos onde a arena esta, nunca para
+   * onde ela olha.
+   *
+   * A reancoragem tambem so acontece com uma medicao de piso CONFIAVEL: sem fit
+   * novo, ou com altura de device fora da faixa do gate, ela desiste e tenta na
+   * proxima. Reancorar com medicao ruim trocaria um salto por outro.
+   */
+  private runPendingReanchor(): void {
+    if (this.pendingReanchorAtMs === null || !this.hasClosedArena || !this.anchor) {
+      return;
+    }
+
+    if (performance.now() < this.pendingReanchorAtMs) {
+      return;
+    }
+
+    if (!this.isTrackingReady()) {
+      // Perdeu de novo antes de conseguir medir: cancela e espera a proxima
+      // recuperacao rearmar o agendamento.
+      this.pendingReanchorAtMs = null;
+      return;
+    }
+
+    const fit = this.sampleFloorFit();
+    const cameraPosition = this.arCamera?.globalPosition;
+
+    if (!fit || !cameraPosition) {
+      this.pendingReanchorAtMs = null;
+      return;
+    }
+
+    const heightM = this.measureDeviceHeight(fit);
+
+    if (heightM === null || heightM < MIN_DEVICE_HEIGHT_M || heightM > MAX_DEVICE_HEIGHT_M) {
+      this.pendingReanchorAtMs = null;
+      return;
+    }
+
+    const origin = this.projectOntoPlane(cameraPosition, fit);
+    const offsetM = Vector3.Distance(origin, this.anchor.origin);
+
+    const anchor: ArenaAnchor = {
+      floorY: origin.y,
+      forwardYawDeg: this.anchor.forwardYawDeg,
+      origin: origin.clone(),
+    };
+
+    this.arenaRoot.rotationQuaternion = this.buildAnchorRotation(fit.normal, anchor.forwardYawDeg);
+    this.arenaRoot.position.copyFrom(anchor.origin);
+
+    this.anchor = anchor;
+    this.previewFit = fit;
+    this.pendingReanchorAtMs = null;
+
+    console.info(`[EighthWallARManager] arena reancorada apos relocalizacao (${offsetM.toFixed(2)} m)`);
+    this.diagnostics?.setFields({
+      anchorFloorY: anchor.floorY.toFixed(2),
+      lastReanchorM: offsetM.toFixed(2),
+    });
+    this.onArenaReanchoredObservable.notifyObservers({ anchor, offsetM });
   }
 
   /**
@@ -586,11 +681,6 @@ export class EighthWallARManager implements ArSessionController {
    * sondas de desobstrucao ao redor do jogador. O resultado alimenta o gate
    * puro, que e quem decide o estado — aqui nao ha regra de decisao nenhuma, so
    * medicao.
-   *
-   * A ordem importa e nao e arbitraria: o fit vem primeiro porque as sondas
-   * precisam de um plano contra o qual serem julgadas, e a pose do contorno e
-   * atualizada com o fit NOVO antes de projetar as sondas — senao elas seriam
-   * tiradas de uma pose de um piso que a medicao acabou de corrigir.
    */
   private evaluatePreview(): void {
     const ghost = this.arenaGhost;
@@ -604,21 +694,17 @@ export class EighthWallARManager implements ArSessionController {
     // O fit e guardado ANTES do veredito, ao contrario do modelo antigo. La o
     // fit so valia se o estado aprovasse, porque ele era o ponto de ancoragem
     // vindo de um toque; aqui ele e a MEDICAO DO CHAO, e uma medicao de chao
-    // continua valendo mesmo quando o entorno esta obstruido — e o que permite
-    // ao contorno continuar deitado no piso certo enquanto vermelho.
+    // continua valendo mesmo quando a altura do device reprova — e o que
+    // permite ao contorno continuar deitado no piso certo enquanto vermelho.
     if (fit) {
       this.previewFit = fit;
       this.updateGhostPose(ghost);
     }
 
     const deviceHeightM = this.measureDeviceHeight(fit);
-    const coverage = fit ? this.measureClearanceAtGhost(ghost, fit) : null;
-
-    this.previewCoverage = coverage;
 
     const resolved = resolvePreviewState({
       consecutiveFailures: this.previewFailures,
-      coverage,
       deviceHeightM,
       hasFallbackUnlocked: this.hasFallbackUnlocked,
       previous: this.previewState,
@@ -631,9 +717,6 @@ export class EighthWallARManager implements ArSessionController {
       cameraYawDeg: this.getCameraYawDeg().toFixed(1),
       deviceHeightM: deviceHeightM === null ? "-" : deviceHeightM.toFixed(2),
       previewState: resolved.state,
-      probesInFrame: coverage ? `${coverage.inFrame}/${coverage.total}` : "-",
-      probesOffPlane: coverage ? `${coverage.offPlane}/${coverage.total}` : "-",
-      probesOnPlane: coverage ? `${coverage.onPlane}/${coverage.total}` : "-",
     });
 
     this.applyPreviewState(resolved.state);
@@ -689,59 +772,6 @@ export class EighthWallARManager implements ArSessionController {
     }
 
     return fitGroundPlane(points, MIN_INLIERS);
-  }
-
-  /**
-   * Projeta as sondas de desobstrucao na tela, dispara um hitTest em cada uma e
-   * mede quantas pertencem ao piso e quantas bateram em superficie real fora
-   * dele.
-   *
-   * As sondas ficam DENTRO do raio minimo de colocacao, em volta do jogador.
-   * Muitas delas caem fora do quadro (o chao a 90 cm dos pes de quem olha para
-   * a frente esta abaixo da borda inferior da tela), e isso e esperado: sonda
-   * fora do quadro nao conta em nada, nem a favor nem contra. O limiar de
-   * reprovacao e uma FRACAO das que estao em quadro, justamente para o veredito
-   * nao depender de quantas o enquadramento deixou passar.
-   */
-  private measureClearanceAtGhost(ghost: ArenaGhost, fit: GroundPlaneFit): ProbeCoverage | null {
-    const xr8 = window.XR8;
-
-    if (!xr8 || !this.arCamera) {
-      return null;
-    }
-
-    const engine = this.scene.getEngine();
-    const viewport = this.arCamera.viewport.toGlobal(
-      engine.getRenderWidth(),
-      engine.getRenderHeight()
-    );
-    const transform = this.scene.getTransformMatrix();
-
-    const probes = ghost.getProbePoints().map((worldPoint) => {
-      const projected = Vector3.Project(worldPoint, Matrix.Identity(), transform, viewport);
-
-      // `Vector3.Project` devolve px de DISPOSITIVO (o viewport vem de
-      // getRenderWidth/Height); o hitTest quer [0,1]. Normalizar pelo proprio
-      // viewport mantem os dois no mesmo espaco — o erro classico aqui e
-      // misturar px CSS com px de dispositivo (ver normalizeToCanvas).
-      const screenX = projected.x / viewport.width;
-      const screenY = projected.y / viewport.height;
-
-      const isInFrame = screenX >= 0 && screenX <= 1 && screenY >= 0 && screenY <= 1;
-      // Sondas NAO aceitam FEATURE_POINT: um ponto solto no ar, a meio metro do
-      // chao, contaria como "aqui tem superficie" e reprovaria um chao livre.
-      // Para o fit do piso o tipo continua valendo como ultimo recurso — la o
-      // pior caso e o plano tremer, e `fitGroundPlane` rejeita outlier; aqui o
-      // pior caso e um veredito errado, que nao tem quem corrija.
-      const results = isInFrame ? this.safeHitTest(xr8, screenX, screenY, PROBE_HITTEST_TYPES) : [];
-      const hit = results.length > 0
-        ? new Vector3(results[0].position.x, results[0].position.y, results[0].position.z)
-        : null;
-
-      return { hit, screenX, screenY };
-    });
-
-    return measureProbeCoverage(probes, fit, COVERAGE_PLANE_TOLERANCE_METERS);
   }
 
   /** Aplica o estado no fantasma e no HUD, so quando ele muda de verdade. */
@@ -802,11 +832,8 @@ export class EighthWallARManager implements ArSessionController {
       // "toquei e nao aconteceu nada" — o jogador nunca via a reprovacao, e a
       // medicao do toque podia discordar do que estava na tela.
       this.onPlacementRejectedObservable.notifyObservers({
-        inFrame: this.previewCoverage?.inFrame ?? 0,
-        offPlane: this.previewCoverage?.offPlane ?? 0,
-        onPlane: this.previewCoverage?.onPlane ?? 0,
+        deviceHeightM: this.measureDeviceHeight(this.previewFit),
         reason: this.previewState,
-        total: this.previewCoverage?.total ?? 0,
       });
       this.updateUI();
     }
@@ -853,10 +880,30 @@ export class EighthWallARManager implements ArSessionController {
     this.clearPlacementFallbackTimer();
     this.arenaGhost?.setVisible(false);
     this.finishPlacementCoaching();
+    this.reportAnchorDiagnostics(anchor);
     this.updateUI();
     this.onArenaClosedObservable.notifyObservers(anchor);
 
     return anchor;
+  }
+
+  /**
+   * Troca os campos de PREVIEW do painel de debug pelos da ancora fechada.
+   *
+   * Sem isto os campos do preview congelam no ultimo valor medido e mentem pelo
+   * resto da partida: no primeiro teste em device o painel mostrava
+   * `previewState: ready` com `trackingStatus: LIMITED`, porque o veredito era
+   * de minutos antes e o tracking tinha degradado depois. Quem esta testando le
+   * isso como "o gate aprovou sob LIMITED" — a conclusao errada, tirada de um
+   * numero que so estava velho.
+   */
+  private reportAnchorDiagnostics(anchor: ArenaAnchor): void {
+    this.diagnostics?.setFields({
+      anchorFloorY: anchor.floorY.toFixed(2),
+      anchorHeadingDeg: anchor.forwardYawDeg.toFixed(1),
+      deviceHeightM: "-",
+      previewState: "arena fechada",
+    });
   }
 
   /**
@@ -1034,6 +1081,7 @@ export class EighthWallARManager implements ArSessionController {
       this.applyArenaScale();
       this.arenaRoot.setEnabled(false);
       this.hasClosedArena = false;
+      this.pendingReanchorAtMs = null;
       // A ancora e por SESSAO. Uma sessao nova tem tracking novo, origem nova e
       // um azimute 0 novo; herdar o da anterior faria o jogo medir angulo
       // contra uma direcao que nao existe mais — sem erro visivel, so inimigo
@@ -1112,6 +1160,7 @@ export class EighthWallARManager implements ArSessionController {
     this.isInAR = false;
     this.hasClosedArena = false;
     this.anchor = null;
+    this.pendingReanchorAtMs = null;
     this.hasFallbackUnlocked = false;
     this.resetPreview();
     this.setSetupPanelVisible(false);
@@ -1162,8 +1211,23 @@ export class EighthWallARManager implements ArSessionController {
           return;
         }
 
+        const previousStatus = this.latestTrackingStatus;
+
         console.info(`[EighthWallARManager] trackingStatus: ${status}`);
         this.latestTrackingStatus = status;
+
+        // Volta de uma perda de tracking com a arena ja fechada: o SLAM
+        // relocalizou e provavelmente moveu o mundo debaixo dela. Marca para
+        // reancorar — a medicao em si NAO acontece aqui dentro, ver
+        // `pendingReanchorAtMs`.
+        if (
+          this.hasClosedArena
+          && status === "NORMAL"
+          && previousStatus !== null
+          && previousStatus !== "NORMAL"
+        ) {
+          this.pendingReanchorAtMs = performance.now() + REANCHOR_SETTLE_MS;
+        }
 
         // Quem transforma isso em `tracking_lost`/`tracking_recovered` e a
         // telemetria da sessao — aqui so publicamos a mudanca.
@@ -1305,7 +1369,6 @@ export class EighthWallARManager implements ArSessionController {
     // mais.
     this.previewOrigin = null;
     this.previewHeadingDeg = 0;
-    this.previewCoverage = null;
     this.lastPreviewEvalMs = 0;
     this.arenaGhost?.setState("waiting-tracking");
     this.arenaGhost?.setVisible(false);

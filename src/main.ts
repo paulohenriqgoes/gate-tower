@@ -168,6 +168,10 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 		telemetry.log({ ...rejection, type: "placement_rejected" });
 	});
 
+	const reanchoredObserver = arManager.onArenaReanchoredObservable.add(({ offsetM }) => {
+		telemetry.log({ offsetM, type: "arena_reanchored" });
+	});
+
 	const enemyAwakenedObserver = gameFlow.onEnemyAwakenedObservable.add(() => {
 		telemetry.log({ type: "enemy_awakened" });
 	});
@@ -212,6 +216,7 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 
 	return () => {
 		arManager.onArenaClosedObservable.remove(arenaClosedObserver);
+		arManager.onArenaReanchoredObservable.remove(reanchoredObserver);
 		arManager.onPlacementRejectedObservable.remove(placementRejectedObserver);
 		arManager.onTrackingStatusChangedObservable.remove(trackingObserver);
 		gameFlow.onEnemyAwakenedObservable.remove(enemyAwakenedObserver);

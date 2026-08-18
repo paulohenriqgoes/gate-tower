@@ -26,18 +26,42 @@ export interface ArenaAnchor {
 }
 
 /**
- * Recusa de fechamento com a medicao que a produziu. As contagens vao junto
- * porque o motivo sozinho nao discrimina: `blocked` com `offPlane: 4` e um
- * obstaculo de verdade, enquanto `blocked` com tudo zerado e o hitTest nao
- * tendo devolvido nada — dois problemas opostos sob o mesmo rotulo, e foi
- * preciso um teste de device inteiro para descobrir qual dos dois era.
+ * Reancoragem da arena depois de uma relocalizacao do SLAM.
+ *
+ * O SLAM perde e recupera o tracking, e ao recuperar ele reconcilia o mapa —
+ * o mundo inteiro se desloca debaixo do conteudo ancorado. O primeiro teste em
+ * device da v3 mediu saltos de 0,53 m, 1,44 m e 2,53 m em recuperacoes
+ * sucessivas, contra uma variacao de 4 a 18 cm nas janelas em que o tracking
+ * segurou. Ou seja: a ancora nao escorrega, ela TELEPORTA — e num arco de
+ * 2,2 m de raio, 2,5 m poe o jogador fora da propria arena.
+ *
+ * Devolver a arena para onde o jogador esta so e uma correcao legitima porque a
+ * v3 e egocentrica: "a arena fica em volta de quem joga" e a DEFINICAO dela,
+ * nao um remendo. No modelo antigo, de arena colocada num ponto do chao, mover
+ * a arena para perto do jogador seria mentir sobre onde ele a colocou.
+ */
+export interface ArenaReanchor {
+  anchor: ArenaAnchor;
+  /** Quanto a origem andou, em metros. E a medida do salto de relocalizacao. */
+  offsetM: number;
+}
+
+/**
+ * Recusa de fechamento com a medicao que a produziu.
+ *
+ * A medicao vai junto porque o motivo sozinho nao discrimina, e o diario ja
+ * pagou por isso: um rotulo de recusa sem o numero que o gerou custou um teste
+ * de device inteiro para descobrir se a causa era superficie real ou hitTest
+ * mudo. Hoje o numero que importa e a altura do device — ela separa "estou
+ * agachado" de "o fit do piso pegou a mesa" de "a escala do SLAM nao
+ * convergiu", tres coisas que produzem o mesmo `bad-height`.
+ *
+ * `deviceHeightM` e `null` quando nem houve fit de plano (`searching`): nesse
+ * caso nao ha altura medida, e gravar 0 seria inventar um dado.
  */
 export interface PlacementRejection {
   reason: PlacementPreviewState;
-  inFrame: number;
-  onPlane: number;
-  offPlane: number;
-  total: number;
+  deviceHeightM: number | null;
 }
 
 /**
@@ -53,6 +77,8 @@ export interface ArSessionController {
    * confirmacao intermediaria — fechar JA e comecar o mundo vivo.
    */
   readonly onArenaClosedObservable: Observable<ArenaAnchor>;
+  /** Arena devolvida ao jogador depois de uma relocalizacao do SLAM. */
+  readonly onArenaReanchoredObservable: Observable<ArenaReanchor>;
   /** Sessao caiu ou nao subiu; carrega a mensagem que o menu exibe. */
   readonly onSessionFailedObservable: Observable<string>;
   /**
