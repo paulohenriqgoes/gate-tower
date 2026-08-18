@@ -2,27 +2,27 @@ import type { Behavior } from "@babylonjs/core/Behaviors/behavior";
 import type { Camera } from "@babylonjs/core/Cameras/camera";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import "@babylonjs/core/Culling/ray";
-import { Plane } from "@babylonjs/core/Maths/math.plane";
 import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Observable } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 import { Button, Control, Ellipse, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui";
 
-import type { ArSessionController, PlacementRejection } from "./ArSessionController";
+import type { ArenaAnchor, ArSessionController, PlacementRejection } from "./ArSessionController";
 import { ArenaGhost } from "./ArenaGhost";
+import { arenaRootYawRad, headingDegFromForward, relativeYawDeg } from "./arenaHeading";
 import { installBabylonGlobalsForXR8 } from "./babylonRuntimeGlobals";
 import {
-  buildSampleOffsets,
+  buildFloorBandSamples,
   fitGroundPlane,
-  measureFootprintCoverage,
-  normalizeToCanvas,
-  type FootprintCoverage,
+  measureProbeCoverage,
   type GroundPlaneFit,
+  type ProbeCoverage,
 } from "./hitTestSampling";
 import {
   canPlace,
   placementMessage,
+  placementReason,
   resolvePreviewState,
   type PlacementPreviewState,
 } from "./placementGate";
@@ -32,15 +32,22 @@ import { DiagnosticsOverlay } from "../ui/DiagnosticsOverlay";
 import type { HudLayer } from "../ui/HudLayer";
 
 const XR8_LOAD_TIMEOUT_MS = 15000;
-const MAX_PLACEMENT_DISTANCE = 40;
 // Teto de frames aguardando a viewport estabilizar depois do fullscreen.
 const VIEWPORT_SETTLE_MAX_FRAMES = 30;
 
-// Amostragem do hitTest para o fit de plano no momento de posicionar (Fase 2).
-// Um grid em aneis ao redor do toque da uma estimativa de altura robusta a ruido.
-const SAMPLE_RADIUS = 0.04;
-const SAMPLE_RINGS = 2;
-const SAMPLE_PER_RING = 6;
+// Amostragem do hitTest para o fit do piso. A grade cobre uma FAIXA na metade
+// inferior da tela — onde, em retrato, aparece o chao a frente de quem esta de
+// pe. Substituiu o anel ao redor do ponto tocado: a arena nao e mais colocada
+// num toque, entao nao ha ponto de toque para amostrar em volta.
+//
+// A faixa comeca em 0,55 (um pouco abaixo do meio da tela) e para em 0,92 (a
+// ultima faixa da tela pega o chao quase debaixo dos pes, em incidencia
+// rasissima). O recuo lateral de 0,18 tira as quinas pelo mesmo motivo.
+const FLOOR_BAND_ROWS = 3;
+const FLOOR_BAND_COLS = 4;
+const FLOOR_BAND_Y_TOP = 0.55;
+const FLOOR_BAND_Y_BOTTOM = 0.92;
+const FLOOR_BAND_X_INSET = 0.18;
 const MIN_INLIERS = 3;
 
 // Distancia maxima ao plano ajustado para um ponto contar como "mesma
@@ -50,15 +57,16 @@ const MIN_INLIERS = 3;
 // dentro dele. 6 cm ainda separa a mesa do chao (~70 cm abaixo) com folga.
 const COVERAGE_PLANE_TOLERANCE_METERS = 0.06;
 
-// Tipos aceitos nas sondas do contorno. Sem FEATURE_POINT de proposito — ver
-// `measureFootprintAtGhost`.
+// Tipos aceitos nas sondas de desobstrucao. Sem FEATURE_POINT de proposito —
+// ver `measureClearanceAtGhost`.
 const PROBE_HITTEST_TYPES: XR8HitTestType[] = ["DETECTED_SURFACE", "ESTIMATED_SURFACE"];
 
-// A avaliacao de "cabe aqui?" custa 1 fit (~19 hitTests) + 8 sondas do
-// contorno. A 60 fps isso seria ~1600 hitTests por segundo e derrubaria o
-// device. Entao o preview tem DOIS ritmos: a POSE do fantasma acompanha a tela
-// a cada frame (1 hitTest central, o mesmo custo do antigo reticle) e o
-// VEREDITO — a cor do contorno — e recalculado neste intervalo.
+// A avaliacao de "da pra fechar aqui?" custa 12 hitTests da faixa de piso + 10
+// sondas de desobstrucao. A 60 fps isso seria ~1300 hitTests por segundo e
+// derrubaria o device. Entao o preview tem DOIS ritmos: a POSE do contorno
+// acompanha o jogador a cada frame (puro calculo sobre o ultimo piso medido,
+// ZERO hitTest) e o VEREDITO — a cor do contorno — e recalculado neste
+// intervalo.
 const PREVIEW_EVAL_INTERVAL_MS = 200;
 // Preferir superficie detectada; FEATURE_POINT e ultimo recurso.
 const HITTEST_TYPES: XR8HitTestType[] = ["DETECTED_SURFACE", "ESTIMATED_SURFACE", "FEATURE_POINT"];
@@ -84,15 +92,24 @@ const SETUP_PANEL_WIDTH = 320;
 const SETUP_BUTTON_HEIGHT = 84;
 const SETUP_BUTTON_WIDTH = 140;
 
-const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
-
 /**
  * Gerencia o modo RA via engine 8th Wall (SLAM), substituindo a sessao WebXR.
- * O chao estimado pelo SLAM fica no plano y = 0 do mundo; posicionamento da
- * arena e cursor usam raycast contra esse plano.
+ *
+ * Na v3 este modulo mudou de responsabilidade. Antes ele COLOCAVA a arena: o
+ * jogador mirava um ponto do chao, o gate perguntava "cabe um retangulo de
+ * 80 cm ali?" e a arena caia naquele ponto. Agora ele ANCORA o jogador: a
+ * arena nasce onde a pessoa esta, com o azimute 0 na direcao em que o celular
+ * aponta no instante do fechamento, e o gate pergunta "da pra fechar um arco
+ * de 2,2 m em volta de quem esta aqui?".
+ *
+ * A consequencia que atravessa o resto do projeto e `getCameraYawDeg()`: a
+ * partir do fechamento, "para onde o jogador esta olhando" e uma pergunta com
+ * resposta numerica, e e ela que decide setor enquadrado, setor de spawn e
+ * alerta de flanco. O plano y = 0 do mundo deixou de significar chao — a
+ * altura do piso e medida por fit de plano e vive na ancora.
  */
 export class EighthWallARManager implements ArSessionController {
-  public readonly onArenaPlacedObservable = new Observable<void>();
+  public readonly onArenaClosedObservable = new Observable<ArenaAnchor>();
   public readonly onSessionFailedObservable = new Observable<string>();
   public readonly onAvailabilityChangedObservable = new Observable<boolean>();
   public readonly onTrackingStatusChangedObservable = new Observable<XR8TrackingStatus>();
@@ -105,7 +122,6 @@ export class EighthWallARManager implements ArSessionController {
 
   private readonly scene: Scene;
   private readonly arenaRoot: TransformNode;
-  private readonly groundPlane = new Plane(0, 1, 0, 0);
 
   private readonly hud: HudLayer;
   private readonly diagnostics: DiagnosticsOverlay | null;
@@ -127,22 +143,32 @@ export class EighthWallARManager implements ArSessionController {
   private isARSupported = false;
   private isInAR = false;
   private isEnteringAR = false;
-  private hasUserPlacedArenaInXR = false;
+  private hasClosedArena = false;
   private nonARScale = new Vector3(1, 1, 1);
   private latestTrackingStatus: XR8TrackingStatus | null = null;
   private hasFallbackUnlocked = false;
   private fallbackTimeoutId: number | null = null;
 
-  // Estado do preview de posicionamento. `previewFit` e o fit da ULTIMA
-  // avaliacao — e ele que ancora a arena no toque, e nao um fit novo tirado no
-  // instante do toque: assim a arena cai exatamente onde o contorno prometeu.
+  /**
+   * Ancoragem vigente. E a origem de TODA leitura de angulo do jogo depois do
+   * fechamento — `getCameraYawDeg()` mede a partir do `forwardYawDeg` daqui, e
+   * quem consome isso e o `ArenaArc` (setor enquadrado, setor de spawn). Nula
+   * enquanto a arena nao fechou.
+   */
+  private anchor: ArenaAnchor | null = null;
+
+  // Estado do preview de fechamento. `previewFit` e o fit da ULTIMA avaliacao
+  // — e ele que ancora a arena no toque, e nao um fit novo tirado no instante
+  // do toque: assim a arena fecha exatamente onde o contorno prometeu.
   private previewState: PlacementPreviewState = "waiting-tracking";
   private previewFailures = 0;
   private previewFit: GroundPlaneFit | null = null;
-  // Normal da ultima superficie medida, usada para deitar o contorno no piso
-  // real em vez de na horizontal do mundo.
-  private previewNormal: Vector3 | null = null;
-  private previewCoverage: FootprintCoverage | null = null;
+  // Origem do arco na ultima pose: o device projetado no piso medido. Guardada
+  // porque o fechamento usa a mesma que o contorno estava mostrando.
+  private previewOrigin: Vector3 | null = null;
+  // Heading (graus, convencao de `arenaHeading`) do device na ultima pose.
+  private previewHeadingDeg = 0;
+  private previewCoverage: ProbeCoverage | null = null;
   private lastPreviewEvalMs = 0;
 
   public constructor(
@@ -168,19 +194,67 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Volta para a fase de posicionamento sem derrubar a sessao. Antes disso, uma
-   * vez ancorada a arena so dava para refazer saindo e voltando da RA.
+   * Volta para a fase de fechamento sem derrubar a sessao. Antes disso, uma vez
+   * ancorada a arena so dava para refazer saindo e voltando da RA.
+   *
+   * A ancora e ZERADA junto. Ela e o zero de `getCameraYawDeg()`, e manter a
+   * antiga aqui deixaria o jogo medindo azimute contra uma direcao que nao
+   * existe mais — o tipo de erro que so aparece tres modulos adiante, como
+   * inimigo nascendo no setor errado.
    */
   public repositionArena(): void {
     if (!this.isInAR) {
       return;
     }
 
-    this.hasUserPlacedArenaInXR = false;
+    this.hasClosedArena = false;
+    this.anchor = null;
     this.arenaRoot.setEnabled(false);
     this.resetPreview();
     this.setSetupPanelVisible(false);
     this.updateUI();
+  }
+
+  /**
+   * Yaw da camera em relacao ao azimute 0 da arena, em graus, positivo para a
+   * direita do jogador. E o insumo de `framedSectors`/`pickSpawnSector` — todo
+   * o resto do jogo pergunta "para onde o jogador esta olhando?" por aqui.
+   *
+   * Antes do fechamento devolve 0: nao existe azimute 0 definido ainda, e um
+   * numero inventado seria pior que um numero neutro.
+   */
+  public getCameraYawDeg(): number {
+    if (!this.anchor) {
+      return 0;
+    }
+
+    return relativeYawDeg(this.currentHeadingDeg(), this.anchor.forwardYawDeg);
+  }
+
+  /** Ancoragem vigente, ou `null` enquanto a arena nao fechou. */
+  public getArenaAnchor(): ArenaAnchor | null {
+    return this.anchor;
+  }
+
+  /**
+   * A arena pode fechar agora? Mesma pergunta que o contorno responde por cor,
+   * em forma consultavel por codigo — o motivo vem de `placementReason`, que e
+   * vocabulario de maquina (telemetria, painel de debug), nao texto de jogador.
+   */
+  public canCloseArena(): { ok: true } | { ok: false; reason: string } {
+    if (!this.isInAR) {
+      return { ok: false, reason: "sessao-inativa" };
+    }
+
+    if (this.hasClosedArena) {
+      return { ok: false, reason: "arena-ja-fechada" };
+    }
+
+    if (!canPlace(this.previewState) || !this.previewFit || !this.previewOrigin) {
+      return { ok: false, reason: placementReason(this.previewState) };
+    }
+
+    return { ok: true };
   }
 
   public initialize(): void {
@@ -297,7 +371,7 @@ export class EighthWallARManager implements ArSessionController {
     this.loaderPanel = panel;
     this.spinnerRotator = rotator;
 
-    const prompt = new TextBlock("ar-place-prompt", "Aponte para o chao e toque para posicionar a arena");
+    const prompt = new TextBlock("ar-place-prompt", "Vire para onde quer olhar e toque para abrir a arena");
     prompt.color = "white";
     prompt.fontSize = 20;
     prompt.textWrapping = true;
@@ -326,7 +400,7 @@ export class EighthWallARManager implements ArSessionController {
    * - fora disso → nada, e o texto do topo volta a valer.
    */
   private refreshPlacementOverlay(): void {
-    const inPlacement = this.isInAR && !this.hasUserPlacedArenaInXR;
+    const inPlacement = this.isInAR && !this.hasClosedArena;
     // "Pronto" deixou de ser so tracking: o prompt "aponte e toque" so faz
     // sentido quando o contorno esta de fato verde. Antes ele convidava ao
     // toque em situacoes que o toque ia recusar — a origem do "toquei varias
@@ -433,13 +507,14 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Loop de preview do posicionamento, com os dois ritmos descritos em
-   * `PREVIEW_EVAL_INTERVAL_MS`: a pose do fantasma acompanha a tela a cada
+   * Loop de preview do fechamento, com os dois ritmos descritos em
+   * `PREVIEW_EVAL_INTERVAL_MS`: a pose do contorno acompanha o jogador a cada
    * frame, e o veredito (a cor do contorno) e recalculado a ~5 Hz.
    *
-   * Substituiu o antigo `registerCursorTracking`, que movia um torus verde sem
-   * dizer nada sobre tamanho: o jogador so descobria que o lugar nao servia
-   * DEPOIS de tocar e o toque falhar em silencio.
+   * O que mudou na v3: a pose deixou de custar um hitTest por frame. O arco nao
+   * e mais mirado — ele nasce no proprio device, entao a pose e puro calculo
+   * sobre a pose da camera e o ultimo piso medido. O orcamento de hitTest ficou
+   * inteiro para o veredito.
    */
   private registerGhostTracking(): void {
     this.scene.onBeforeRenderObservable.add(() => {
@@ -449,36 +524,24 @@ export class EighthWallARManager implements ArSessionController {
         return;
       }
 
-      if (!this.isInAR || this.hasUserPlacedArenaInXR) {
+      if (!this.isInAR || this.hasClosedArena) {
         ghost.setVisible(false);
         return;
       }
 
-      ghost.setVisible(true);
-
       // Ritmo 1 — pose, todo frame. Sem tracking nao ha hitTest seguro (o WASM
-      // do xr-slam estoura), entao o fantasma some e quem fala e o coaching
+      // do xr-slam estoura), entao o contorno some e quem fala e o coaching
       // overlay.
       if (!this.isTrackingReady()) {
         this.applyPreviewState("waiting-tracking");
+        ghost.setVisible(false);
         return;
       }
 
-      const previewPoint = this.previewGroundPoint();
-
-      if (previewPoint) {
-        const yaw = this.arenaForwardYaw();
-        // A MESMA rotacao que `applyPlacement` daria: yaw + alinhamento a
-        // normal real do piso. O contorno tem que deitar onde a arena vai
-        // deitar, senao ele mente sobre a inclinacao e desloca as sondas.
-        const rotation = this.buildGroundAlignedRotation(
-          this.previewNormal ?? Vector3.Up(),
-          Quaternion.FromEulerAngles(0, yaw, 0)
-        );
-
-        // O ponto mirado E o centro da arena — o contorno nasce em volta dele.
-        ghost.setPose(previewPoint, rotation);
-      }
+      // Sem piso medido ainda nao ha onde deitar o arco. Esconder e mais
+      // honesto do que desenha-lo no y = 0 do mundo, que e uma altura que nao
+      // significa nada em RA.
+      ghost.setVisible(this.updateGhostPose(ghost));
 
       // Ritmo 2 — veredito, a cada PREVIEW_EVAL_INTERVAL_MS.
       const nowMs = performance.now();
@@ -488,57 +551,85 @@ export class EighthWallARManager implements ArSessionController {
       }
 
       this.lastPreviewEvalMs = nowMs;
-      this.evaluatePreview(previewPoint !== null);
+      this.evaluatePreview();
     });
   }
 
   /**
-   * Uma rodada da avaliacao cara: fit de plano sob o centro da tela + as 8
-   * sondas do contorno do fantasma. O resultado alimenta o gate puro, que e
-   * quem decide o estado — aqui nao ha regra de decisao nenhuma, so medicao.
+   * Recoloca o contorno sob o jogador a partir do ULTIMO piso medido: origem no
+   * device projetado no plano, azimute 0 na direcao horizontal atual do device.
+   *
+   * Devolve `false` quando ainda nao ha piso — o unico caso em que nao existe
+   * pose valida. Nao dispara hitTest nenhum: roda a 60 fps.
    */
-  private evaluatePreview(hasPose: boolean): void {
+  private updateGhostPose(ghost: ArenaGhost): boolean {
+    const fit = this.previewFit;
+    const cameraPosition = this.arCamera?.globalPosition;
+
+    if (!fit || !cameraPosition) {
+      return false;
+    }
+
+    const origin = this.projectOntoPlane(cameraPosition, fit);
+    const headingDeg = this.currentHeadingDeg();
+
+    this.previewOrigin = origin;
+    this.previewHeadingDeg = headingDeg;
+
+    ghost.setPose(origin, this.buildAnchorRotation(fit.normal, headingDeg));
+
+    return true;
+  }
+
+  /**
+   * Uma rodada da avaliacao cara: fit do piso pela faixa inferior da tela + as
+   * sondas de desobstrucao ao redor do jogador. O resultado alimenta o gate
+   * puro, que e quem decide o estado — aqui nao ha regra de decisao nenhuma, so
+   * medicao.
+   *
+   * A ordem importa e nao e arbitraria: o fit vem primeiro porque as sondas
+   * precisam de um plano contra o qual serem julgadas, e a pose do contorno e
+   * atualizada com o fit NOVO antes de projetar as sondas — senao elas seriam
+   * tiradas de uma pose de um piso que a medicao acabou de corrigir.
+   */
+  private evaluatePreview(): void {
     const ghost = this.arenaGhost;
 
     if (!ghost) {
       return;
     }
 
-    const canvas = this.scene.getEngine().getRenderingCanvas();
-    const center = canvas
-      ? { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 }
-      : null;
+    const fit = this.sampleFloorFit();
 
-    const seedFit = hasPose && center ? this.sampleGroundFit(center.x, center.y) : null;
-    const measured = seedFit ? this.measureFootprintAtGhost(ghost, seedFit) : null;
-    // O fit que vale e o REFEITO sobre as sondas do contorno inteiro, nao o
-    // semente tirado de um anel de 4 cm no centro. Ver `measureFootprintAtGhost`.
-    const fit = measured?.fit ?? seedFit;
-    const coverage = measured?.coverage ?? null;
-
+    // O fit e guardado ANTES do veredito, ao contrario do modelo antigo. La o
+    // fit so valia se o estado aprovasse, porque ele era o ponto de ancoragem
+    // vindo de um toque; aqui ele e a MEDICAO DO CHAO, e uma medicao de chao
+    // continua valendo mesmo quando o entorno esta obstruido — e o que permite
+    // ao contorno continuar deitado no piso certo enquanto vermelho.
     if (fit) {
-      this.previewNormal = fit.normal;
+      this.previewFit = fit;
+      this.updateGhostPose(ghost);
     }
+
+    const deviceHeightM = this.measureDeviceHeight(fit);
+    const coverage = fit ? this.measureClearanceAtGhost(ghost, fit) : null;
 
     this.previewCoverage = coverage;
 
     const resolved = resolvePreviewState({
       consecutiveFailures: this.previewFailures,
       coverage,
-      fit,
+      deviceHeightM,
       hasFallbackUnlocked: this.hasFallbackUnlocked,
       previous: this.previewState,
       trackingStatus: this.latestTrackingStatus,
     });
 
     this.previewFailures = resolved.consecutiveFailures;
-    // O fit so e guardado quando o estado aprova: ancorar com o fit de uma
-    // avaliacao reprovada colocaria a arena onde o contorno vermelho estava.
-    if (canPlace(resolved.state) && fit) {
-      this.previewFit = fit;
-    }
 
     this.diagnostics?.setFields({
+      cameraYawDeg: this.getCameraYawDeg().toFixed(1),
+      deviceHeightM: deviceHeightM === null ? "-" : deviceHeightM.toFixed(2),
       previewState: resolved.state,
       probesInFrame: coverage ? `${coverage.inFrame}/${coverage.total}` : "-",
       probesOffPlane: coverage ? `${coverage.offPlane}/${coverage.total}` : "-",
@@ -549,27 +640,73 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Projeta os 8 pontos do contorno do fantasma para a tela, dispara um
-   * hitTest em cada um e mede quantos pertencem a mesma superficie.
-   *
-   * O `seedFit` entra so como semente. O plano usado para julgar e REFEITO
-   * sobre os proprios acertos das sondas, e a razao esta no primeiro teste em
-   * device: com o plano vindo de um anel de 4 cm no centro, julgar um canto a
-   * 40 cm de distancia extrapola aquela normal por 10x o raio que a produziu —
-   * 3 graus de erro viram 2 cm na ponta, 5 graus viram 4,4 cm, e a tolerancia
-   * inteira e consumida por ruido. O resultado medido foi 15 recusas por
-   * "nao cabe" apontando para o CHAO de uma cozinha, onde cabe qualquer coisa.
-   * `fitGroundPlane` ja rejeita outlier por mediana+MAD, entao refazer o fit
-   * sobre o contorno inteiro e mais robusto, e nao menos.
+   * Altura do device acima do piso medido, ao longo da NORMAL do plano — nao a
+   * diferenca de Y. Num piso com 5 graus de caimento (ou com a world-up do SLAM
+   * levemente torta, que e o caso comum) as duas medidas divergem, e quem
+   * decide o gate e a distancia real ao chao, nao a coordenada vertical.
    */
-  private measureFootprintAtGhost(
-    ghost: ArenaGhost,
-    seedFit: GroundPlaneFit
-  ): { coverage: FootprintCoverage; fit: GroundPlaneFit } | null {
-    const xr8 = window.XR8;
-    const canvas = this.scene.getEngine().getRenderingCanvas();
+  private measureDeviceHeight(fit: GroundPlaneFit | null): number | null {
+    const cameraPosition = this.arCamera?.globalPosition;
 
-    if (!xr8 || !canvas || !this.arCamera) {
+    if (!fit || !cameraPosition) {
+      return null;
+    }
+
+    return Vector3.Dot(cameraPosition.subtract(fit.position), this.safeNormal(fit.normal));
+  }
+
+  /**
+   * Dispara a grade de hitTests da faixa de piso e faz o fit robusto do plano.
+   *
+   * As coordenadas ja saem normalizadas em [0,1] de `buildFloorBandSamples`, que
+   * e o espaco que o `hitTest` do 8th Wall espera — nao passam por
+   * `normalizeToCanvas` porque nao vem de pixel nenhum.
+   */
+  private sampleFloorFit(): GroundPlaneFit | null {
+    const xr8 = window.XR8;
+
+    if (!xr8) {
+      return null;
+    }
+
+    const samples = buildFloorBandSamples(
+      FLOOR_BAND_ROWS,
+      FLOOR_BAND_COLS,
+      FLOOR_BAND_Y_TOP,
+      FLOOR_BAND_Y_BOTTOM,
+      FLOOR_BAND_X_INSET
+    );
+
+    const points: Vector3[] = [];
+
+    for (const { x, y } of samples) {
+      const results = this.safeHitTest(xr8, x, y);
+
+      if (results.length > 0) {
+        const { position } = results[0];
+        points.push(new Vector3(position.x, position.y, position.z));
+      }
+    }
+
+    return fitGroundPlane(points, MIN_INLIERS);
+  }
+
+  /**
+   * Projeta as sondas de desobstrucao na tela, dispara um hitTest em cada uma e
+   * mede quantas pertencem ao piso e quantas bateram em superficie real fora
+   * dele.
+   *
+   * As sondas ficam DENTRO do raio minimo de colocacao, em volta do jogador.
+   * Muitas delas caem fora do quadro (o chao a 90 cm dos pes de quem olha para
+   * a frente esta abaixo da borda inferior da tela), e isso e esperado: sonda
+   * fora do quadro nao conta em nada, nem a favor nem contra. O limiar de
+   * reprovacao e uma FRACAO das que estao em quadro, justamente para o veredito
+   * nao depender de quantas o enquadramento deixou passar.
+   */
+  private measureClearanceAtGhost(ghost: ArenaGhost, fit: GroundPlaneFit): ProbeCoverage | null {
+    const xr8 = window.XR8;
+
+    if (!xr8 || !this.arCamera) {
       return null;
     }
 
@@ -591,11 +728,11 @@ export class EighthWallARManager implements ArSessionController {
       const screenY = projected.y / viewport.height;
 
       const isInFrame = screenX >= 0 && screenX <= 1 && screenY >= 0 && screenY <= 1;
-      // Sondas NAO aceitam FEATURE_POINT: um ponto solto no ar, a meio metro
-      // do chao, contaria como "aqui tem superficie" e envenenaria tanto a
-      // contagem quanto o refit. Para a POSE central o tipo continua valendo
-      // como ultimo recurso — la o pior caso e o contorno tremer, nao um
-      // veredito errado.
+      // Sondas NAO aceitam FEATURE_POINT: um ponto solto no ar, a meio metro do
+      // chao, contaria como "aqui tem superficie" e reprovaria um chao livre.
+      // Para o fit do piso o tipo continua valendo como ultimo recurso — la o
+      // pior caso e o plano tremer, e `fitGroundPlane` rejeita outlier; aqui o
+      // pior caso e um veredito errado, que nao tem quem corrija.
       const results = isInFrame ? this.safeHitTest(xr8, screenX, screenY, PROBE_HITTEST_TYPES) : [];
       const hit = results.length > 0
         ? new Vector3(results[0].position.x, results[0].position.y, results[0].position.z)
@@ -604,15 +741,7 @@ export class EighthWallARManager implements ArSessionController {
       return { hit, screenX, screenY };
     });
 
-    const hits = probes
-      .map((probe) => probe.hit)
-      .filter((hit): hit is Vector3 => hit !== null);
-
-    // Refit sobre o contorno inteiro; se as sondas nao derem inliers
-    // suficientes, o semente do centro continua valendo.
-    const fit = fitGroundPlane([...hits, seedFit.position], MIN_INLIERS) ?? seedFit;
-
-    return { coverage: measureFootprintCoverage(probes, fit, COVERAGE_PLANE_TOLERANCE_METERS), fit };
+    return measureProbeCoverage(probes, fit, COVERAGE_PLANE_TOLERANCE_METERS);
   }
 
   /** Aplica o estado no fantasma e no HUD, so quando ele muda de verdade. */
@@ -624,38 +753,6 @@ export class EighthWallARManager implements ArSessionController {
     this.previewState = state;
     this.arenaGhost?.setState(state);
     this.updateUI();
-  }
-
-  /**
-   * Ponto de preview do cursor: um unico hitTest no centro da tela (barato, 1x
-   * por frame). Se o engine nao devolver superficie, cai no plano y=0 apenas
-   * como feedback visual — NUNCA e usado para posicionar de fato a arena.
-   */
-  private previewGroundPoint(): Vector3 | null {
-    const xr8 = window.XR8;
-
-    // So consulta o hitTest com SLAM rastreando (NORMAL). Chamar antes disso
-    // estoura o WASM do xr-slam ("memory access out of bounds").
-    if (xr8 && this.isTrackingReady()) {
-      const results = this.safeHitTest(xr8, 0.5, 0.5);
-
-      if (results.length > 0) {
-        const { position } = results[0];
-        return new Vector3(position.x, position.y, position.z);
-      }
-    }
-
-    // `createPickingRay` quer px CSS. Passar `getRenderWidth/Height` aqui
-    // misturava px de dispositivo com px CSS (fator ~3 no celular) e mirava
-    // fora da tela — com o torus isso so desalinhava um anel; com o fantasma
-    // desalinharia tambem as 8 sondas tiradas da pose dele.
-    const canvas = this.scene.getEngine().getRenderingCanvas();
-
-    if (!canvas) {
-      return null;
-    }
-
-    return this.pickGroundPoint(canvas.clientWidth / 2, canvas.clientHeight / 2);
   }
 
   /**
@@ -678,27 +775,32 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Confirma a ancoragem no que o fantasma esta mostrando. Chamado pelo
-   * `WorldTapRouter` na fase `ar-setup` — o AR Manager nao assina mais o
+   * Confirma o fechamento do arco no que o contorno esta mostrando. Chamado
+   * pelo `WorldTapRouter` na fase `ar-setup` — o AR Manager nao assina mais o
    * ponteiro por conta propria (havia dois assinantes disputando o mesmo
    * POINTERDOWN, ver src/interaction/WorldTapRouter.ts).
    *
-   * O ponto de ancoragem NAO vem mais de `scene.pointerX/pointerY`: o fantasma
-   * mira pelo centro da tela, e o dedo so confirma. Isso elimina a divergencia
-   * entre o contorno que o jogador viu e o lugar onde a arena caiu.
+   * O toque nao carrega mais informacao NENHUMA de posicao. Antes ele ao menos
+   * escolhia para onde olhar; agora quem define origem e azimute e a pose do
+   * device no instante do toque, e o dedo so diz "agora". O jogador continua
+   * escolhendo — girando o corpo antes de tocar, com o arco na tela mostrando
+   * o resultado — mas escolhe com o celular, e nao com o dedo.
+   *
+   * Devolve `true` quando o toque PERTENCE ao fechamento, mesmo que ele tenha
+   * sido recusado.
    */
-  public tryPlaceArenaAtPointer(): boolean {
-    // Fora do modo de ancoragem o toque nao e nosso — devolve `false` para o
+  public tryCloseArenaAtPlayer(): boolean {
+    // Fora do modo de fechamento o toque nao e nosso — devolve `false` para o
     // router (ou a fase) entregar o toque a quem for o dono dele.
-    if (!this.isInAR || this.hasUserPlacedArenaInXR) {
+    if (!this.isInAR || this.hasClosedArena) {
       return false;
     }
 
-    // O toque nao mede mais nada: ele CONFIRMA o que o fantasma ja esta
-    // mostrando. Medir de novo no instante do toque era o que produzia o
-    // "toquei e nao aconteceu nada" — o jogador nunca via a reprovacao, e a
-    // medicao do toque podia discordar do que estava na tela.
-    if (!canPlace(this.previewState) || !this.previewFit) {
+    if (this.closeArenaAtPlayer() === null) {
+      // O toque nao mede mais nada: ele CONFIRMA o que o contorno ja esta
+      // mostrando. Medir de novo no instante do toque era o que produzia o
+      // "toquei e nao aconteceu nada" — o jogador nunca via a reprovacao, e a
+      // medicao do toque podia discordar do que estava na tela.
       this.onPlacementRejectedObservable.notifyObservers({
         inFrame: this.previewCoverage?.inFrame ?? 0,
         offPlane: this.previewCoverage?.offPlane ?? 0,
@@ -707,24 +809,54 @@ export class EighthWallARManager implements ArSessionController {
         total: this.previewCoverage?.total ?? 0,
       });
       this.updateUI();
-      return true;
     }
 
-    // Ancora na profundidade real do piso (fit.position) e TRAVA — sem
-    // reancoragem continua. Isso corrige o item 2 (arena escorregando ao
-    // aproximar o celular por causa de profundidade errada do plano y=0).
-    this.applyPlacement(this.previewFit);
+    return true;
+  }
+
+  /**
+   * Fecha o arco na posicao atual do jogador e devolve a ancora resultante
+   * (`null` quando o gate recusa).
+   *
+   * E o momento em que a arena deixa de ser preview e vira referencia: a partir
+   * daqui `origin` e o vertice do arco, `forwardYawDeg` e o azimute 0, e todo
+   * angulo do jogo passa a ser medido contra eles. Nada disso e re-derivado
+   * depois — reancoragem continua foi o que fazia a arena escorregar quando o
+   * jogador aproximava o celular.
+   *
+   * Publico (e nao so acionado pelo toque) porque o Ato 2 da Etapa 10 fecha a
+   * arena por enquadramento do Coelho, sem toque nenhum.
+   */
+  public closeArenaAtPlayer(): ArenaAnchor | null {
+    const fit = this.previewFit;
+    const origin = this.previewOrigin;
+
+    if (!this.isInAR || this.hasClosedArena || !fit || !origin || !canPlace(this.previewState)) {
+      return null;
+    }
+
+    const anchor: ArenaAnchor = {
+      floorY: origin.y,
+      forwardYawDeg: this.previewHeadingDeg,
+      origin: origin.clone(),
+    };
+
+    this.arenaRoot.rotationQuaternion = this.buildAnchorRotation(fit.normal, anchor.forwardYawDeg);
+    this.arenaRoot.position.copyFrom(anchor.origin);
+    this.applyArenaScale();
     this.arenaRoot.setEnabled(true);
     // A arena surge crescendo a partir da ancora, em vez de aparecer inteira.
     playSpawnScaleIn(this.arenaRoot, this.scene);
-    this.hasUserPlacedArenaInXR = true;
+
+    this.anchor = anchor;
+    this.hasClosedArena = true;
     this.clearPlacementFallbackTimer();
     this.arenaGhost?.setVisible(false);
     this.finishPlacementCoaching();
     this.updateUI();
-    this.onArenaPlacedObservable.notifyObservers();
+    this.onArenaClosedObservable.notifyObservers(anchor);
 
-    return true;
+    return anchor;
   }
 
   /**
@@ -745,73 +877,62 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Dispara um grid de hitTests (aneis ao redor do toque) e faz o fit robusto de
-   * um plano para estimar a profundidade real do piso. Coordenadas de tela em px
-   * CSS sao normalizadas por clientWidth/clientHeight (NUNCA getRenderWidth).
+   * Heading (graus) para onde o device aponta AGORA, na convencao de
+   * `arenaHeading`: 0 = -Z do mundo, positivo para a direita do jogador.
+   *
+   * A componente Y do olhar e descartada de proposito — inclinar o celular para
+   * baixo para olhar o chao nao pode mudar para que flanco ele aponta, e e
+   * exatamente isso que o jogador faz o tempo todo durante o setup.
+   *
+   * Le `arCamera` quando existe e cai em `scene.activeCamera` fora da RA: no
+   * modo tela quem dirige a camera e o jogador pelo mouse/toque, e a mesma
+   * medida vale — e o que mantem a regra de que a logica de jogo independe do
+   * modo de render.
    */
-  private sampleGroundFit(screenX: number, screenY: number): GroundPlaneFit | null {
-    const points = this.collectHitPoints(screenX, screenY, SAMPLE_RADIUS, SAMPLE_RINGS, SAMPLE_PER_RING);
+  private currentHeadingDeg(): number {
+    const camera = this.arCamera ?? this.scene.activeCamera;
 
-    return fitGroundPlane(points, MIN_INLIERS);
+    if (!camera) {
+      return 0;
+    }
+
+    const forward = camera.getDirection(Vector3.Forward());
+
+    return headingDegFromForward(forward.x, forward.z);
   }
 
   /**
-   * Dispara um padrao de hitTests em aneis ao redor do ponto tocado. Coordenadas
-   * de tela em px CSS sao normalizadas por clientWidth/clientHeight (NUNCA
-   * getRenderWidth, que e px de dispositivo).
+   * Rotacao do `arenaRoot` (ou do contorno) para um heading: primeiro o yaw que
+   * poe o -Z local no heading pedido, depois a inclinacao ate a normal medida
+   * do piso.
+   *
+   * O yaw sai de `arenaRootYawRad`, e o sinal dele NAO e obvio — e o NEGATIVO
+   * do heading, com a derivacao escrita naquele arquivo. Errar esse sinal
+   * espelha a arena inteira: o flanco esquerdo nasce a direita e ninguem
+   * percebe olhando o codigo.
    */
-  private collectHitPoints(
-    screenX: number,
-    screenY: number,
-    radius: number,
-    rings: number,
-    perRing: number
-  ): Vector3[] {
-    const xr8 = window.XR8;
-    const canvas = this.scene.getEngine().getRenderingCanvas();
-
-    if (!xr8 || !canvas) {
-      return [];
-    }
-
-    const base = normalizeToCanvas(screenX, screenY, canvas);
-    const offsets = buildSampleOffsets(radius, rings, perRing);
-    const points: Vector3[] = [];
-
-    for (const { dx, dy } of offsets) {
-      const sampleX = clamp01(base.x + dx);
-      const sampleY = clamp01(base.y + dy);
-      const results = this.safeHitTest(xr8, sampleX, sampleY);
-
-      if (results.length > 0) {
-        const { position } = results[0];
-        points.push(new Vector3(position.x, position.y, position.z));
-      }
-    }
-
-    return points;
+  private buildAnchorRotation(normal: Vector3, headingDeg: number): Quaternion {
+    return this.buildGroundAlignedRotation(
+      normal,
+      Quaternion.FromEulerAngles(0, arenaRootYawRad(headingDeg), 0)
+    );
   }
 
   /**
-   * Direcao horizontal para onde o campo se estende: o "olhar" da camera no
-   * momento do toque. E o mesmo yaw aplicado em `applyPlacement`, entao a
-   * medicao de extensao e a arena falam do mesmo eixo.
+   * Projeta um ponto do mundo no plano do piso, ao longo da normal dele. E como
+   * "o jogador projetado no chao" e calculado: o device menos a propria altura,
+   * medida na direcao da normal.
    */
-  private arenaForwardDirection(): Vector3 {
-    const forward = this.arCamera
-      ? this.arCamera.getDirection(Vector3.Forward())
-      : Vector3.Forward();
+  private projectOntoPlane(point: Vector3, fit: GroundPlaneFit): Vector3 {
+    const normal = this.safeNormal(fit.normal);
+    const height = Vector3.Dot(point.subtract(fit.position), normal);
 
-    forward.y = 0;
-
-    return forward.lengthSquared() < 1e-6 ? Vector3.Forward() : forward.normalize();
+    return point.subtract(normal.scale(height));
   }
 
-  /** Yaw (radianos) equivalente a `arenaForwardDirection`. */
-  private arenaForwardYaw(): number {
-    const forward = this.arenaForwardDirection();
-
-    return Math.atan2(forward.x, forward.z);
+  /** Normal do fit, com fallback vertical — um fit degenerado nao pode virar NaN. */
+  private safeNormal(normal: Vector3): Vector3 {
+    return normal.lengthSquared() > 1e-6 ? normal.normalizeToNew() : Vector3.Up();
   }
 
   /**
@@ -862,8 +983,8 @@ export class EighthWallARManager implements ArSessionController {
     }
 
     return status === "NORMAL"
-      ? `Tracking: ${status} | aponte pro chao e toque`
-      : `Tracking: ${status} | da pra posicionar, mas a precisao pode cair`;
+      ? `Tracking: ${status} | vire e toque para abrir`
+      : `Tracking: ${status} | da pra abrir, mas a precisao pode cair`;
   }
 
   /** Liga/desliga o grid xadrez da arena (agrupado sob o no "arena-grid"). */
@@ -873,21 +994,6 @@ export class EighthWallARManager implements ArSessionController {
     }
 
     this.arenaGridNode?.setEnabled(visible);
-  }
-
-  private pickGroundPoint(screenX: number, screenY: number): Vector3 | null {
-    if (!this.arCamera) {
-      return null;
-    }
-
-    const ray = this.scene.createPickingRay(screenX, screenY, Matrix.Identity(), this.arCamera);
-    const distance = ray.intersectsPlane(this.groundPlane);
-
-    if (distance === null || distance < 0 || distance > MAX_PLACEMENT_DISTANCE) {
-      return null;
-    }
-
-    return ray.origin.add(ray.direction.scale(distance));
   }
 
   public async enterAR(): Promise<void> {
@@ -927,7 +1033,12 @@ export class EighthWallARManager implements ArSessionController {
       this.nonARScale.copyFrom(this.arenaRoot.scaling);
       this.applyArenaScale();
       this.arenaRoot.setEnabled(false);
-      this.hasUserPlacedArenaInXR = false;
+      this.hasClosedArena = false;
+      // A ancora e por SESSAO. Uma sessao nova tem tracking novo, origem nova e
+      // um azimute 0 novo; herdar o da anterior faria o jogo medir angulo
+      // contra uma direcao que nao existe mais — sem erro visivel, so inimigo
+      // nascendo no flanco errado.
+      this.anchor = null;
       this.latestTrackingStatus = null;
       this.hasFallbackUnlocked = false;
       this.resetPreview();
@@ -999,7 +1110,8 @@ export class EighthWallARManager implements ArSessionController {
     }
 
     this.isInAR = false;
-    this.hasUserPlacedArenaInXR = false;
+    this.hasClosedArena = false;
+    this.anchor = null;
     this.hasFallbackUnlocked = false;
     this.resetPreview();
     this.setSetupPanelVisible(false);
@@ -1150,33 +1262,6 @@ export class EighthWallARManager implements ArSessionController {
     }
   }
 
-  private applyPlacement(fit: GroundPlaneFit): void {
-    const groundPoint = fit.position;
-
-    // Alinha o eixo +Z da arena com a direcao horizontal da camera: a torre
-    // azul (lado do jogador) fica mais proxima de quem posicionou.
-    const forward = this.arenaForwardDirection();
-    const yaw = Math.atan2(forward.x, forward.z);
-    const yawRotation = Quaternion.FromEulerAngles(0, yaw, 0);
-
-    // Alinha o "up" da arena a normal REAL do piso medida no fit, para ela
-    // assentar plana no chao. A world-up do SLAM as vezes nao bate com o piso,
-    // o que dava a sensacao de um lado (vermelho) levemente inclinado pra cima.
-    const rotation = this.buildGroundAlignedRotation(fit.normal, yawRotation);
-
-    this.arenaRoot.rotationQuaternion = rotation;
-    this.applyArenaScale();
-
-    // O ponto mirado ancora o CENTRO da arena. Antes ele ancorava as "costas"
-    // da torre azul, para o campo se estender para longe de um ponto de toque
-    // invisivel — um truque que fazia sentido enquanto nao havia nada na tela
-    // mostrando onde a arena cairia. Com o contorno visivel ele so afastava a
-    // arena de onde a pessoa estava apontando (relatado no teste em device).
-    // A leitura de campo nao se perde: o yaw continua colocando a torre azul
-    // do lado de quem posicionou.
-    this.arenaRoot.position.copyFrom(groundPoint);
-  }
-
   /**
    * Compoe a rotacao final: primeiro o yaw (direcao), depois inclina o "up" da
    * arena ate a normal medida do piso. Rejeita normais muito fora da vertical
@@ -1214,6 +1299,13 @@ export class EighthWallARManager implements ArSessionController {
     this.previewState = "waiting-tracking";
     this.previewFailures = 0;
     this.previewFit = null;
+    // Origem e heading vao junto com o fit, e nao por simetria: os tres sao a
+    // MESMA medicao vista de tres angulos, e sobreviver um sem os outros
+    // deixaria o proximo fechamento usar uma origem de um piso que nao existe
+    // mais.
+    this.previewOrigin = null;
+    this.previewHeadingDeg = 0;
+    this.previewCoverage = null;
     this.lastPreviewEvalMs = 0;
     this.arenaGhost?.setState("waiting-tracking");
     this.arenaGhost?.setVisible(false);
@@ -1230,7 +1322,7 @@ export class EighthWallARManager implements ArSessionController {
       return;
     }
 
-    const isVisible = value && this.hasUserPlacedArenaInXR;
+    const isVisible = value && this.hasClosedArena;
 
     this.setupPanel.isVisible = isVisible;
 
@@ -1286,7 +1378,7 @@ export class EighthWallARManager implements ArSessionController {
       return;
     }
 
-    if (!this.hasUserPlacedArenaInXR) {
+    if (!this.hasClosedArena) {
       // Nada de painel enquanto o coaching overlay pede o movimento de
       // calibracao: nao ha mais o que ajustar antes de ancorar.
       this.setSetupPanelVisible(false);

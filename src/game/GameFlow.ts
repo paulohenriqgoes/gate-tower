@@ -5,7 +5,7 @@ import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Observable, type Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 
-import type { ArSessionController } from "../ar/ArSessionController";
+import type { ArenaAnchor, ArSessionController } from "../ar/ArSessionController";
 import { type MatchOverPayload, resolveMatchResultByHpPct, type TeamId } from "../battle/BattleTypes";
 import { EnemyScriptRunner, type EnemyDeployment } from "../battle/EnemyScript";
 import type { MatchClock } from "../battle/MatchClock";
@@ -164,7 +164,7 @@ export class GameFlow {
   private lastWakeStage: WakeStage = "asleep";
 
   private readonly modeSelectedObserver: Observer<GameMode>;
-  private readonly arenaPlacedObserver: Observer<void>;
+  private readonly arenaClosedObserver: Observer<ArenaAnchor>;
   private readonly sessionFailedObserver: Observer<string>;
   private readonly towerDestroyedObserver: Observer<TeamId>;
   private readonly matchExpiredObserver: Observer<void>;
@@ -187,8 +187,8 @@ export class GameFlow {
 
     // Ancorar a arena JA entra no mundo vivo: nao ha mais confirmacao no meio
     // (o botao "Comecar" saiu junto com o painel de setup).
-    this.arenaPlacedObserver = options.arManager.onArenaPlacedObservable.add(() => {
-      this.handleArenaPlaced();
+    this.arenaClosedObserver = options.arManager.onArenaClosedObservable.add(() => {
+      this.handleArenaClosed();
     });
 
     this.sessionFailedObserver = options.arManager.onSessionFailedObservable.add((message) => {
@@ -288,7 +288,7 @@ export class GameFlow {
     }
 
     this.options.startScreen.onModeSelectedObservable.remove(this.modeSelectedObserver);
-    this.options.arManager.onArenaPlacedObservable.remove(this.arenaPlacedObserver);
+    this.options.arManager.onArenaClosedObservable.remove(this.arenaClosedObserver);
     this.options.arManager.onSessionFailedObservable.remove(this.sessionFailedObserver);
     this.options.combatEngine.onTowerDestroyedObservable.remove(this.towerDestroyedObserver);
     this.options.matchClock.onExpiredObservable.remove(this.matchExpiredObserver);
@@ -308,13 +308,13 @@ export class GameFlow {
     const { arManager, combatEngine, worldTapRouter } = this.options;
 
     worldTapRouter.setHandler("ar-setup", () => {
-      arManager.tryPlaceArenaAtPointer();
+      arManager.tryCloseArenaAtPlayer();
     });
 
     worldTapRouter.setHandler("world-alive", (_pickedPoint, pickedMesh) => {
       // O "Reposicionar" de `?debug=1` devolve a sessao ao modo de ancoragem
       // sem sair da fase; nesse caso o toque e da ancoragem, nao do Beat 5.
-      if (arManager.tryPlaceArenaAtPointer()) {
+      if (arManager.tryCloseArenaAtPlayer()) {
         return;
       }
 
@@ -324,7 +324,7 @@ export class GameFlow {
     // Ponto de extensao da etapa de invocacao em dois toques: ela reescreve o
     // miolo do deploy no CombatEngine, sem precisar mexer em quem roteia.
     worldTapRouter.setHandler("playing", (pickedPoint) => {
-      if (arManager.tryPlaceArenaAtPointer()) {
+      if (arManager.tryCloseArenaAtPlayer()) {
         return;
       }
 
@@ -367,8 +367,8 @@ export class GameFlow {
     void this.applyArOrientationPolicy().then(() => this.options.arManager.enterAR());
   }
 
-  /** Arena ancorada no piso real: comeca o Beat 4. */
-  private handleArenaPlaced(): void {
+  /** Arco fechado em volta do jogador: comeca o Beat 4. */
+  private handleArenaClosed(): void {
     if (this.phase !== "ar-setup") {
       return;
     }

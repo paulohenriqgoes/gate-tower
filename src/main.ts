@@ -1,5 +1,4 @@
 import { Engine } from "@babylonjs/core/Engines/engine";
-import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { Color4 } from "@babylonjs/core/Maths/math.color";
 import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
@@ -7,6 +6,7 @@ import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Scene } from "@babylonjs/core/scene";
 
 import type { ArSessionController } from "./ar/ArSessionController";
+import { framedSectors } from "./arena/ArenaArc";
 import { ArenaSystem } from "./arena/ArenaSystem";
 import { ENEMY_SCRIPT } from "./battle/EnemyScript";
 import { MatchClock } from "./battle/MatchClock";
@@ -28,7 +28,7 @@ import { HudLayer } from "./ui/HudLayer";
 import { OffscreenIndicator } from "./ui/OffscreenIndicator";
 import { StartScreen } from "./ui/StartScreen";
 import { EighthWallARManager } from "./ar/EighthWallARManager";
-import { frameArenaCamera, measureArenaExtents } from "./camera/arenaFraming";
+import { createPlayerCamera, playerYawDeg } from "./camera/arenaFraming";
 import { FullscreenToggle } from "./ui/FullscreenToggle";
 import { onOrientationChange } from "./ui/screenOrientation";
 
@@ -155,7 +155,7 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 	let isTrackingMonitorActive = false;
 	let hasLostTracking = false;
 
-	const arenaPlacedObserver = arManager.onArenaPlacedObservable.add(() => {
+	const arenaClosedObserver = arManager.onArenaClosedObservable.add(() => {
 		telemetry.log({ type: "arena_placed" });
 		isTrackingMonitorActive = true;
 		telemetry.startCameraSampling(measureCameraDistanceMeters);
@@ -211,7 +211,7 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 	});
 
 	return () => {
-		arManager.onArenaPlacedObservable.remove(arenaPlacedObserver);
+		arManager.onArenaClosedObservable.remove(arenaClosedObserver);
 		arManager.onPlacementRejectedObservable.remove(placementRejectedObserver);
 		arManager.onTrackingStatusChangedObservable.remove(trackingObserver);
 		gameFlow.onEnemyAwakenedObservable.remove(enemyAwakenedObserver);
@@ -263,6 +263,50 @@ function installTelemetryExportShortcut(telemetry: SessionTelemetry): () => void
 	};
 }
 
+/**
+ * Publica yaw e setores enquadrados no painel de `?debug=1`.
+ *
+ * E o instrumento de validacao da ancoragem egocentrica: girando o tronco no
+ * device, o yaw tem que variar continuamente e o setor enquadrado tem que
+ * mudar quando o arco muda — e, ao voltar para a posicao inicial, o yaw tem que
+ * voltar para perto de zero. Um deslize sistematico aqui e o drift do SLAM
+ * aparecendo em numero, antes de aparecer como torre andando sozinha.
+ *
+ * A 5 Hz, e nao por frame: o painel e texto, e reescrever `DynamicTexture` a
+ * 60 fps custa mais que o resto do overlay junto.
+ */
+const YAW_DIAGNOSTICS_INTERVAL_MS = 200;
+
+function installYawDiagnostics(
+	scene: Scene,
+	diagnostics: DiagnosticsOverlay | null,
+	getCameraYawDeg: () => number
+): void {
+	if (!diagnostics) {
+		return;
+	}
+
+	let lastUpdateMs = 0;
+
+	scene.onBeforeRenderObservable.add(() => {
+		const nowMs = performance.now();
+
+		if (nowMs - lastUpdateMs < YAW_DIAGNOSTICS_INTERVAL_MS) {
+			return;
+		}
+
+		lastUpdateMs = nowMs;
+
+		const yawDeg = getCameraYawDeg();
+		const framed = framedSectors(yawDeg);
+
+		diagnostics.setFields({
+			cameraYawDeg: yawDeg.toFixed(1),
+			framedSectors: framed.length > 0 ? framed.join(",") : "nenhum",
+		});
+	});
+}
+
 interface GameRuntime {
 	/** Se a sessao de RA do 8th Wall esta ativa no momento. */
 	isArSessionActive: () => boolean;
@@ -275,25 +319,15 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	const scene = new Scene(engine);
 	scene.clearColor = new Color4(0.7, 0.8, 0.95, 1);
 
-	const camera = new ArcRotateCamera(
-		"main-camera",
-		Math.PI / 2 * -1,
-		Math.PI / 3.4,
-		30,
-		Vector3.Zero(),
-		scene
-	);
-	camera.attachControl(canvas, true);
+	// O jogador simulado no vertice do arco: posicao fixa, direcao livre — o
+	// mesmo rig que a RA impoe. Ver `src/camera/arenaFraming.ts`.
+	const camera = createPlayerCamera(scene, canvas);
 
 	const light = new HemisphericLight("main-light", new Vector3(0, 1, 0), scene);
 	light.intensity = 0.95;
 
 	const arenaSystem = new ArenaSystem(scene);
 	const arena = arenaSystem.buildInitialArena();
-
-	// Medido antes de qualquer escala de RA (o modo RA reduz o root para ~0.02).
-	const arenaExtents = measureArenaExtents(arena.root);
-	frameArenaCamera(camera, engine, arenaExtents);
 
 	const hudLayer = new HudLayer(scene);
 
@@ -313,6 +347,28 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 
 	const arManager = new EighthWallARManager(scene, arena.root, hudLayer, diagnosticsOverlay);
 	arManager.initialize();
+
+	/**
+	 * A UNICA fonte de "para onde o jogador esta olhando", em graus contra o
+	 * azimute 0 do arco. Diretor de ondas, alerta de flanco e anel de colocacao
+	 * consomem daqui — nenhum deles pode ler a camera do Babylon por conta
+	 * propria (`.github/copilot-instructions.md` §2, invariante 1 do plano).
+	 *
+	 * Os dois modos respondem a mesma grandeza por caminhos diferentes: em RA a
+	 * medida e contra a ancora do fechamento, no modo tela a ancora e implicita
+	 * (arena na origem, sem rotacao) e o heading da camera JA e o yaw relativo.
+	 * Encapsular a escolha aqui e o que mantem o resto do jogo sem saber em que
+	 * modo esta rodando.
+	 */
+	const getCameraYawDeg = (): number => {
+		if (arManager.isSessionActive()) {
+			return arManager.getCameraYawDeg();
+		}
+
+		return scene.activeCamera ? playerYawDeg(scene.activeCamera) : 0;
+	};
+
+	installYawDiagnostics(scene, diagnosticsOverlay, getCameraYawDeg);
 
 	const towerCombatSettings = {
 		attackCooldownMs: 900,
@@ -385,7 +441,7 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 
 	const getCameraPosition = (): Vector3 | null => {
 		// SEMPRE a camera ativa: em RA e a FreeCamera dirigida pelo 8th Wall,
-		// nunca a ArcRotateCamera do modo tela.
+		// nunca a camera do jogador simulado do modo tela.
 		const activeCamera = scene.activeCamera;
 
 		if (!activeCamera) {
@@ -565,28 +621,13 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		hudLayer.dispose();
 	});
 
-	let framedAspectRatio = engine.getAspectRatio(camera);
-
+	// Reenquadrar a camera no resize deixou de existir junto com a camera que
+	// orbitava a arena: o jogador esta parado DENTRO do arco, e a proporcao da
+	// janela nao muda onde ele esta nem para onde olha. O FOV horizontal e fixo
+	// (`createPlayerCamera`), entao girar o aparelho tambem nao muda o arco
+	// coberto. Sobra o HUD, que continua precisando da area segura.
 	const relayout = (): void => {
 		hudLayer.refreshSafeArea();
-
-		// Em RA a camera ativa e a FreeCamera controlada pelo 8th Wall (projecao
-		// vem do engine); reenquadrar so faz sentido fora do modo RA.
-		if (scene.activeCamera !== camera) {
-			return;
-		}
-
-		// Reenquadrar reseta o que o jogador ajustou na camera, entao so vale a
-		// pena quando a proporcao muda de verdade (girar o aparelho) — e nao a
-		// cada resize da barra de endereco do navegador mobile.
-		const aspectRatio = engine.getAspectRatio(camera);
-
-		if (Math.abs(aspectRatio - framedAspectRatio) / framedAspectRatio < 0.1) {
-			return;
-		}
-
-		framedAspectRatio = aspectRatio;
-		frameArenaCamera(camera, engine, arenaExtents);
 	};
 
 	return { isArSessionActive: () => arManager.isSessionActive(), relayout, scene };

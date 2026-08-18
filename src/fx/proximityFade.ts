@@ -1,4 +1,5 @@
-import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
+import { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
+import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
@@ -88,10 +89,18 @@ interface OriginalMeshState {
 }
 
 /**
- * Liga o fade por proximidade a um mesh (e seus descendentes): a cada frame,
- * mede a distancia entre a camera e a posicao ABSOLUTA do mesh (nao
- * `mesh.position`, que e espaço local — o mesh e filho de um `TransformNode`
+ * Liga o fade por proximidade a um ator (e a todos os meshes debaixo dele): a
+ * cada frame, mede a distancia entre a camera e a posicao ABSOLUTA do no (nao
+ * `node.position`, que e espaço local — o ator e filho de um `TransformNode`
  * de arena) e aplica a opacidade resultante via `mesh.visibility`.
+ *
+ * O parametro e um `TransformNode`, e nao um `AbstractMesh`, porque os atores
+ * deste projeto sao HIERARQUIAS: `MushroomTower.root` e um no de transform que
+ * agrupa corpo, chapeu, olhos, boca da caverna e halo, cada um um mesh
+ * separado. Exigir mesh aqui obrigaria quem chama a passar `tower.body` e o
+ * fade deixaria o resto da torre solido — o chapeu flutuando sozinho a 40 cm
+ * do rosto do jogador e pior do que nao ter fade nenhum. Um `Mesh` continua
+ * sendo aceito (todo mesh e um `TransformNode`) e entra na lista de alvos.
  *
  * Por que `visibility` e nao `material.alpha`: os materiais deste jogo sao
  * compartilhados entre atores (cache por cor em `src/fx/materials.ts`).
@@ -107,14 +116,16 @@ interface OriginalMeshState {
  * momento do attach.
  */
 export function attachProximityFade(
-  mesh: AbstractMesh,
+  node: TransformNode,
   getCameraPosition: () => Vector3,
   opts?: ProximityFadeOptions
 ): { dispose(): void } {
   const startM = opts?.startM ?? FADE_START_M;
   const endM = opts?.endM ?? FADE_END_M;
 
-  const targets: AbstractMesh[] = [mesh, ...mesh.getChildMeshes(false)];
+  const targets: AbstractMesh[] = node instanceof AbstractMesh
+    ? [node, ...node.getChildMeshes(false)]
+    : node.getChildMeshes(false);
   const originalStates: OriginalMeshState[] = targets.map((target) => ({
     mesh: target,
     visibility: target.visibility,
@@ -123,10 +134,10 @@ export function attachProximityFade(
 
   let lastAppliedAlpha = 1;
 
-  const scene: Scene = mesh.getScene();
+  const scene: Scene = node.getScene();
   const observer: Observer<Scene> = scene.onBeforeRenderObservable.add(() => {
     const cameraPosition = getCameraPosition();
-    const distanceM = Vector3.Distance(cameraPosition, mesh.getAbsolutePosition());
+    const distanceM = Vector3.Distance(cameraPosition, node.getAbsolutePosition());
     const alpha = computeFadeAlpha(distanceM, startM, endM);
 
     if (!shouldWriteVisibility(alpha, lastAppliedAlpha)) {
