@@ -11,9 +11,15 @@ que aquilo **ensinou**. Uma entrada sem "Provou" nao deveria estar aqui.
 
 | Tema | Arquivo | Status | Ultima atualizacao |
 | --- | --- | --- | --- |
-| A demo do mundo vivo | [demo-mundo-vivo.md](demo-mundo-vivo.md) | ativo | 2026-08-15 |
+| Arena de 180 graus e atencao como recurso | [arena-180-atencao.md](arena-180-atencao.md) | ativo | 2026-08-17 |
+| A demo do mundo vivo | [demo-mundo-vivo.md](demo-mundo-vivo.md) | encerrado | 2026-08-17 |
 | Arena estavel em RA e layout paisagem | [ra-e-paisagem.md](ra-e-paisagem.md) | ativo | 2026-08-12 |
 | Ferramental de registro entre sessoes | [ferramental-de-sessao.md](ferramental-de-sessao.md) | ativo | 2026-08-06 |
+
+A demo do mundo vivo foi encerrada em 2026-08-17 **por mudanca de direcao, nao
+por resposta**: a spec v3 aposentou a arena de mesa, e a pergunta que aquele
+diario media ficou sem medicao valida. O historico de RA dele continua valendo —
+e onde estao a calibracao, o gate de colocacao e as armadilhas de GUI.
 
 `Status` e um destes tres:
 

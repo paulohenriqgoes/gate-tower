@@ -1,13 +1,35 @@
 # Tower Gate
 
-Jogo de cartas com lanes em Realidade Aumentada (RA), inspirado na leitura de campo do Clash Royale.
+Jogo de cartas em Realidade Aumentada (RA), jogado de pe, com o celular na mao:
+o jogador e o vertice de um arco de 180 graus e defende tres flancos com um campo
+de visao que cobre so um deles por vez. **Atencao — para onde o celular esta
+apontado — e o recurso escasso.**
+
+A leitura de campo do Clash Royale continua sendo a referencia de origem, mas as
+lanes sairam de escopo na v3: nao ha caminho, e a tropa nasce onde o jogador
+apontou.
 
 ## Estado Atual
 
-**Foco atual: a demo do mundo vivo** — o recorte que existe para responder, com
-pessoas reais testando, se *a pessoa acredita que apareceu um mundo vivo na mesa
-dela*. Registro da investigacao em
-[`docs/experimentos/demo-mundo-vivo.md`](docs/experimentos/demo-mundo-vivo.md).
+**Foco atual: executar a v3 — arena de 180 graus e atencao como recurso.**
+A [spec v3](docs/guias/tower_gate_spec_v3.md) (2026-08-17) parte de um
+diagnostico duro do prototipo atual: travando a camera e trocando por uma camera
+3D comum, **o jogo nao muda** — nada no gameplay depende da pose do dispositivo,
+e a RA e cenografia cara. A v3 transforma enquadramento em recurso escasso: ~60
+graus de campo de visao para cobrir um arco de 180, com dois tercos sempre cegos.
+
+Com isso morrem a arena de mesa, o caminho unico central e o HUD 2D de combate.
+O plano de execucao esta em
+[`docs/guias/tower_gate_v3_plano_etapas.md`](docs/guias/tower_gate_v3_plano_etapas.md)
+— 11 etapas em 9 ondas, com validacao obrigatoria em device depois da Etapa 3 e
+de novo depois da Etapa 7, que e onde a tese e provada ou cai. **Nenhuma etapa
+comecou**: nada de `src/` foi tocado ate 2026-08-17. A investigacao vive em
+[`docs/experimentos/arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md).
+
+A demo do mundo vivo foi **encerrada por mudanca de direcao**, nao por resposta:
+a pergunta dela nunca chegou a ser medida com alguem de fora, e o palco em que
+ela media saiu de escopo. Tudo abaixo descreve o prototipo que existe **hoje no
+codigo** — a base de RA atravessa a v3 inteira; o modelo de jogo, nao.
 
 ### Bloqueadores conhecidos (2026-08-14, vistos em device)
 
@@ -18,15 +40,21 @@ Leia isto antes de mexer em qualquer coisa:
    Suspeito nomeado: o projeto **nunca chama `XR8.run()` nem `XR8.stop()`** — o
    ciclo de vida inteiro esta delegado ao `xrCameraBehavior`, entao "sair da RA"
    solta a camera do Babylon mas nao para o engine. **E o bloqueador mais caro
-   que resta**: sem ele nao da para testar varias pessoas seguidas, e testar com
-   quem nao conhece o jogo e o unico passo que falta para a demo responder a
-   pergunta dela.
-2. **Colocar a arena numa mesa/bancada continua sem veredito** — funciona no
-   chao; na mesa o usuario nao conseguiu antes da inversao do gate e nunca
-   retestou depois.
+   que resta**, e ficou mais caro com a v3: antes impedia testar varias pessoas
+   seguidas; agora impede o proprio Ato 4, que termina em "jogar de novo" e exige
+   sair da partida para o album e voltar. Enderecado pela Etapa 11 do plano da v3
+   — e se surgir necessidade de testar em serie antes disso, essa etapa sobe de
+   posicao.
+2. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre** — o
+   usuario nao conseguiu antes da inversao do gate e nunca retestou depois, e a
+   v3 aposentou a pergunta: a arena deixa de ser um retangulo colocado numa
+   superficie e passa a nascer no chao, ao redor do jogador.
 3. **O deslize da arena nunca foi medido** (criterio do Beat 3: no maximo ~2 cm
-   em 60 s circulando). Ganhou urgencia agora que o Beat 5 exige aproximar a
-   45 cm da torre inimiga.
+   em 60 s circulando). **O criterio mudou de forma com a v3**, nao so de numero:
+   como a v3 proibe deslocamento — o jogador gira o tronco e nao caminha —, medir
+   deslize *circulando* deixou de descrever o que o jogo faz. O equivalente passa
+   a ser deslize **girando no lugar**, e e a validacao serial da Onda 3 do plano.
+   O criterio antigo nao foi respondido; foi aposentado.
 
 **Fechados em `e036b37`, todos confirmados em device:** o toque na carta em RA
 (era descompasso de tamanho de canvas, nao `cameraToUseForPointers`), as
@@ -95,8 +123,11 @@ Cada linha de investigacao tem um diario em [`docs/experimentos/`](docs/experime
 — o que foi tentado, o que cada tentativa provou e o que ainda esta aberto,
 inclusive as conclusoes que foram desmentidas depois:
 
-- [`demo-mundo-vivo.md`](docs/experimentos/demo-mundo-vivo.md) — a demo que mede
-  se a pessoa acredita no mundo que apareceu na mesa dela;
+- [`arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md) — **o diario
+  ativo**: a v3, e se a RA da para ser mecanica em vez de cenografia;
+- [`demo-mundo-vivo.md`](docs/experimentos/demo-mundo-vivo.md) — **encerrado por
+  mudanca de direcao (2026-08-17)**; continua sendo o historico de RA do projeto
+  (calibracao, gate de colocacao, armadilhas de GUI);
 - [`ra-e-paisagem.md`](docs/experimentos/ra-e-paisagem.md) — estabilidade da arena
   em RA e orientacao de tela;
 - [`ferramental-de-sessao.md`](docs/experimentos/ferramental-de-sessao.md) — como
@@ -197,6 +228,12 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 
 ## Roadmap de Fases
 
+> **Esta tabela descreve o prototipo table-scale, nao a v3.** Ela continua valendo
+> como estado do codigo que existe hoje. O roadmap vigente e o plano de 11 etapas
+> em [`docs/guias/tower_gate_v3_plano_etapas.md`](docs/guias/tower_gate_v3_plano_etapas.md),
+> e a Fase 03 (som) deixou de ser opcional la: na v3, ouvir o que nao se ve e
+> mecanica, nao charme.
+
 | Concluida | Fase | Tarefa | Objetivo |
 | --- | --- | --- | --- |
 | [~] | 01 | POC | AR mode, Arena com escala, posicionar tropas — **posicionar a arena e posicionar tropas funcionam** (confirmado em device 2026-08-14; duas invocacoes registradas na telemetria); falta veredito em **mesa**, e o criterio de deslize continua **nao medido** depois da arena virar 80 cm |
@@ -205,6 +242,9 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 | [x] | 04 | Tela inicial e Final game | Menu inicial entregue; o fim de partida virou a **dissolucao da arena** (a spec da demo proibe tela de resultado) — confirmado em device |
 
 ## Criterio de Conclusao da Fase 01
+
+> Criterios do prototipo table-scale. O ultimo item (deslize circulando) foi
+> **aposentado pela v3**, que proibe deslocamento — ver o bloqueador 3 acima.
 
 - Arena ancorada em RA com estabilidade visual. **Ancorar funciona no chao**
   (device, 2026-08-14); em mesa, sem veredito.

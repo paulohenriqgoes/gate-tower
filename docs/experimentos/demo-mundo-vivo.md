@@ -1,9 +1,31 @@
 # Experimento: a demo do mundo vivo
 
+> **ENCERRADO POR MUDANCA DE DIRECAO (2026-08-17).** A spec v3
+> ([`tower_gate_spec_v3.md`](../guias/tower_gate_spec_v3.md)) substitui o modelo
+> table-scale com caminho unico central e HUD 2D. A arena de mesa, as duas torres
+> e o caminho central saem de escopo, e com eles sai o palco em que esta demo
+> media.
+>
+> **A pergunta central deste diario nao foi respondida — ela foi abandonada junto
+> com o palco.** Nunca houve uma medicao valida do intervalo
+> `arena_placed -> enemy_awakened` com alguem que nao conhecia o jogo; a unica
+> leitura registrada (31,3 s) e do autor testando o proprio jogo.
+>
+> **A secao "Proximos passos" abaixo deixou de valer.** O que continua aberto
+> esta em [`arena-180-atencao.md`](arena-180-atencao.md), incluindo o bloqueador
+> da segunda sessao de RA, que nunca foi tocado e continua no caminho.
+>
+> Tudo abaixo permanece intacto e continua valendo como **historico de RA**: a
+> calibracao por escala absoluta, o coaching overlay, o fit de plano por
+> `hitTest`, o gate que recusa por prova contraria, o blob de contato e as
+> armadilhas de GUI atravessam a v3 sem mudanca de premissa. E a parte cara, e
+> ela sobrevive.
+
 Diario da demo que existe para responder **uma unica pergunta**, com pessoas
 reais testando: *a pessoa acredita que apareceu um mundo vivo na mesa dela?*
 Registra o que foi construido para responder isso, o que cada teste em device
-mostrou, e o que continua aberto. Ultima atualizacao: **2026-08-15**.
+mostrou, e o que continua aberto. Ultima atualizacao: **2026-08-17**
+(encerramento).
 
 ## Objetivo
 
@@ -563,6 +585,16 @@ Em ordem de suspeita, com o teste que decide cada uma:
    o problema e outro.
 
 ## Proximos passos (atualizados em 2026-08-14, apos `e036b37`)
+
+> **Esta secao nao vale mais (2026-08-17).** Ela foi escrita para o palco de mesa
+> que a spec v3 aposentou. Fica registrada porque mostra onde a investigacao
+> estava quando a direcao mudou — e porque tres itens dela continuam vivos, agora
+> em [`arena-180-atencao.md`](arena-180-atencao.md): o passo 2 (encerrar a sessao
+> de RA de verdade) virou a Etapa 11 do plano da v3; o passo 4 (dar um nascimento
+> a arena) reaparece como o fechamento da arena no Ato 2; e o passo 5 (som
+> posicional) virou a Etapa 5, agora como requisito de mecanica e nao de charme —
+> na v3 o jogador **precisa** ouvir o que nao ve. Os passos 1, 3, 6 e 7 morreram
+> com a arena de mesa.
 
 **Jogar deixou de ser o problema.** O funil completo — ancorar, explorar,
 acordar o inimigo por aproximacao, jogar cartas, vencer — rodou de ponta a ponta
