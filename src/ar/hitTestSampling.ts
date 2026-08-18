@@ -80,171 +80,166 @@ export interface GroundPlaneFit {
   normal: Vector3;
 }
 
-export interface PlaneCoverage {
-  /** Extensão dos inliers ao longo da direção `forward`, em metros. */
-  depth: number;
-  /** Extensão dos inliers na direção perpendicular a `forward`, em metros. */
-  width: number;
-  /** Quantos pontos ficaram dentro da tolerância do plano. */
-  inlierCount: number;
-}
-
 /**
- * Mede quanto da superfície ajustada por `fitGroundPlane` os hitTests realmente
- * cobrem, para decidir se a arena cabe ali. É a resposta a "a arena tem 80 cm;
- * essa mesa tem 80 cm?" — a arena NUNCA é reescalada para caber.
+ * Amostras (normalizadas [0,1], (0,0) = topo-esquerdo) de uma FAIXA na metade
+ * inferior da tela — onde, em retrato, aparece o chão à frente de quem está de
+ * pé segurando o celular. É a amostragem que substituiu o anel ao redor do
+ * ponto tocado quando a arena deixou de ser colocada num toque e passou a
+ * nascer no jogador: não há mais ponto de toque para amostrar em volta.
  *
- * Descarta os pontos que não pertencem ao plano (mesa vs. chão ao redor: um
- * ponto no piso fica a dezenas de centímetros do plano da mesa) e mede a caixa
- * envolvente dos que sobraram nos DOIS eixos da arena — `forward` (o eixo longo,
- * para onde o campo se estende) e o perpendicular.
+ * A faixa é uma grade `rows x cols`, distribuída uniformemente entre `yTop` e
+ * `yBottom` na vertical e recuada de `xInset` de cada borda na horizontal. O
+ * recuo lateral existe porque as quinas inferiores da tela pegam o chão em
+ * incidência rasíssima (quase paralelo ao raio), onde o hitTest do SLAM é mudo
+ * ou impreciso — e um ponto ruim ali entra no fit como outlier de altura.
  *
- * O valor devolvido é um limite INFERIOR da superfície real: ele só enxerga até
- * onde os hitTests foram disparados.
- *
- * @param points    pontos do mundo (resultado de vários hitTests)
- * @param fit       plano de referência (posição + normal)
- * @param forward   direção horizontal do eixo longo da arena
- * @param tolerance distância máxima ao plano para o ponto contar (em metros)
+ * Ordem estável: linha de cima para baixo, e dentro de cada linha da esquerda
+ * para a direita. Nada depende da ordem hoje (o fit é robusto a permutação),
+ * mas depuração em device depende de a lista não embaralhar entre execuções.
  */
-export function measurePlaneCoverage(
-  points: Vector3[],
-  fit: GroundPlaneFit,
-  forward: Vector3,
-  tolerance: number
-): PlaneCoverage {
-  const normal = fit.normal.lengthSquared() > 1e-6
-    ? fit.normal.normalizeToNew()
-    : new Vector3(0, 1, 0);
+export function buildFloorBandSamples(
+  rows: number,
+  cols: number,
+  yTop: number,
+  yBottom: number,
+  xInset: number
+): Array<{ x: number; y: number }> {
+  const samples: Array<{ x: number; y: number }> = [];
 
-  // Projeta `forward` no plano e ortonormaliza; se degenerar (olhando reto para
-  // baixo), cai num eixo qualquer perpendicular a normal.
-  let axisDepth = forward.subtract(normal.scale(Vector3.Dot(forward, normal)));
-
-  if (axisDepth.lengthSquared() < 1e-6) {
-    axisDepth = Math.abs(normal.z) < 0.9
-      ? new Vector3(0, 0, 1).subtract(normal.scale(normal.z))
-      : new Vector3(1, 0, 0).subtract(normal.scale(normal.x));
+  if (rows < 1 || cols < 1) {
+    return samples;
   }
 
-  axisDepth.normalize();
-  const axisWidth = Vector3.Cross(normal, axisDepth).normalize();
+  // Com uma linha/coluna só, o ponto vai para o meio da faixa em vez de colar
+  // numa das pontas — divisão por zero seria o resultado ingênuo aqui.
+  const rowStep = rows > 1 ? (yBottom - yTop) / (rows - 1) : 0;
+  const xStart = xInset;
+  const xEnd = 1 - xInset;
+  const colStep = cols > 1 ? (xEnd - xStart) / (cols - 1) : 0;
 
-  let minDepth = Number.POSITIVE_INFINITY;
-  let maxDepth = Number.NEGATIVE_INFINITY;
-  let minWidth = Number.POSITIVE_INFINITY;
-  let maxWidth = Number.NEGATIVE_INFINITY;
-  let inlierCount = 0;
+  for (let row = 0; row < rows; row += 1) {
+    const y = rows > 1 ? yTop + row * rowStep : (yTop + yBottom) / 2;
 
-  for (const point of points) {
-    const offset = point.subtract(fit.position);
+    for (let col = 0; col < cols; col += 1) {
+      const x = cols > 1 ? xStart + col * colStep : 0.5;
 
-    if (Math.abs(Vector3.Dot(offset, normal)) > tolerance) {
-      continue;
+      samples.push({
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+      });
     }
-
-    const alongDepth = Vector3.Dot(offset, axisDepth);
-    const alongWidth = Vector3.Dot(offset, axisWidth);
-
-    minDepth = Math.min(minDepth, alongDepth);
-    maxDepth = Math.max(maxDepth, alongDepth);
-    minWidth = Math.min(minWidth, alongWidth);
-    maxWidth = Math.max(maxWidth, alongWidth);
-    inlierCount += 1;
   }
 
-  if (inlierCount === 0) {
-    return { depth: 0, width: 0, inlierCount: 0 };
-  }
-
-  return {
-    depth: maxDepth - minDepth,
-    width: maxWidth - minWidth,
-    inlierCount,
-  };
+  return samples;
 }
 
 /**
- * Offsets em METROS, no espaço local da arena (dx = eixo da largura,
- * dz = eixo do comprimento), dos 8 pontos a testar: 4 cantos + 4 meios de
- * borda do retângulo que a arena vai ocupar. Substitui o anel circular de
- * `buildSampleOffsets` quando quem se quer amostrar é um contorno retangular
- * — um círculo genérico reprova mesas boas cujos cantos ficam fora do raio
- * mas cuja área retangular real cabe.
+ * Offsets em METROS no espaço LOCAL da arena (o mesmo de `ArenaArc.toLocal`:
+ * -Z é o azimute 0, +X é a direita do jogador) das sondas de desobstrução: os
+ * pontos dentro do raio mínimo de colocação onde um obstáculo real
+ * (sofá, mesa de centro, parede) impediria a arena de fechar ali.
  *
- * Ordem estável (sentido horário, começando no canto frente-direita):
- *   0: canto frente-direita  (+dx, +dz)
- *   1: canto trás-direita    (+dx, -dz)
- *   2: canto trás-esquerda   (-dx, -dz)
- *   3: canto frente-esquerda (-dx, +dz)
- *   4: meio da borda frente  ( 0, +dz)
- *   5: meio da borda direita (+dx,  0)
- *   6: meio da borda trás    ( 0, -dz)
- *   7: meio da borda esquerda(-dx,  0)
+ * Substitui `buildFootprintProbes`, que testava os 4 cantos e os 4 meios de
+ * borda de um retângulo de 80 cm. Não há mais retângulo: o que precisa estar
+ * livre é o entorno do jogador, e ele é polar.
+ *
+ * As sondas se distribuem em anéis concêntricos (raios `radiusM * r/rings`)
+ * cobrindo o ARCO da arena, e não 360° — o que está atrás do jogador não
+ * recebe conteúdo e não pode reprovar o fechamento.
+ *
+ * Cada anel leva `perRing` sondas, mas os anéis ÍMPARES as colocam nas
+ * fronteiras do arco (pontas incluídas) e os PARES no meio de cada célula.
+ * Sem essa defasagem os dois anéis ficam alinhados no mesmo azimute e a quina
+ * de um móvel passa exatamente entre os raios, sem ser vista por nenhuma
+ * sonda. Todas caem dentro de `[-arcDeg/2, +arcDeg/2]` nos dois casos.
+ *
+ * @param radiusM  raio do anel externo, em metros (o `MIN_PLACE_RADIUS_M`)
+ * @param rings    quantidade de anéis concêntricos
+ * @param perRing  sondas por anel
+ * @param arcDeg   abertura do arco coberto, centrado no azimute 0
  */
-export function buildFootprintProbes(width: number, length: number): { dx: number; dz: number }[] {
-  const halfWidth = width / 2;
-  const halfLength = length / 2;
+export function buildClearanceProbeOffsets(
+  radiusM: number,
+  rings: number,
+  perRing: number,
+  arcDeg: number
+): Array<{ dx: number; dz: number }> {
+  const offsets: Array<{ dx: number; dz: number }> = [];
 
-  return [
-    // 4 cantos, sentido horário a partir do canto frente-direita.
-    { dx: halfWidth, dz: halfLength },
-    { dx: halfWidth, dz: -halfLength },
-    { dx: -halfWidth, dz: -halfLength },
-    { dx: -halfWidth, dz: halfLength },
-    // 4 meios de borda, mesmo sentido horário a partir da borda da frente.
-    { dx: 0, dz: halfLength },
-    { dx: halfWidth, dz: 0 },
-    { dx: 0, dz: -halfLength },
-    { dx: -halfWidth, dz: 0 },
-  ];
+  if (rings < 1 || perRing < 1) {
+    return offsets;
+  }
+
+  const half = arcDeg / 2;
+
+  for (let ring = 1; ring <= rings; ring += 1) {
+    const ringRadius = (radiusM * ring) / rings;
+    const isStaggered = ring % 2 === 0;
+
+    for (let k = 0; k < perRing; k += 1) {
+      let azimuthDeg: number;
+
+      if (perRing === 1) {
+        azimuthDeg = 0;
+      } else if (isStaggered) {
+        azimuthDeg = -half + ((k + 0.5) * arcDeg) / perRing;
+      } else {
+        azimuthDeg = -half + (k * arcDeg) / (perRing - 1);
+      }
+
+      const rad = (azimuthDeg * Math.PI) / 180;
+
+      offsets.push({ dx: ringRadius * Math.sin(rad), dz: -ringRadius * Math.cos(rad) });
+    }
+  }
+
+  return offsets;
 }
 
-export interface FootprintCoverage {
+export interface ProbeCoverage {
   /** Sondas cuja projeção de tela caiu DENTRO do canvas. */
   inFrame: number;
   /** Sondas em quadro cujo hitTest bateu dentro da tolerância do plano ajustado. */
   onPlane: number;
   /**
    * Sondas em quadro que bateram em superfície REAL, porém fora da tolerância
-   * — o degrau que denuncia a borda da mesa (o chão ~70 cm abaixo).
+   * do piso — o degrau que denuncia um obstáculo (ou, no modelo antigo de
+   * mesa, a borda dela).
    *
-   * É a contagem que importa para decidir, e ela é diferente de
-   * `inFrame - onPlane`: uma sonda que não bateu em nada não é prova de que a
-   * superfície acabou, é ausência de leitura. O hitTest do SLAM falha o tempo
-   * todo nos cantos distantes, em incidência rasa; tratar esse silêncio como
-   * "não cabe" recusou 79 toques em dois testes de device, um deles apontando
-   * para o chão de uma cozinha.
+   * É a única contagem que pode REPROVAR, e ela é diferente de
+   * `inFrame - onPlane`: uma sonda que não bateu em nada não é prova de que
+   * há obstáculo, é ausência de leitura. O hitTest do SLAM falha o tempo todo
+   * em incidência rasa; tratar esse silêncio como "não pode" recusou 79
+   * toques em dois testes de device, um deles apontando para o chão de uma
+   * cozinha.
    */
   offPlane: number;
-  /** Sempre 8 — total de sondas avaliadas. */
+  /** Total de sondas avaliadas (incluindo as fora de quadro). */
   total: number;
 }
 
 /**
- * Mede quantas das 8 sondas do contorno da arena (`buildFootprintProbes`)
- * caem dentro do quadro da câmera e, dentre essas, quantas realmente
- * pertencem ao plano ajustado (`fit`). É a versão "por contorno" de
- * `measurePlaneCoverage`: em vez de medir a caixa envolvente de um anel de
- * hitTests genérico, testa exatamente os 8 pontos que a arena vai ocupar.
+ * Classifica um conjunto de sondas já projetadas na tela e já testadas: quantas
+ * caíram no quadro, e dentre essas quantas pertencem ao plano do piso (`fit`) e
+ * quantas bateram em superfície real FORA dele.
  *
  * Uma sonda fora do quadro (screenX/screenY fora de [0,1], já normalizados
  * como `normalizeToCanvas` faz) não conta em nada. Uma sonda em quadro cujo
- * hitTest não bateu em superfície nenhuma (`hit === null`) conta em
- * `inFrame` mas não em `onPlane` — ela não pode ser tratada como "a mesa vai
- * até ali" só porque a câmera enxerga aquele pixel.
+ * hitTest não bateu em superfície nenhuma (`hit === null`) conta em `inFrame`
+ * mas nem em `onPlane` nem em `offPlane` — ela é silêncio do sensor, não
+ * evidência em nenhuma das duas direções.
  *
  * @param probes           sondas já projetadas na tela e já testadas (ou não)
  * @param fit              plano de referência (posição + normal)
  * @param toleranceMeters  distância máxima ao plano para a sonda contar como "no plano"
  */
-export function measureFootprintCoverage(
+export function measureProbeCoverage(
   probes: { screenX: number; screenY: number; hit: Vector3 | null }[],
   fit: GroundPlaneFit,
   toleranceMeters: number
-): FootprintCoverage {
-  // Mesmo cálculo de normal (com fallback) que `measurePlaneCoverage` usa —
-  // mantém a noção de "distância ao plano" idêntica nas duas medições.
+): ProbeCoverage {
+  // Normal com fallback vertical: um fit degenerado não pode virar NaN no
+  // meio de uma contagem que decide se o jogador pode ou não fechar a arena.
   const normal = fit.normal.lengthSquared() > 1e-6
     ? fit.normal.normalizeToNew()
     : new Vector3(0, 1, 0);

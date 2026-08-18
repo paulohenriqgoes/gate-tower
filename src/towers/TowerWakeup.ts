@@ -42,12 +42,12 @@ const REVEAL_PANEL_HEIGHT = 176;
  * que a IA vai usar. E o gesto que inicia a batalha — nao existe botao de
  * "comecar" em lugar nenhum.
  *
- * Escala: em RA a arena inteira roda com `AR_ARENA_SCALE` (~0.033), entao
- * NENHUMA animacao daqui pode ser autorada em deslocamento absoluto — ela
- * sumiria (ou explodiria) conforme a escala do root. Tudo aqui e relativo:
- * `scaling` e sempre multiplicado pela escala que a torre ja tem, a sacudida e
- * uma ROTACAO (invariante a escala) e o pulso e uma cor emissiva (idem). O
- * resultado tem a mesma leitura na mesa de 80 cm e no modo tela.
+ * Escala: `arenaRoot.scaling` e sempre 1 (Etapa 2, `src/arena/metrics.ts`),
+ * mas as animacoes aqui continuam relativas de proposito — nao ha motivo pra
+ * reintroduzir deslocamento absoluto so porque o fator global sumiu. `scaling`
+ * e sempre multiplicado pela escala que a torre ja tem, a sacudida e uma
+ * ROTACAO (invariante a escala) e o pulso e uma cor emissiva (idem). O
+ * resultado tem a mesma leitura no modo RA e no modo tela.
  *
  * A carta revelada e um parametro: a demo tem uma IA scriptada (etapa
  * posterior), e quem sabe qual e a primeira carta do script e ela — aqui so

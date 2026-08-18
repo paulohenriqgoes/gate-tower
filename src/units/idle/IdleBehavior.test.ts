@@ -204,7 +204,11 @@ describe("IdleBehavior - transicoes", () => {
 
 describe("IdleBehavior - vagando", () => {
   it("respeita os bounds da arena e nao deixa a criatura escapar", () => {
-    const tightBounds: IdleBehaviorBounds = { maxX: 1, maxZ: 1, minX: -1, minZ: -1 };
+    // Etapa 2: WANDER_MAX_DISTANCE encolheu para ~0,54 m (era 2.8 unidades
+    // autorais). O bound aqui precisa continuar MENOR que isso para o teste
+    // seguir exercitando o clamp de verdade (senao o passeio nunca alcancaria
+    // a borda e a asserção passaria mesmo sem `Scalar.Clamp`).
+    const tightBounds: IdleBehaviorBounds = { maxX: 0.1, maxZ: 0.1, minX: -0.1, minZ: -0.1 };
     // random constante: o valor exato so decide qual estado sai sorteado a
     // cada troca, mas o teste checa os bounds em TODO frame, independente de
     // qual estado esta ativo (so "vagando" move root.position, e sempre
@@ -253,9 +257,11 @@ describe("IdleBehavior - social", () => {
   });
 
   it("vira o corpo para o vizinho mais proximo quando ha um no raio", () => {
-    // Dentro de SOCIAL_RADIUS (4.5): a 5 unidades a criatura ignoraria o
+    // Dentro de SOCIAL_RADIUS (Etapa 2: 4,5 * TROOP_HEIGHT_M/1.8 = 0,875 m).
+    // 0,6 m e ~69% do raio — bem dentro, mesma folga proporcional que o valor
+    // antigo (3 de 4.5 unidades autorais). A 1 m a criatura ignoraria o
     // vizinho e cairia para "parado".
-    const neighborPosition = new Vector3(3, 0, 0);
+    const neighborPosition = new Vector3(0.6, 0, 0);
     const { behavior, root } = buildBehavior({
       getNeighborPositions: () => [neighborPosition],
       random: () => 0.95,

@@ -6,7 +6,14 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { Scene } from "@babylonjs/core/scene";
 
 export interface ContactShadowOptions {
-  /** Diametro do disco de sombra, em unidades locais. Default 1.6. */
+  /**
+   * Diametro do disco de sombra, em metros (1 unidade do Babylon = 1 metro,
+   * `src/arena/metrics.ts`). Default 0,5 m — um chao intermediario de escala
+   * de sala; todo caller de producao passa o diametro real do proprio objeto
+   * (ver `ArenaSystem.addContactBlob` e `BaseUnit.createContactShadow`), o
+   * criterio de aceite da Etapa 2 e "o blob acompanha o diametro real do
+   * objeto".
+   */
   diameter?: number;
   /** Opacidade no centro do gradiente (0..1). Default 0.45. */
   opacity?: number;
@@ -33,7 +40,7 @@ export interface ContactShadowOptions {
  * @returns o mesh do blob (posicionado na origem local; cabe a quem chama posicionar).
  */
 export function createContactShadow(scene: Scene, options?: ContactShadowOptions): Mesh {
-  const diameter = options?.diameter ?? 1.6;
+  const diameter = options?.diameter ?? 0.5;
   const opacity = options?.opacity ?? 0.45;
   const name = options?.name ?? "contact-shadow";
 

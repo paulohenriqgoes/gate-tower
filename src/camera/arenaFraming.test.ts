@@ -10,11 +10,16 @@ import {
   type Vec3Like,
 } from "./arenaFraming";
 
-// Arena de mesa do ArenaSystem: gridX 8 * tileSize 2 = 16 de largura (X) e
-// gridZ 12 * tileSize 2 = 24 de comprimento (Z). Y cobre torres e barras.
-// Em RA isso vira 0,53 m x 0,80 m via AR_ARENA_SCALE; aqui medimos o espaco
-// autoral, que e o que a camera do modo tela enquadra.
-const ARENA_HALF_EXTENTS: Vec3Like = { x: 8, y: 3, z: 12 };
+// Arena do ArenaSystem (Etapa 2, quadrado provisorio): gridX 8 * tileSize
+// 0,55 = 4,4 m de largura (X) e gridZ 8 * tileSize 0,55 = 4,4 m de
+// comprimento (Z) — meios-eixos de 2,2 m. Y cobre torres e barras; mantem a
+// MESMA razao Y/X de antes (3/8 = 0,375) escalada para o novo tamanho de
+// campo, ja que nunca foi derivado de uma formula estrita — so precisa
+// continuar cobrindo confortavelmente `TOWER_HEIGHT_M` (1,20 m) mais a barra
+// de vida. Estes numeros ja sao METROS diretos (1 unidade do Babylon = 1
+// metro, `src/arena/metrics.ts`, nos dois modos de renderizacao) — nao ha
+// mais conversao a fazer para medir o que a camera do modo tela enquadra.
+const ARENA_HALF_EXTENTS: Vec3Like = { x: 2.2, y: 0.825, z: 2.2 };
 
 // Camera principal de main.ts.
 const ALPHA = -Math.PI / 2;

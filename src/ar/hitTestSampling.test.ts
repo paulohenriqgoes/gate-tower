@@ -3,11 +3,12 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import {
   normalizeToCanvas,
   buildSampleOffsets,
+  buildClearanceProbeOffsets,
+  buildFloorBandSamples,
   fitGroundPlane,
-  measurePlaneCoverage,
-  buildFootprintProbes,
-  measureFootprintCoverage
+  measureProbeCoverage
 } from "./hitTestSampling";
+import { ARENA_ARC_DEG, MIN_PLACE_RADIUS_M, sectorOf, toArc } from "../arena/ArenaArc";
 
 describe("normalizeToCanvas", () => {
   it("should normalize center (50, 50) of 100x100 canvas to (0.5, 0.5)", () => {
@@ -211,174 +212,193 @@ describe("fitGroundPlane", () => {
   });
 });
 
-describe("measurePlaneCoverage", () => {
+describe("buildFloorBandSamples", () => {
+  it("devolve rows x cols amostras, todas dentro de [0,1]", () => {
+    const samples = buildFloorBandSamples(3, 3, 0.58, 0.9, 0.22);
+
+    expect(samples.length).toBe(9);
+
+    for (const sample of samples) {
+      expect(sample.x).toBeGreaterThanOrEqual(0);
+      expect(sample.x).toBeLessThanOrEqual(1);
+      expect(sample.y).toBeGreaterThanOrEqual(0);
+      expect(sample.y).toBeLessThanOrEqual(1);
+    }
+  });
+
+  // A premissa inteira da amostragem: em retrato, com o jogador de pe, o chao
+  // a frente aparece na METADE INFERIOR da tela. Uma amostra acima da metade
+  // estaria mirando a parede do fundo ou o teto.
+  it("mantem todas as amostras na metade inferior da tela", () => {
+    for (const sample of buildFloorBandSamples(3, 3, 0.58, 0.9, 0.22)) {
+      expect(sample.y).toBeGreaterThan(0.5);
+    }
+  });
+
+  it("cobre a faixa inteira: a primeira linha e a de cima, a ultima a de baixo", () => {
+    const samples = buildFloorBandSamples(3, 3, 0.58, 0.9, 0.22);
+
+    expect(samples[0].y).toBeCloseTo(0.58);
+    expect(samples[samples.length - 1].y).toBeCloseTo(0.9);
+  });
+
+  it("recua das bordas laterais, onde a incidencia e rasa demais", () => {
+    const samples = buildFloorBandSamples(3, 3, 0.58, 0.9, 0.22);
+    const xs = samples.map((sample) => sample.x);
+
+    expect(Math.min(...xs)).toBeCloseTo(0.22);
+    expect(Math.max(...xs)).toBeCloseTo(0.78);
+  });
+
+  it("centraliza quando ha uma linha/coluna so, em vez de colar numa ponta", () => {
+    const samples = buildFloorBandSamples(1, 1, 0.6, 0.9, 0.2);
+
+    expect(samples.length).toBe(1);
+    expect(samples[0].x).toBeCloseTo(0.5);
+    expect(samples[0].y).toBeCloseTo(0.75);
+  });
+
+  it("devolve lista vazia para grade degenerada, sem quebrar", () => {
+    expect(buildFloorBandSamples(0, 3, 0.6, 0.9, 0.2)).toEqual([]);
+    expect(buildFloorBandSamples(3, 0, 0.6, 0.9, 0.2)).toEqual([]);
+  });
+});
+
+describe("buildClearanceProbeOffsets", () => {
+  const RINGS = 2;
+  const PER_RING = 5;
+
+  it("devolve rings x perRing sondas", () => {
+    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
+
+    expect(offsets.length).toBe(RINGS * PER_RING);
+  });
+
+  it("nenhuma sonda passa do raio minimo de colocacao", () => {
+    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
+
+    for (const { dx, dz } of offsets) {
+      expect(toArc({ x: dx, z: dz }).radiusM).toBeLessThanOrEqual(MIN_PLACE_RADIUS_M + 1e-9);
+    }
+  });
+
+  // O que esta ATRAS do jogador nao recebe conteudo, entao nao pode reprovar o
+  // fechamento da arena — uma parede as costas e o caso normal, nao um erro.
+  it("nenhuma sonda cai fora do arco da arena", () => {
+    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
+
+    for (const { dx, dz } of offsets) {
+      expect(sectorOf(toArc({ x: dx, z: dz }).azimuthDeg)).not.toBeNull();
+    }
+  });
+
+  it("cobre os tres setores do arco", () => {
+    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
+    const sectors = new Set(offsets.map(({ dx, dz }) => sectorOf(toArc({ x: dx, z: dz }).azimuthDeg)));
+
+    expect(sectors).toEqual(new Set(["left", "center", "right"]));
+  });
+
+  it("usa raios diferentes por anel, todos positivos", () => {
+    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
+    const radii = new Set(
+      offsets.map(({ dx, dz }) => Number(toArc({ x: dx, z: dz }).radiusM.toFixed(6)))
+    );
+
+    expect(radii.size).toBe(RINGS);
+
+    for (const radius of radii) {
+      expect(radius).toBeGreaterThan(0);
+    }
+  });
+
+  // Sem defasagem os dois aneis ficam alinhados no mesmo azimute e uma quina de
+  // movel passa entre as sondas sem ser vista por nenhuma delas.
+  it("defasa os aneis pares para nao alinhar as sondas no mesmo raio", () => {
+    const offsets = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, RINGS, PER_RING, ARENA_ARC_DEG);
+    const azimuths = offsets.map(({ dx, dz }) =>
+      Number(toArc({ x: dx, z: dz }).azimuthDeg.toFixed(4))
+    );
+
+    expect(new Set(azimuths).size).toBeGreaterThan(PER_RING);
+  });
+
+  it("devolve lista vazia para configuracao degenerada, sem quebrar", () => {
+    expect(buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, 0, 5, ARENA_ARC_DEG)).toEqual([]);
+    expect(buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, 2, 0, ARENA_ARC_DEG)).toEqual([]);
+  });
+});
+
+describe("measureProbeCoverage", () => {
   const flatFit = {
     position: new Vector3(0, 0, 0),
     normal: new Vector3(0, 1, 0)
   };
-  const forwardZ = new Vector3(0, 0, 1);
 
-  it("mede a extensao nos dois eixos de uma superficie plana", () => {
-    // Retangulo de 0.4 (X) por 1.2 (Z) no plano y = 0.
-    const points = [
-      new Vector3(-0.2, 0, -0.6),
-      new Vector3(0.2, 0, -0.6),
-      new Vector3(-0.2, 0, 0.6),
-      new Vector3(0.2, 0, 0.6)
-    ];
+  const PROBES = buildClearanceProbeOffsets(MIN_PLACE_RADIUS_M, 2, 5, ARENA_ARC_DEG);
 
-    const coverage = measurePlaneCoverage(points, flatFit, forwardZ, 0.05);
-
-    expect(coverage.depth).toBeCloseTo(1.2);
-    expect(coverage.width).toBeCloseTo(0.4);
-    expect(coverage.inlierCount).toBe(4);
-  });
-
-  it("descarta pontos fora do plano (a mesa nao herda a extensao do chao)", () => {
-    const points = [
-      new Vector3(0, 0, -0.2),
-      new Vector3(0, 0, 0.2),
-      // Chao 70 cm abaixo da mesa: nao pode contar como extensao da mesa.
-      new Vector3(0, -0.7, -2),
-      new Vector3(0, -0.7, 2)
-    ];
-
-    const coverage = measurePlaneCoverage(points, flatFit, forwardZ, 0.05);
-
-    expect(coverage.inlierCount).toBe(2);
-    expect(coverage.depth).toBeCloseTo(0.4);
-  });
-
-  it("mede ao longo da direcao informada, nao dos eixos do mundo", () => {
-    // Faixa longa no eixo X; com forward = +X ela conta como profundidade.
-    const points = [
-      new Vector3(-0.5, 0, 0),
-      new Vector3(0.5, 0, 0),
-      new Vector3(0, 0, -0.1),
-      new Vector3(0, 0, 0.1)
-    ];
-
-    const coverage = measurePlaneCoverage(points, flatFit, new Vector3(1, 0, 0), 0.05);
-
-    expect(coverage.depth).toBeCloseTo(1);
-    expect(coverage.width).toBeCloseTo(0.2);
-  });
-
-  it("devolve zero quando nenhum ponto pertence ao plano", () => {
-    const points = [new Vector3(0, 3, 0), new Vector3(1, 3, 1)];
-
-    const coverage = measurePlaneCoverage(points, flatFit, forwardZ, 0.05);
-
-    expect(coverage.inlierCount).toBe(0);
-    expect(coverage.depth).toBe(0);
-    expect(coverage.width).toBe(0);
-  });
-
-  it("nao quebra quando forward e paralelo a normal", () => {
-    const points = [
-      new Vector3(-0.3, 0, -0.3),
-      new Vector3(0.3, 0, 0.3)
-    ];
-
-    const coverage = measurePlaneCoverage(points, flatFit, new Vector3(0, 1, 0), 0.05);
-
-    expect(coverage.inlierCount).toBe(2);
-    expect(Number.isFinite(coverage.depth)).toBe(true);
-    expect(Number.isFinite(coverage.width)).toBe(true);
-  });
-});
-
-describe("buildFootprintProbes", () => {
-  it("devolve 8 offsets", () => {
-    const probes = buildFootprintProbes(0.533, 0.8);
-    expect(probes.length).toBe(8);
-  });
-
-  it("os 4 primeiros sao os cantos, na ordem horaria documentada", () => {
-    const probes = buildFootprintProbes(0.533, 0.8);
-    const halfWidth = 0.533 / 2;
-    const halfLength = 0.8 / 2;
-
-    expect(probes[0]).toEqual({ dx: halfWidth, dz: halfLength });
-    expect(probes[1]).toEqual({ dx: halfWidth, dz: -halfLength });
-    expect(probes[2]).toEqual({ dx: -halfWidth, dz: -halfLength });
-    expect(probes[3]).toEqual({ dx: -halfWidth, dz: halfLength });
-  });
-
-  it("os 4 ultimos sao os meios de borda, na ordem horaria documentada", () => {
-    const probes = buildFootprintProbes(0.533, 0.8);
-    const halfWidth = 0.533 / 2;
-    const halfLength = 0.8 / 2;
-
-    expect(probes[4]).toEqual({ dx: 0, dz: halfLength });
-    expect(probes[5]).toEqual({ dx: halfWidth, dz: 0 });
-    expect(probes[6]).toEqual({ dx: 0, dz: -halfLength });
-    expect(probes[7]).toEqual({ dx: -halfWidth, dz: 0 });
-  });
-});
-
-describe("measureFootprintCoverage", () => {
-  const flatFit = {
-    position: new Vector3(0, 0, 0),
-    normal: new Vector3(0, 1, 0)
-  };
-
-  it("8 sondas em quadro e no plano => inFrame 8, onPlane 8, total 8", () => {
-    const probes = buildFootprintProbes(0.533, 0.8).map((offset, i) => ({
-      // Espalha as sondas dentro do quadro em posicoes normalizadas validas;
-      // o valor exato nao importa, so precisa estar dentro de [0,1].
-      screenX: 0.5 + i * 0.01,
-      screenY: 0.5 + i * 0.01,
+  it("sondas em quadro e no plano contam como onPlane", () => {
+    const probes = PROBES.map((offset, i) => ({
+      // Posicoes de tela validas quaisquer; so precisam estar dentro de [0,1].
+      screenX: 0.4 + i * 0.01,
+      screenY: 0.6 + i * 0.01,
       hit: new Vector3(offset.dx, 0, offset.dz)
     }));
 
-    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
 
-    expect(coverage).toEqual({ inFrame: 8, offPlane: 0, onPlane: 8, total: 8 });
+    expect(coverage).toEqual({
+      inFrame: PROBES.length,
+      offPlane: 0,
+      onPlane: PROBES.length,
+      total: PROBES.length
+    });
   });
 
-  it("2 sondas fora de [0,1] => inFrame 6", () => {
-    const probes = buildFootprintProbes(0.533, 0.8).map((offset, i) => ({
+  it("sondas fora de [0,1] nao contam em nada", () => {
+    const probes = PROBES.map((offset, i) => ({
       screenX: i < 2 ? -0.1 : 0.5,
       screenY: i < 2 ? 1.5 : 0.5,
       hit: new Vector3(offset.dx, 0, offset.dz)
     }));
 
-    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
 
-    expect(coverage.inFrame).toBe(6);
+    expect(coverage.inFrame).toBe(PROBES.length - 2);
+    expect(coverage.onPlane).toBe(PROBES.length - 2);
+    expect(coverage.offPlane).toBe(0);
   });
 
-  // Este e o caso que o gate usa como PROVA CONTRARIA: superficie real
-  // encontrada num degrau abaixo do plano = a mesa acabou ali.
-  it("sondas no chao ~70cm abaixo contam em offPlane, nao em onPlane", () => {
-    const probes = buildFootprintProbes(0.533, 0.8).map(offset => ({
+  // Este e o caso que o gate usa como PROVA CONTRARIA: superficie real num
+  // degrau acima do piso = tem um movel ali.
+  it("sondas num degrau acima do piso contam em offPlane, nao em onPlane", () => {
+    const probes = PROBES.map(offset => ({
       screenX: 0.5,
-      screenY: 0.5,
-      hit: new Vector3(offset.dx, -0.7, offset.dz)
+      screenY: 0.7,
+      hit: new Vector3(offset.dx, 0.45, offset.dz)
     }));
 
-    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
 
-    expect(coverage.inFrame).toBe(8);
+    expect(coverage.inFrame).toBe(PROBES.length);
     expect(coverage.onPlane).toBe(0);
-    expect(coverage.offPlane).toBe(8);
+    expect(coverage.offPlane).toBe(PROBES.length);
   });
 
   // E este e o caso que NAO pode ser tratado como prova de nada: o hitTest
-  // falhou. Silencio do sensor nao e evidencia de que a superficie acabou.
+  // falhou. Silencio do sensor nao e evidencia de que ha obstaculo.
   it("sonda sem hit nao conta nem em onPlane nem em offPlane", () => {
-    const probes = buildFootprintProbes(0.533, 0.8).map(() => ({
+    const probes = PROBES.map(() => ({
       screenX: 0.5,
-      screenY: 0.5,
+      screenY: 0.7,
       hit: null as Vector3 | null
     }));
 
-    const coverage = measureFootprintCoverage(probes, flatFit, 0.02);
+    const coverage = measureProbeCoverage(probes, flatFit, 0.02);
 
-    expect(coverage.inFrame).toBe(8);
+    expect(coverage.inFrame).toBe(PROBES.length);
     expect(coverage.onPlane).toBe(0);
     expect(coverage.offPlane).toBe(0);
-    expect(coverage.total).toBe(8);
+    expect(coverage.total).toBe(PROBES.length);
   });
 });

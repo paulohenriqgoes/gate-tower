@@ -4,7 +4,7 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { TeamId } from "../battle/BattleTypes";
 import { BaseUnit } from "./BaseUnit";
 import { CururuBombado } from "./CururuBombado";
-import { DonaBarata } from "./DonaBarata";
+import { DonaBarata, DONA_BARATA_UNIT_SCALE } from "./DonaBarata";
 import { JavaliRaivoso } from "./JavaliRaivoso";
 import { TatuBola } from "./TatuBola";
 
@@ -58,10 +58,13 @@ export class UnitFactory {
   }
 
   private createDonaBarataSquad(spawnPosition: Vector3, team: TeamId): BaseUnit[] {
+    // Espacamento do esquadrao: proporcional ao corpo da propria Dona Barata,
+    // entao usa o MESMO fator dela (`DONA_BARATA_UNIT_SCALE`) em vez de um
+    // numero solto — ver o docblock de escala em `DonaBarata.ts`.
     const formationOffsets = [
-      new Vector3(-0.65, 0, -0.28),
-      new Vector3(0, 0, 0.42),
-      new Vector3(0.65, 0, -0.28),
+      new Vector3(-0.65 * DONA_BARATA_UNIT_SCALE, 0, -0.28 * DONA_BARATA_UNIT_SCALE),
+      new Vector3(0, 0, 0.42 * DONA_BARATA_UNIT_SCALE),
+      new Vector3(0.65 * DONA_BARATA_UNIT_SCALE, 0, -0.28 * DONA_BARATA_UNIT_SCALE),
     ];
 
     return formationOffsets.map((offset, index) => {

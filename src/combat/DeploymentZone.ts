@@ -29,20 +29,23 @@ export interface DeploymentZoneOptions {
   scene: Scene;
 }
 
-// Offset em Y do overlay, em unidades autorais. Precisa ficar acima de TRES
-// coisas coplanares: o `arena-ground` invisivel (y=0, nunca renderiza -
-// visibility=0 - entao nao ha artefato visual ali, mas fica registrado por
-// completude), as sombras de contato das torres (y=0.02, ver
-// `ArenaSystem.addContactBlob`) e principalmente o TOPO dos tiles do grid
-// xadrez (caixas de altura 0.2 centradas em y=0.1 -> topo em y=0.2), que so
-// ficam visiveis no modo tela/canvas (em RA o grid e escondido por
-// `setArenaGridVisible(false)`). Sem limpar o topo do tile, a zona ficaria
-// encoberta pelos tiles opacos sempre que o jogo roda fora de RA.
-// 0.22 unidades autorais * AR_ARENA_SCALE (~0.0333, ver ArenaSystem.ts) =
-// ~7,3 mm reais quando ancorada em RA — folga suficiente para nao dar
-// z-fighting com nenhuma das tres superficies acima, e ainda bem abaixo dos
-// pes das unidades (`unitGroundY` = 0.5).
-const ZONE_Y_OFFSET = 0.22;
+// Offset em Y do overlay, em metros (Etapa 2: 1 unidade do Babylon = 1 metro,
+// `src/arena/metrics.ts`). Precisa ficar acima de TRES coisas coplanares: o
+// `arena-ground` invisivel (y=0, nunca renderiza - visibility=0 - entao nao
+// ha artefato visual ali, mas fica registrado por completude), as sombras de
+// contato das torres (y proximo de 0, ver `ArenaSystem.addContactBlob`) e
+// principalmente o TOPO dos tiles do grid xadrez (ver `ArenaSystem.ts`,
+// `ARENA_DETAIL_SCALE`), que so ficam visiveis no modo tela/canvas (em RA o
+// grid e escondido por `setArenaGridVisible(false)`). Sem limpar o topo do
+// tile, a zona ficaria encoberta pelos tiles opacos sempre que o jogo roda
+// fora de RA.
+//
+// Valor escalado pelo MESMO fator de detalhe do `ArenaSystem` (0.55/2 =
+// 0.275, ja que este offset tambem e um detalhe de "acima do chao/tile" e
+// nao um ator com alvo proprio em `metrics.ts`): 0.22 * 0.275 ~= 0,0605 m —
+// folga suficiente para nao dar z-fighting com nenhuma das tres superficies
+// acima, e ainda bem abaixo dos pes das unidades (`unitGroundY`).
+const ZONE_Y_OFFSET = 0.22 * (0.55 / 2);
 
 // Alpha do overlay aceso: baixo o bastante para nao esconder o chao/feed de
 // camera por baixo, alto o bastante para ler contra qualquer fundo (a spec

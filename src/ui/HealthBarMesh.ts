@@ -9,9 +9,30 @@ import type { Scene } from "@babylonjs/core/scene";
 
 // Grupo de renderizacao das 3 placas da barra (border/background/fill).
 // Desenhar depois do grupo padrao (0) reduz disputa de profundidade contra a
-// arena/unidades quando a barra inteira encolhe para fracoes de milimetro em
-// RA (escala ~0.033).
+// arena/unidades: as 3 placas ficam quase coplanares, e mesmo em escala de
+// sala (1 unidade = 1 metro, Etapa 2) a distancia entre elas em Z e pequena
+// o bastante para z-fighting sem este grupo separado.
 const HEALTH_BAR_RENDERING_GROUP_ID = 1;
+
+/**
+ * Pisos anti-degenerados da barra de vida, em METROS.
+ *
+ * Eles existem para impedir geometria de dimensao zero quando `height`/`width`
+ * chegam muito pequenos — nao para definir o tamanho da barra, que vem sempre
+ * do ator que a pediu. Por isso sao fracoes de milimetro: se algum deles virar
+ * o valor dominante, a barra ja esta degenerada e o piso so evita o crash.
+ *
+ * Estao escritos direto em metros de proposito. A Etapa 2 aboliu o fator
+ * global de conversao (`1/30`) e reescrever esses numeros como "valor autoral
+ * vezes o fator antigo" traria o fator de volta como conceito vivo — a
+ * conversao mental que a v3 existe para eliminar.
+ */
+/** Piso de espessura de detalhe (~0,7 mm). */
+const MIN_DETAIL_M = 0.00067;
+/** Piso de dimensao visivel de uma placa da barra (~2,7 mm). */
+const MIN_BAR_SPAN_M = 0.0027;
+/** Passo de separacao em Z entre as placas quase coplanares (~0,33 mm). */
+const Z_FIGHT_STEP_M = 0.00033;
 
 /**
  * Sufixo do no raiz de uma barra de vida. Exportado para que quem precisa
@@ -44,17 +65,16 @@ export class HealthBarMesh {
 
   public constructor(options: HealthBarMeshOptions) {
     // Barra "fina demais" era o fill ocupando so metade da altura do fundo,
-    // com uma margem lateral generosa (24% da altura de cada lado). Numa
-    // arena de mesa em escala ~0.033 isso vira um traco quase invisivel.
-    // Fill agora ocupa a maior parte do fundo nos dois eixos — grosso e
-    // legivel mesmo minusculo.
-    const borderPadding = Math.max(options.height * 0.08, 0.02);
+    // com uma margem lateral generosa (24% da altura de cada lado), quase
+    // invisivel em qualquer escala pequena. Fill agora ocupa a maior parte do
+    // fundo nos dois eixos — grosso e legivel mesmo minusculo.
+    const borderPadding = Math.max(options.height * 0.08, MIN_DETAIL_M);
     const backgroundWidth = Math.max(options.width - borderPadding, options.height);
     const backgroundHeight = Math.max(options.height - borderPadding, options.height * 0.7);
-    const fillInsetX = Math.max(options.height * 0.1, 0.02);
-    const fillHeight = Math.max(backgroundHeight * 0.82, 0.08);
+    const fillInsetX = Math.max(options.height * 0.1, MIN_DETAIL_M);
+    const fillHeight = Math.max(backgroundHeight * 0.82, MIN_BAR_SPAN_M);
 
-    this.fillWidth = Math.max(backgroundWidth - fillInsetX * 2, 0.08);
+    this.fillWidth = Math.max(backgroundWidth - fillInsetX * 2, MIN_BAR_SPAN_M);
 
     this.root = new TransformNode(`${options.id}${HEALTH_BAR_ROOT_SUFFIX}`, options.scene);
     this.root.parent = options.parent;
@@ -72,8 +92,7 @@ export class HealthBarMesh {
     this.borderMesh.parent = this.root;
     this.borderMesh.isPickable = false;
     // Grupo de renderizacao 1 (depois do padrao 0): evita disputa de
-    // profundidade entre as 3 placas empilhadas quando a arena inteira esta
-    // em escala ~0.033 (mesa RA) e as diferencas de Z encolhem junto.
+    // profundidade entre as 3 placas empilhadas, quase coplanares.
     this.borderMesh.renderingGroupId = HEALTH_BAR_RENDERING_GROUP_ID;
     this.borderMesh.material = this.createMaterial(
       `${options.id}-healthbar-border-material`,
@@ -96,10 +115,10 @@ export class HealthBarMesh {
       options.scene
     );
     this.backgroundMesh.parent = this.root;
-    // Offsets de Z dobrados em relacao ao original (era -0.005/-0.01): com a
-    // arena inteira escalada a ~0.033 em RA, a separacao entre as placas
-    // encolhia para frações de milimetro e favorecia z-fighting.
-    this.backgroundMesh.position.z = -0.01;
+    // Offsets de Z: separam as 3 placas quase coplanares para evitar
+    // z-fighting. Sao fracoes de milimetro porque a barra inteira mede
+    // centimetros — um gap maior descolaria as placas visivelmente.
+    this.backgroundMesh.position.z = -Z_FIGHT_STEP_M;
     this.backgroundMesh.isPickable = false;
     this.backgroundMesh.renderingGroupId = HEALTH_BAR_RENDERING_GROUP_ID;
     this.backgroundMesh.material = this.createMaterial(
@@ -119,7 +138,7 @@ export class HealthBarMesh {
       options.scene
     );
     this.fillMesh.parent = this.root;
-    this.fillMesh.position.z = -0.02;
+    this.fillMesh.position.z = -2 * Z_FIGHT_STEP_M;
     this.fillMesh.position.y = -backgroundHeight * 0.02;
     this.fillMesh.isPickable = false;
     this.fillMesh.renderingGroupId = HEALTH_BAR_RENDERING_GROUP_ID;

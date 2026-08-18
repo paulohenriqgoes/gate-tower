@@ -2,8 +2,20 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 
+import { TROOP_HEIGHT_M } from "../arena/metrics";
 import { createMatteMaterial, PALETTE } from "../fx/materials";
 import { BaseUnit, type BaseUnitOptions } from "./BaseUnit";
+
+/**
+ * Fator unico que multiplica TODAS as medidas lineares do Javali Raivoso —
+ * mesmo espirito do `TOWER_SCALE` de `MushroomTower.ts`. `AUTHORED_HEIGHT` e
+ * a extensao em Y da geometria abaixo com fator 1: do fundo da perna (centro
+ * 0.34, altura 0.72 -> fundo -0.02) ate o topo da crina (centro 1.18, altura
+ * 0.54 -> topo 1.45). `1.45 - (-0.02)` = 1.47. Dividindo `TROOP_HEIGHT_M`
+ * (0,35 m) por isso, o Javali passa a medir 0,35 m do pe ao topo da crina.
+ */
+const AUTHORED_HEIGHT = 1.47;
+const UNIT_SCALE = TROOP_HEIGHT_M / AUTHORED_HEIGHT;
 
 export interface JavaliRaivosoOptions extends Omit<BaseUnitOptions, "attackIntervalMs" | "contactRange" | "displayName" | "health" | "movementSpeed"> {}
 
@@ -14,15 +26,14 @@ export class JavaliRaivoso extends BaseUnit {
     super({
       ...options,
       attackIntervalMs: 1100,
-      // Corpo-a-corpo: encosta na torre. Nao muda com a arena — depende do
-      // tamanho do bicho (1.9 de profundidade), nao do tamanho do campo.
-      contactRange: 1.5,
+      // Corpo-a-corpo: encosta na torre. Depende do tamanho do bicho (mesmo
+      // `UNIT_SCALE` do resto do arquivo), nao do tamanho do campo.
+      contactRange: 1.5 * UNIT_SCALE,
       displayName: "Javali Raivoso",
       health: 200,
-      // A distancia entre torres caiu de 28 para 20 unidades. Velocidade
-      // calibrada pelo tempo de travessia, nao pelo valor antigo: 20 / 1.3 ~=
-      // 15 s, a ponta rapida da janela de 15-25 s pedida para a leitura de jogo.
-      movementSpeed: 1.3,
+      // Velocidade escalada pelo mesmo `UNIT_SCALE` do corpo (regra da
+      // Etapa 2 para velocidades de unidade).
+      movementSpeed: 1.3 * UNIT_SCALE,
     });
   }
 
@@ -37,28 +48,28 @@ export class JavaliRaivoso extends BaseUnit {
     const body = MeshBuilder.CreateBox(
       `${this.id}-body`,
       {
-        width: 1.6,
-        height: 0.9,
-        depth: 1.9,
+        width: 1.6 * UNIT_SCALE,
+        height: 0.9 * UNIT_SCALE,
+        depth: 1.9 * UNIT_SCALE,
       },
       this.scene
     );
     body.parent = this.visualRoot;
-    body.position.y = 0.82;
+    body.position.y = 0.82 * UNIT_SCALE;
     body.material = bodyMaterial;
 
     // No intermediario que agrupa cabeca + presas, para o estado "observando"
     // do comportamento ocioso poder girar so a cabeca (ver getHeadNode()).
     this.headNode = new TransformNode(`${this.id}-head-node`, this.scene);
     this.headNode.parent = this.visualRoot;
-    this.headNode.position = new Vector3(0, 0.9, 1.18);
+    this.headNode.position = new Vector3(0, 0.9 * UNIT_SCALE, 1.18 * UNIT_SCALE);
 
     const head = MeshBuilder.CreateBox(
       `${this.id}-head`,
       {
-        width: 1.05,
-        height: 0.72,
-        depth: 0.88,
+        width: 1.05 * UNIT_SCALE,
+        height: 0.72 * UNIT_SCALE,
+        depth: 0.88 * UNIT_SCALE,
       },
       this.scene
     );
@@ -68,45 +79,45 @@ export class JavaliRaivoso extends BaseUnit {
     const mane = MeshBuilder.CreateBox(
       `${this.id}-mane`,
       {
-        width: 0.36,
-        height: 0.54,
-        depth: 1.4,
+        width: 0.36 * UNIT_SCALE,
+        height: 0.54 * UNIT_SCALE,
+        depth: 1.4 * UNIT_SCALE,
       },
       this.scene
     );
     mane.parent = this.visualRoot;
-    mane.position = new Vector3(0, 1.18, 0.12);
+    mane.position = new Vector3(0, 1.18 * UNIT_SCALE, 0.12 * UNIT_SCALE);
     mane.material = maneMaterial;
 
     const legOffsets: Array<[number, number]> = [
-      [-0.48, -0.52],
-      [0.48, -0.52],
-      [-0.48, 0.52],
-      [0.48, 0.52],
+      [-0.48 * UNIT_SCALE, -0.52 * UNIT_SCALE],
+      [0.48 * UNIT_SCALE, -0.52 * UNIT_SCALE],
+      [-0.48 * UNIT_SCALE, 0.52 * UNIT_SCALE],
+      [0.48 * UNIT_SCALE, 0.52 * UNIT_SCALE],
     ];
 
     for (const [x, z] of legOffsets) {
       const leg = MeshBuilder.CreateBox(
         `${this.id}-leg-${x}-${z}`,
         {
-          width: 0.24,
-          height: 0.72,
-          depth: 0.24,
+          width: 0.24 * UNIT_SCALE,
+          height: 0.72 * UNIT_SCALE,
+          depth: 0.24 * UNIT_SCALE,
         },
         this.scene
       );
       leg.parent = this.visualRoot;
-      leg.position = new Vector3(x, 0.34, z);
+      leg.position = new Vector3(x, 0.34 * UNIT_SCALE, z);
       leg.material = maneMaterial;
     }
 
-    for (const x of [-0.25, 0.25]) {
+    for (const x of [-0.25 * UNIT_SCALE, 0.25 * UNIT_SCALE]) {
       const fang = MeshBuilder.CreateBox(
         `${this.id}-fang-${x}`,
         {
-          width: 0.12,
-          height: 0.12,
-          depth: 0.34,
+          width: 0.12 * UNIT_SCALE,
+          height: 0.12 * UNIT_SCALE,
+          depth: 0.34 * UNIT_SCALE,
         },
         this.scene
       );
@@ -114,7 +125,7 @@ export class JavaliRaivoso extends BaseUnit {
       // Posicao original (x, 0.7, 1.62) era relativa ao visualRoot; reparentada
       // sob headNode (que fica em (0, 0.9, 1.18)), a posicao local vira a
       // diferenca entre as duas, preservando a aparencia em repouso.
-      fang.position = new Vector3(x, -0.2, 0.44);
+      fang.position = new Vector3(x, -0.2 * UNIT_SCALE, 0.44 * UNIT_SCALE);
       fang.material = fangMaterial;
     }
   }
@@ -124,9 +135,10 @@ export class JavaliRaivoso extends BaseUnit {
   }
 
   protected computeAttackDamage(): number {
-    // O dano cresce com a distancia percorrida — uma constante espacial, entao
-    // ela acompanha o encolhimento do campo: 28 / 20 = 1.4x por unidade andada,
-    // para uma investida de ponta a ponta doer o mesmo de antes.
+    // O dano cresce com a distancia percorrida — proporcao adimensional,
+    // NAO uma constante espacial (nao escala com `UNIT_SCALE`): 1.4 pontos
+    // de dano por metro andado e uma decisao de balanceamento, e recalibrar
+    // isso para a nova escala fica para uma etapa de balanceamento, nao esta.
     const FIELD_SHRINK_COMPENSATION = 1.4;
     return Math.max(1, Math.round(this.getTotalDistanceTravelled() * FIELD_SHRINK_COMPENSATION));
   }

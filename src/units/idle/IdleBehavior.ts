@@ -2,6 +2,20 @@ import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import type { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 
+import { TROOP_HEIGHT_M } from "../../arena/metrics";
+
+/**
+ * Fator de escala para as distancias/velocidades genericas deste arquivo
+ * (respiracao, passeio, raio social). `IdleBehavior` e compartilhado por
+ * QUALQUER criatura ociosa (hoje Javali e Cururu, via `ResidentPopulation`) e
+ * nao sabe qual delas esta rodando, entao usa a MESMA referencia generica de
+ * `BaseUnit.ts` (`TROOP_HEIGHT_M` sobre a altura autoral media das quatro
+ * criaturas, ~1.8) em vez do fator exato de uma unica especie. Duplicada em
+ * vez de importada de `BaseUnit.ts` para nao criar import circular
+ * (`BaseUnit` -> `IdleBehavior` -> `BaseUnit`).
+ */
+const RESIDENT_UI_SCALE = TROOP_HEIGHT_M / 1.8;
+
 /**
  * Maquina de estados do comportamento ocioso (Etapa 3 - "o mundo vivo").
  *
@@ -63,11 +77,11 @@ const STATE_ENTRIES: ReadonlyArray<readonly [IdleState, number]> = [
   ["social", 15],
 ];
 
-// Respiracao: amplitude pequena frente ao tamanho autoral das criaturas
-// (~1-2 unidades) e da arena (24 unidades no maior eixo) - perceptivel sem
-// parecer flutuacao. Periodo lento, tipo respiracao mesmo, nao um tremor.
+// Respiracao: amplitude pequena frente ao tamanho real das criaturas
+// (~0,35 m, `TROOP_HEIGHT_M`) e da arena (4,4 m no maior eixo) - perceptivel
+// sem parecer flutuacao. Periodo lento, tipo respiracao mesmo, nao um tremor.
 const BREATH_PERIOD_SECONDS = 3.2;
-const BREATH_AMPLITUDE = 0.05;
+const BREATH_AMPLITUDE = 0.05 * RESIDENT_UI_SCALE;
 const BREATH_ANGULAR_FREQUENCY = (Math.PI * 2) / BREATH_PERIOD_SECONDS;
 
 // Uma cabeca nao gira 180 graus. ~70 graus para a cabeca de verdade; bem menos
@@ -81,12 +95,14 @@ const HEAD_TURN_SMOOTHING_RATE = 6;
 const BODY_TURN_SMOOTHING_RATE = 4;
 
 // "Poucos passos": velocidade baixa e distancia curta, sem pathfinding de
-// verdade - so um passeio numa direcao aleatoria ate parar.
-const WANDER_SPEED = 0.6;
-const WANDER_MIN_DISTANCE = 1.2;
-const WANDER_MAX_DISTANCE = 2.8;
+// verdade - so um passeio numa direcao aleatoria ate parar. Espaciais —
+// escalam com `RESIDENT_UI_SCALE` (regra da Etapa 2 para velocidades e
+// distancias de unidade).
+const WANDER_SPEED = 0.6 * RESIDENT_UI_SCALE;
+const WANDER_MIN_DISTANCE = 1.2 * RESIDENT_UI_SCALE;
+const WANDER_MAX_DISTANCE = 2.8 * RESIDENT_UI_SCALE;
 
-const SOCIAL_RADIUS = 4.5;
+const SOCIAL_RADIUS = 4.5 * RESIDENT_UI_SCALE;
 const SOCIAL_RADIUS_SQ = SOCIAL_RADIUS * SOCIAL_RADIUS;
 
 /** Normaliza um angulo para o intervalo [-PI, PI]. Sem alocacao. */

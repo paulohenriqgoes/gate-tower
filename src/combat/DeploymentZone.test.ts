@@ -14,12 +14,12 @@ let scene: Scene;
 let arenaRoot: TransformNode;
 let zone: DeploymentZone;
 
-// Espelha `ArenaSystem.buildInitialArena`: 16x24 unidades autorais, jogador
-// em z <= 0.
+// Espelha `ArenaSystem.buildInitialArena`: Etapa 2, quadrado provisorio de
+// 4,4 m x 4,4 m (metade 2,2 m para cada lado), jogador em z <= 0.
 const arenaLayout: DeploymentZoneArenaLayout = {
-  maxX: 8,
-  minX: -8,
-  minZ: -12,
+  maxX: 2.2,
+  minX: -2.2,
+  minZ: -2.2,
   playerDeploymentMaxZ: 0,
 };
 
@@ -38,32 +38,32 @@ afterEach(() => {
 
 describe("DeploymentZone.isInside", () => {
   it("aceita um ponto bem no meio da metade do jogador", () => {
-    expect(zone.isInside(new Vector3(0, 0, -6))).toBe(true);
+    expect(zone.isInside(new Vector3(0, 0, -1.1))).toBe(true);
   });
 
   it("rejeita um ponto na metade do inimigo (z > 0)", () => {
-    expect(zone.isInside(new Vector3(0, 0, 1))).toBe(false);
+    expect(zone.isInside(new Vector3(0, 0, 0.5))).toBe(false);
   });
 
   it("rejeita um ponto fora dos limites laterais (x alem de maxX/minX)", () => {
-    expect(zone.isInside(new Vector3(9, 0, -6))).toBe(false);
-    expect(zone.isInside(new Vector3(-9, 0, -6))).toBe(false);
+    expect(zone.isInside(new Vector3(2.5, 0, -1.1))).toBe(false);
+    expect(zone.isInside(new Vector3(-2.5, 0, -1.1))).toBe(false);
   });
 
   it("rejeita um ponto alem do fundo da arena (z < minZ)", () => {
-    expect(zone.isInside(new Vector3(0, 0, -13))).toBe(false);
+    expect(zone.isInside(new Vector3(0, 0, -2.5))).toBe(false);
   });
 
   it("aceita as bordas inclusive: minX, maxX, minZ e playerDeploymentMaxZ", () => {
-    expect(zone.isInside(new Vector3(arenaLayout.minX, 0, -6))).toBe(true);
-    expect(zone.isInside(new Vector3(arenaLayout.maxX, 0, -6))).toBe(true);
+    expect(zone.isInside(new Vector3(arenaLayout.minX, 0, -1.1))).toBe(true);
+    expect(zone.isInside(new Vector3(arenaLayout.maxX, 0, -1.1))).toBe(true);
     expect(zone.isInside(new Vector3(0, 0, arenaLayout.minZ))).toBe(true);
     expect(zone.isInside(new Vector3(0, 0, arenaLayout.playerDeploymentMaxZ))).toBe(true);
   });
 
   it("rejeita logo apos a borda em cada direcao", () => {
-    expect(zone.isInside(new Vector3(arenaLayout.minX - 0.001, 0, -6))).toBe(false);
-    expect(zone.isInside(new Vector3(arenaLayout.maxX + 0.001, 0, -6))).toBe(false);
+    expect(zone.isInside(new Vector3(arenaLayout.minX - 0.001, 0, -1.1))).toBe(false);
+    expect(zone.isInside(new Vector3(arenaLayout.maxX + 0.001, 0, -1.1))).toBe(false);
     expect(zone.isInside(new Vector3(0, 0, arenaLayout.minZ - 0.001))).toBe(false);
     expect(zone.isInside(new Vector3(0, 0, arenaLayout.playerDeploymentMaxZ + 0.001))).toBe(false);
   });

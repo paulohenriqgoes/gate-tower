@@ -7,6 +7,7 @@ import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
 
 import { applyMatteFinish, PALETTE, shadeHex } from "../fx/materials";
+import { STEM_DIAMETER_BOTTOM, TOWER_SCALE } from "./MushroomTower";
 
 /**
  * Placa "CUIDADO" encostada no pe da torre inimiga.
@@ -40,24 +41,26 @@ import { applyMatteFinish, PALETTE, shadeHex } from "../fx/materials";
  *   a 30 cm: altura da letra = 30 * tan(0,67 deg) ~= 0,35 cm  -> LEGIVEL
  *   a 40 cm: a mesma letra cai para ~0,50 grau (~7,5 px)      -> ILEGIVEL
  *
- * E exatamente a janela que o design pede. Convertendo para unidades autorais
- * (`AR_ARENA_SCALE`, 1 unidade = 3,33 cm): 0,35 cm = ~0,105 unidade.
+ * E exatamente a janela que o design pede: **0,35 cm = 0,0035 m** de altura de
+ * letra. Na v3 (1 unidade do Babylon = 1 metro, `src/arena/metrics.ts`) esse
+ * numero e escrito DIRETO em metros — nao ha mais um fator global entre a
+ * unidade do motor e o mundo real para converter.
  *
- * Como referencia de escala, a torre tem 1.6 de diametro (5,3 cm) e 2.8 de
- * altura (9,3 cm) — a placa e um objeto de ~3 cm x 1 cm ao pe dela, do tamanho
- * de um rotulo, e nao de um outdoor.
+ * Como referencia de escala, a torre mede `TOWER_HEIGHT_M` (1,20 m) de altura
+ * e `CAP_DIAMETER_XZ` de diametro no chapeu — a placa e um objeto de ~3 cm x
+ * 1 cm ao pe dela, do tamanho de um rotulo, e nao de um outdoor.
  *
  * O modelo acima e uma aproximacao (FOV e resolucao variam por aparelho) e o
  * criterio de aceite e observacional no device. Por isso as medidas ficam em
  * constantes exportadas: depois do teste, ajustar e mexer em um numero so.
  */
 
-/** Altura da letra em unidades autorais (~3,5 mm reais). Ver docblock. */
-export const CAUTION_LETTER_HEIGHT_UNITS = 0.105;
+/** Altura da letra, em metros (~3,5 mm reais — alvo fixo de legibilidade, ver docblock). */
+export const CAUTION_LETTER_HEIGHT_UNITS = 0.0035;
 /** Largura da placa: "CUIDADO" tem 7 caracteres em caixa alta. */
-export const CAUTION_PLAQUE_WIDTH_UNITS = 0.9;
+export const CAUTION_PLAQUE_WIDTH_UNITS = 0.03;
 /** Altura da placa: a letra mais folga em cima e embaixo. */
-export const CAUTION_PLAQUE_HEIGHT_UNITS = 0.3;
+export const CAUTION_PLAQUE_HEIGHT_UNITS = 0.01;
 
 // Textura com a MESMA proporcao da placa (3:1), para o pixel sair quadrado e a
 // palavra nao esticar. Potencias de dois por habito de GPU movel.
@@ -71,14 +74,36 @@ const LETTER_HEIGHT_TEXELS =
   (CAUTION_LETTER_HEIGHT_UNITS / CAUTION_PLAQUE_HEIGHT_UNITS) * TEXTURE_HEIGHT;
 const FONT_SIZE_TEXELS = Math.round(LETTER_HEIGHT_TEXELS / CAP_HEIGHT_RATIO);
 
-const POST_DIAMETER_UNITS = 0.06;
-const POST_HEIGHT_UNITS = 0.55;
+/**
+ * O poste e a posicao default abaixo nasceram no MESMO espaco local do
+ * `body` da torre (ja com o `TOWER_SCALE` da Etapa 1, 1.7, aplicado — sao
+ * comparados direto contra `STEM_DIAMETER_BOTTOM/2`, que tambem ja carregava
+ * aquele fator). Esta etapa troca o `TOWER_SCALE` da torre por um valor
+ * derivado de `TOWER_HEIGHT_M` (ver `MushroomTower.ts`); para o poste e a
+ * placa continuarem na MESMA proporcao relativa ao caule, os literais
+ * autorais abaixo (0.06, 0.55, 0.5, 1.5, -0.7) sao reescalados pela razao
+ * entre o `TOWER_SCALE` novo e o antigo, em vez de pelo fator fixo de metros
+ * usado na altura da letra acima (que vem de um alvo real de legibilidade,
+ * nao da proporcao da torre).
+ */
+const LEGACY_TOWER_SCALE = 1.7;
+const TOWER_RESCALE = TOWER_SCALE / LEGACY_TOWER_SCALE;
+
+const POST_DIAMETER_UNITS = 0.06 * TOWER_RESCALE;
+const POST_HEIGHT_UNITS = 0.55 * TOWER_RESCALE;
 // Centro da placa acima do pe: a metade de baixo dela sobrepoe o topo do poste,
 // que e o que faz a placa parecer pregada e nao flutuando.
-const PLAQUE_CENTER_Y_UNITS = 0.5;
+const PLAQUE_CENTER_Y_UNITS = 0.5 * TOWER_RESCALE;
 // Placa torta le como "alguem largou aqui"; placa no esquadro le como sinalizacao
 // oficial, que e o oposto do tom.
 const LEAN_RADIANS = -0.12;
+
+// Posicao X default: FORA do caule, com a MESMA folga proporcional de antes
+// (1.5 / 1.105 ~= 1.357 vezes o raio da base) — mas derivada do raio REAL
+// (`STEM_DIAMETER_BOTTOM`, ja em metros) em vez de um literal solto, entao
+// mexer em `TOWER_HEIGHT_M` nunca mais afunda a placa dentro do caule.
+const DEFAULT_POSITION_X = (STEM_DIAMETER_BOTTOM / 2) * 1.357;
+const DEFAULT_POSITION_Z = -0.7 * TOWER_RESCALE;
 
 export interface CautionSignOptions {
   /**
@@ -86,10 +111,10 @@ export interface CautionSignOptions {
    * Sem valor, a placa fica ao lado da boca da caverna, deslocada no eixo X
    * para nao tapa-la, e um pouco na direcao de quem se aproxima.
    *
-   * O X padrao (1.5) tem que ficar FORA do caule: com `TOWER_SCALE = 1.7` o
-   * raio da base do cogumelo e ~1,105 (ver `MushroomTower.ts`). Mexeu na
-   * escala da torre, confira este numero — a placa some dentro do caule sem
-   * avisar.
+   * O X padrao precisa ficar FORA do caule: o raio da base do cogumelo e
+   * `STEM_DIAMETER_BOTTOM / 2` (ver `MushroomTower.ts`), hoje ~0,29 m com
+   * `TOWER_HEIGHT_M` = 1,20 m. Mexeu em `TOWER_HEIGHT_M`/`TOWER_SCALE`,
+   * confira este numero — a placa some dentro do caule sem avisar.
    */
   position?: Vector3;
 }
@@ -101,7 +126,7 @@ export interface CautionSignOptions {
  *
  * A face da frente do plano do Babylon aponta para **-Z** (normal `(0,0,-1)`
  * em `planeBuilder`), e o jogador se aproxima da torre inimiga vindo de -Z (a
- * torre dele esta em z = -10). Ou seja: sem rotacao nenhuma em Y o texto ja
+ * torre dele esta em z = -2,0 m). Ou seja: sem rotacao nenhuma em Y o texto ja
  * nasce virado para quem chega. Nao "conserte" isso com `rotation.y = PI`.
  */
 export function createCautionSign(
@@ -111,7 +136,7 @@ export function createCautionSign(
 ): TransformNode {
   const root = new TransformNode("caution-sign", scene);
   root.parent = parent;
-  root.position = options.position?.clone() ?? new Vector3(1.5, 0, -0.7);
+  root.position = options.position?.clone() ?? new Vector3(DEFAULT_POSITION_X, 0, DEFAULT_POSITION_Z);
   // A inclinacao vai no root, e nao na placa: inclinar so a placa a giraria em
   // torno do proprio centro e ela descolaria do poste.
   root.rotation.z = LEAN_RADIANS;

@@ -27,7 +27,6 @@ import {
   type PlacementPreviewState,
 } from "./placementGate";
 import { attachCoachingOverlay, detachCoachingOverlay } from "./coachingOverlay";
-import { AR_ARENA_SCALE } from "../arena/ArenaSystem";
 import { playSpawnScaleIn } from "../fx/spawnAnimation";
 import { DiagnosticsOverlay } from "../ui/DiagnosticsOverlay";
 import type { HudLayer } from "../ui/HudLayer";
@@ -365,8 +364,8 @@ export class EighthWallARManager implements ArSessionController {
    * de comecar em qualquer lugar da tela. Sem `?debug=1` o painel inteiro
    * deixa de existir, e nao ha nenhum HUD entre ancorar a arena e a batalha.
    *
-   * A escala da arena tambem nao e ajustavel: ela e a constante
-   * `AR_ARENA_SCALE`, porque a arena tem um tamanho fisico definido (80 cm) e
+   * A escala da arena tambem nao e ajustavel: ela e fixa em 1 (Etapa 2, cada
+   * ator ja nasce com o tamanho fisico definido em `src/arena/metrics.ts`) e
    * um slider so deixaria o jogador desmentir esse tamanho.
    *
    * O "Reposicionar" continua existindo (atras do debug) porque a referencia
@@ -1240,9 +1239,17 @@ export class EighthWallARManager implements ArSessionController {
     }
   }
 
-  /** A escala em RA e fixa: a arena tem 80 cm, e isso nao se ajusta. */
+  /**
+   * A escala em RA e fixa: 1 (Etapa 2, `src/arena/metrics.ts` — 1 unidade do
+   * Babylon = 1 metro). Ate a Etapa 1 este metodo aplicava o fator de escala
+   * global antigo (~0,0333) porque a arena media 80 cm autorada em unidades
+   * maiores; agora cada ator ja nasce em metros, entao nao ha mais fator
+   * nenhum a aplicar aqui. O metodo continua existindo (em vez de inlinear
+   * `setAll(1)` nos dois call sites) porque `nonARScale`/`applyArenaScale`
+   * sao um par simetrico — ver `initializeXR8Camera` e `dispose`.
+   */
   private applyArenaScale(): void {
-    this.arenaRoot.scaling.setAll(AR_ARENA_SCALE);
+    this.arenaRoot.scaling.setAll(1);
   }
 
   private updateUI(customLabel?: string, warning = false): void {

@@ -9,28 +9,24 @@ import type { Scene } from "@babylonjs/core/scene";
 
 import { createContactShadow } from "../fx/contactShadow";
 import { applyMatteFinish, PALETTE } from "../fx/materials";
-import { createMushroomTower, type MushroomTower } from "../towers/MushroomTower";
+import { attachProximityFade } from "../fx/proximityFade";
+import { CAP_DIAMETER_XZ, createMushroomTower, type MushroomTower } from "../towers/MushroomTower";
 
 /**
- * Arena de mesa: o maior eixo da arena mede 80 cm no mundo real.
+ * Arena de escala de sala: 1 unidade do Babylon = 1 metro, nos dois modos de
+ * renderizacao (`src/arena/metrics.ts`). A Etapa 1 tinha a cena autorada numa
+ * unidade a parte (tile = 2 unidades) e UM fator de escala global unico
+ * (extinto nesta etapa) aplicado no `arenaRoot` em RA, que produzia uma
+ * maquete de 80 cm. A v3 quer o oposto — objetos de escala de sala — entao
+ * agora cada ator (torre, tropa, arena) e autorado direto em metros.
  *
- * A cena continua autorada nas unidades originais (tile = 2 unidades) e a
- * conversao para metros e UM fator unico, aplicado no root em RA. A alternativa
- * — reautorar tudo em metros com escala 1 — obrigaria a dividir por ~30 toda
- * constante espacial de unidades, barras de vida, blobs e animacao de spawn,
- * espalhando numeros magicos. O preco desta escolha e a arena viver em escala
- * ~0.03, que e onde shadow-mapping quebra; como o grounding aqui e feito por
- * blob de contato (`src/fx/contactShadow.ts`), esse preco nao se materializa.
+ * PROVISORIO: o campo abaixo e um QUADRADO de 4,4 m x 4,4 m — o diametro do
+ * arco polar de raio 2,2 m que a spec v3 pede. A forma retangular/quadrada e
+ * so um placeholder; a Etapa 3 substitui isto pela geometria de arco de
+ * verdade (`ArenaArc.ts`).
  */
-export const ARENA_LENGTH_METERS = 0.8;
-/** Maior eixo da arena em unidades autorais: 12 tiles * 2 no eixo Z. */
-export const ARENA_AUTHORED_DEPTH = 24;
-/** Menor eixo da arena em unidades autorais: 8 tiles * 2 no eixo X. */
-export const ARENA_AUTHORED_WIDTH = 16;
-/** Fator unico e fixo de conversao autoral -> metros no modo RA (~0.03333). */
-export const AR_ARENA_SCALE = ARENA_LENGTH_METERS / ARENA_AUTHORED_DEPTH;
-/** Menor eixo da arena em metros (~0.533 m). */
-export const ARENA_WIDTH_METERS = ARENA_AUTHORED_WIDTH * AR_ARENA_SCALE;
+export const ARENA_WIDTH_METERS = 4.4;
+export const ARENA_LENGTH_METERS = 4.4;
 
 export interface ArenaBuildResult {
   arenaLayout: ArenaLayout;
@@ -69,23 +65,60 @@ export interface ArenaTowerDefinition {
   team: TeamId;
 }
 
+/**
+ * Fator interno para os poucos literais deste arquivo que nao tem alvo
+ * nomeado em `metrics.ts` (espessura do tile, altura de spawn de unidade,
+ * offset do blob de contato da torre): razao entre o novo `tileSize` (0,55 m)
+ * e o tileSize autoral da Etapa 1 (2 unidades). Mantem esses detalhes no
+ * mesmo tamanho RELATIVO ao tile que tinham antes, sem inventar um segundo
+ * fator de conversao do jogo inteiro.
+ */
+const ARENA_DETAIL_SCALE = 0.55 / 2;
+
+/**
+ * Posicao de fallback quando ainda nao ha camera ativa (um frame ou outro
+ * durante a troca de modo). Longe o bastante para o fade ficar em 1 — sem isso
+ * a torre piscaria invisivel exatamente na transicao RA <-> canvas. E uma
+ * constante de modulo, e nao um `Vector3.Zero()` por chamada, porque este
+ * getter roda a cada frame por torre e alocar em loop de render e o tipo de
+ * lixo que so aparece como GC stutter em mobile.
+ */
+const FAR_FROM_ARENA = new Vector3(0, 0, 1e6);
+
 export class ArenaSystem {
   private readonly scene: Scene;
+  /** Fades de proximidade ligados as torres, para poder soltar tudo em `dispose`. */
+  private readonly fadeHandles: Array<{ dispose(): void }> = [];
 
-  // 8 x 12 tiles de 2 unidades = 16 x 24 unidades autorais, que em RA viram
-  // 0,53 m x 0,80 m — a arena de mesa da demo. O grid e derivado das constantes
-  // metricas para nao existir duas fontes de verdade do tamanho da arena.
-  private readonly tileSize = 2;
-  private readonly gridX = ARENA_AUTHORED_WIDTH / this.tileSize;
-  private readonly gridZ = ARENA_AUTHORED_DEPTH / this.tileSize;
+  // 8 x 8 tiles de 0,55 m = 4,4 m x 4,4 m — o quadrado provisorio desta etapa
+  // (ver docblock do arquivo). O grid e derivado das constantes metricas para
+  // nao existir duas fontes de verdade do tamanho da arena.
+  private readonly tileSize = 0.55;
+  private readonly gridX = ARENA_WIDTH_METERS / this.tileSize;
+  private readonly gridZ = ARENA_LENGTH_METERS / this.tileSize;
 
-  /** Meia-largura do caminho central, em unidades autorais (tiles x em {-1, 0}). */
-  private readonly laneHalfWidth = 2;
-  /** Distancia do centro ate cada torre, no eixo Z. */
-  private readonly towerZ = 10;
+  /** Meia-largura do caminho central, em metros: cobre 1 tile a cada lado do centro (tiles x em {-1, 0}). */
+  private readonly laneHalfWidth = this.tileSize;
+  /** Distancia do centro ate cada torre, no eixo Z, em metros — valor fixo pedido pela Etapa 2. */
+  private readonly towerZ = 2.0;
 
   public constructor(scene: Scene) {
     this.scene = scene;
+  }
+
+  /**
+   * Solta os observers de frame criados por esta arena.
+   *
+   * Ninguem chama isto ainda — a arena vive o carregamento inteiro da pagina
+   * hoje. Passa a importar na Etapa 11, quando "jogar de novo" tiver que
+   * derrubar e reconstruir a arena sem recarregar: um fade orfao continuaria
+   * rodando por frame contra um mesh ja descartado.
+   */
+  public dispose(): void {
+    for (const handle of this.fadeHandles) {
+      handle.dispose();
+    }
+    this.fadeHandles.length = 0;
   }
 
   public buildInitialArena(): ArenaBuildResult {
@@ -134,14 +167,14 @@ export class ArenaSystem {
           {
             width: this.tileSize * 0.98,
             depth: this.tileSize * 0.98,
-            height: 0.2,
+            height: 0.2 * ARENA_DETAIL_SCALE,
           },
           this.scene
         );
 
         tile.position = new Vector3(
           x * this.tileSize + this.tileSize / 2,
-          0.1,
+          0.1 * ARENA_DETAIL_SCALE,
           z * this.tileSize + this.tileSize / 2
         );
 
@@ -187,7 +220,7 @@ export class ArenaSystem {
         minZ: -halfDepth,
         // O jogador ocupa a metade dele: z <= 0 (o rio marca a divisa).
         playerDeploymentMaxZ: 0,
-        unitGroundY: 0.5,
+        unitGroundY: 0.5 * ARENA_DETAIL_SCALE,
         laneCenterX: 0,
         laneHalfWidth: this.laneHalfWidth,
       },
@@ -196,7 +229,10 @@ export class ArenaSystem {
       towerDefinitions: towerMeshes.map((mesh) => {
         const [, team, lane] = mesh.name.split("-");
         return {
-          diameter: 1.6,
+          // Diametro REAL do chapeu (nao mais um numero solto): `CombatEngine`
+          // deriva alcance de ataque e `TowerActor` a largura da barra de vida
+          // a partir dele.
+          diameter: CAP_DIAMETER_XZ,
           id: mesh.name,
           lane: lane as TowerLaneId,
           mesh,
@@ -220,22 +256,44 @@ export class ArenaSystem {
     // o combate le `mesh.position` esperando a posicao em espaco de arena.
     const player = createMushroomTower(this.scene, { lane, team: "player", x: 0, z: -this.towerZ });
     player.root.parent = arenaRoot;
-    // Blob 1.25x o diametro da torre: com a arena 1.5x menor, o antigo 2.4
-    // (1.5x) virava uma mancha grande demais para o campo.
-    this.addContactBlob(arenaRoot, 0, -this.towerZ, 2);
+    // Blob 1,25x o diametro REAL do chapeu (`CAP_DIAMETER_XZ`, de
+    // `MushroomTower.ts`) — antes era o literal solto `2`, que nao acompanhava
+    // a torre se `TOWER_HEIGHT_M`/`TOWER_SCALE` mudassem.
+    this.addContactBlob(arenaRoot, 0, -this.towerZ, CAP_DIAMETER_XZ * 1.25);
 
     const enemy = createMushroomTower(this.scene, { lane, team: "enemy", x: 0, z: this.towerZ });
     enemy.root.parent = arenaRoot;
-    this.addContactBlob(arenaRoot, 0, this.towerZ, 2);
+    this.addContactBlob(arenaRoot, 0, this.towerZ, CAP_DIAMETER_XZ * 1.25);
+
+    // Fade por proximidade: com 1,20 m de altura, a torre deixou de ser uma
+    // peca de maquete que o jogador olha de cima e virou um objeto que ele
+    // ENCOSTA. Sem isto o near plane corta o cogumelo ao meio e expoe o
+    // interior oco da malha — o jeito mais rapido de matar a ilusao de RA.
+    this.attachTowerFade(player);
+    this.attachTowerFade(enemy);
 
     return { player, enemy };
+  }
+
+  /**
+   * Liga o fade por proximidade a uma torre.
+   *
+   * A posicao da camera vem de `scene.activeCamera` a cada frame de proposito:
+   * em RA quem dirige essa camera e o engine do 8th Wall (pose 6DoF injetada
+   * por frame), e no modo canvas e a camera comum. Ler daqui mantem a regra
+   * identica nos dois modos, sem o Arena System saber qual esta ativo.
+   */
+  private attachTowerFade(tower: MushroomTower): void {
+    this.fadeHandles.push(
+      attachProximityFade(tower.root, () => this.scene.activeCamera?.globalPosition ?? FAR_FROM_ARENA)
+    );
   }
 
   /** Sombra de contato (blob) sob uma torre, para ancora-la ao piso. */
   private addContactBlob(parent: TransformNode, x: number, z: number, diameter: number): void {
     const blob = createContactShadow(this.scene, { diameter, opacity: 0.4, name: `tower-shadow-${x}-${z}` });
     blob.parent = parent;
-    blob.position.set(x, 0.02, z);
+    blob.position.set(x, 0.02 * ARENA_DETAIL_SCALE, z);
   }
 
   private createPatternMaterial(

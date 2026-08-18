@@ -7,7 +7,7 @@ import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Scene } from "@babylonjs/core/scene";
 
 import type { ArSessionController } from "./ar/ArSessionController";
-import { ArenaSystem, AR_ARENA_SCALE } from "./arena/ArenaSystem";
+import { ArenaSystem } from "./arena/ArenaSystem";
 import { ENEMY_SCRIPT } from "./battle/EnemyScript";
 import { MatchClock } from "./battle/MatchClock";
 import { CARD_CATALOG } from "./cards/cardCatalog";
@@ -135,9 +135,10 @@ interface TelemetryWiringOptions {
 function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 	const { arManager, arenaRoot, combatEngine, gameFlow, scene, telemetry } = options;
 
-	// A distancia e medida em ESPACO DE MUNDO, que em RA ja esta em metros — a
-	// arena estar escalada em ~0.033 nao entra na conta, porque tanto a camera
-	// quanto o centro da arena sao lidos em posicao absoluta.
+	// A distancia e medida em ESPACO DE MUNDO, que em RA ja esta em metros —
+	// tanto a camera quanto o centro da arena sao lidos em posicao absoluta, e
+	// desde a Etapa 2 a escala da arena e sempre 1 (nunca precisou entrar
+	// nesta conta, mas agora e literalmente irrelevante).
 	const measureCameraDistanceMeters = (): number => {
 		const activeCamera = scene.activeCamera;
 
@@ -374,9 +375,10 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	// Populacao residente (Beat 4): criaturas que so vivem na arena, sem
 	// combate. O `IdleBehavior` compara a posicao da camera com a posicao LOCAL
 	// das criaturas (todas filhas de `arena.root`), entao a camera precisa ser
-	// convertida para o espaco do root — em RA o root esta transladado,
-	// rotacionado e escalado em ~0.033, e sem a conversao o estado "observando"
-	// miraria num ponto a metros de distancia.
+	// convertida para o espaco do root — em RA o root esta transladado e
+	// rotacionado (a escala e sempre 1 desde a Etapa 2, mas a translacao/rotacao
+	// continuam), e sem a conversao o estado "observando" miraria num ponto
+	// errado.
 	const invertedArenaMatrix = new Matrix();
 	const cameraArenaLocalPosition = new Vector3();
 	let cachedCameraFrameId = -1;
@@ -463,18 +465,20 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		enemyTowerMesh,
 		enemyTower: arena.mushroomTowers.enemy,
 		// Mesma conversao ja usada pela populacao residente: uma inversao de
-		// matriz por frame, compartilhada. Em RA o `arenaRoot` esta transladado,
-		// rotacionado e escalado em ~0.033 — sem converter, a distancia ate a
-		// caverna sairia em metros no meio de uma conta em unidades autorais.
+		// matriz por frame, compartilhada. Sem ela a distancia ate a caverna
+		// sairia no espaco de mundo em vez do espaco local do `arenaRoot`.
 		getCameraArenaLocalPosition: getCameraPosition,
 		hudLayer,
 		matchClock,
 		proximityTrigger,
-		onWakeStageChanged: (stage, distanceUnits) => {
+		onWakeStageChanged: (stage, distanceMeters) => {
 			telemetry.log({
 				type: "wake_stage_changed",
 				stage,
-				distanceMeters: distanceUnits * AR_ARENA_SCALE,
+				// Etapa 2: 1 unidade do Babylon = 1 metro (`src/arena/metrics.ts`),
+				// entao a distancia local do `arenaRoot` JA e metros — nao ha mais
+				// fator de escala global nenhum para multiplicar.
+				distanceMeters,
 			});
 		},
 		// Carta que a torre revela ao acordar: a PRIMEIRA carta do script fixo

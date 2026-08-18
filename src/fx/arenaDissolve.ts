@@ -12,9 +12,11 @@ import type { Scene } from "@babylonjs/core/scene";
  * leitura de desmoronamento em vez de um fade global instantaneo.
  *
  * Escala e a grandeza usada para a saida (nunca posicao/tamanho absoluto):
- * em RA o `arena-root` roda com `AR_ARENA_SCALE` (~0,033), entao qualquer
- * animacao aqui trabalha em cima da escala ATUAL de cada no, nunca assume
- * escala 1.
+ * `arenaRoot.scaling` e sempre 1 desde a Etapa 2 (`src/arena/metrics.ts`),
+ * mas esta animacao continua trabalhando em cima da escala ATUAL de cada no
+ * — captura `originalScaling` e anima ate zero a partir dela — porque e a
+ * forma mais simples de "encolher ate sumir e depois voltar exatamente ao
+ * que era" sem se importar com o valor de partida de cada elemento.
  */
 
 /** Nome do no que agrupa todos os tiles do xadrez (ver `ArenaSystem`). */

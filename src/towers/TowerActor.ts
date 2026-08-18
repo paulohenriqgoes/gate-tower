@@ -5,16 +5,29 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
 import type { TeamId, TowerLaneId } from "../battle/BattleTypes";
+import { TOWER_SCALE } from "./MushroomTower";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
 import type { BaseUnit } from "../units/BaseUnit";
+
+/**
+ * Espessura da barra e folga acima da torre eram literais soltos (0.34 e 0.6)
+ * calibrados a olho contra a arena da Etapa 1. Reescalados aqui pela razao
+ * entre o `TOWER_SCALE` novo e o antigo (1.7) — mesma logica de
+ * `CautionSign.ts` — para continuarem na MESMA proporcao visual quando
+ * `TOWER_HEIGHT_M` mudar.
+ */
+const LEGACY_TOWER_SCALE = 1.7;
+const TOWER_RESCALE = TOWER_SCALE / LEGACY_TOWER_SCALE;
+const HEALTH_BAR_HEIGHT = 0.34 * TOWER_RESCALE;
+const HEALTH_BAR_GAP_ABOVE_TOWER = 0.6 * TOWER_RESCALE;
 
 export interface TowerActorOptions {
   attackCooldownMs: number;
   attackDamage: number;
   /**
-   * Alcance ja resolvido, em unidades autorais. Antes a torre recebia so um
-   * multiplicador do proprio diametro e derivava o alcance sozinha; com a arena
-   * de mesa quem decide o alcance e o CombatEngine, que enxerga o campo inteiro.
+   * Alcance ja resolvido, em metros. Antes a torre recebia so um
+   * multiplicador do proprio diametro e derivava o alcance sozinha; quem
+   * decide o alcance e o CombatEngine, que enxerga o campo inteiro.
    */
   attackRange: number;
   diameter: number;
@@ -65,12 +78,13 @@ export class TowerActor {
       borderColorHex: this.team === "enemy" ? "#f87171" : "#7dd3fc",
       emissiveIntensity: 0.35,
       fillColorHex: this.team === "enemy" ? "#ef4444" : "#38bdf8",
-      height: 0.34,
+      height: HEALTH_BAR_HEIGHT,
       id: this.id,
       parent: this.mesh,
       scene: options.scene,
-      // 1.15x o diametro da torre (era 1.35x): a arena encolheu ~1.5x e a barra
-      // antiga passava a ocupar 13% da largura do campo.
+      // 1.15x o diametro REAL da torre (`this.diameter` agora vem de
+      // `CAP_DIAMETER_XZ`, ver `ArenaSystem.ts`) — proporcao preservada da
+      // Etapa 1.
       width: this.diameter * 1.15,
       yOffset: this.resolveHealthBarOffsetY(),
     });
@@ -160,6 +174,6 @@ export class TowerActor {
 
   private resolveHealthBarOffsetY(): number {
     const localTop = this.mesh.getBoundingInfo().boundingBox.maximum.y;
-    return localTop + 0.6;
+    return localTop + HEALTH_BAR_GAP_ABOVE_TOWER;
   }
 }

@@ -8,6 +8,7 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
 
+import { RABBIT_HEIGHT_M } from "../arena/metrics";
 import { applyMatteFinish, createMatteMaterial, PALETTE, shadeHex } from "../fx/materials";
 
 /**
@@ -19,13 +20,15 @@ import { applyMatteFinish, createMatteMaterial, PALETTE, shadeHex } from "../fx/
  * acesa e a placa "CUIDADO" vinham fazendo — e o instante em que a batalha
  * comeca.
  *
- * ## Duas regras que a escala de RA impoe
+ * ## Duas regras herdadas da Etapa 1 (ainda validas, motivo mudou)
  *
- * 1. **Nada em deslocamento absoluto.** O `arenaRoot` inteiro roda escalado em
- *    ~0,033 no modo RA. Todo keyframe daqui esta em unidades autorais, no
- *    espaco LOCAL da boca da caverna — que ja e filha da torre, que e filha do
- *    `arenaRoot`. Assim o salto tem a mesma leitura na mesa de 80 cm e no modo
- *    tela, sem nenhuma conta de conversao.
+ * 1. **Nada em deslocamento absoluto fora das constantes deste arquivo.**
+ *    `arenaRoot.scaling` e 1 nos dois modos desde a Etapa 2
+ *    (`src/arena/metrics.ts`), mas o salto continua todo em keyframes
+ *    RELATIVOS, no espaco LOCAL da boca da caverna — que ja e filha da torre,
+ *    que e filha do `arenaRoot`. Isso mantem a mesma leitura em RA e no modo
+ *    tela, e sobrevive a qualquer mudanca futura de escala sem precisar tocar
+ *    nesta animacao.
  * 2. **O lado do salto vem da torre**, via `facingSignZ`, e nao de um `-1`
  *    cravado aqui. A caverna da torre inimiga aponta para -Z (o lado do
  *    jogador), mas quem sabe disso e o `MushroomTower`.
@@ -45,44 +48,59 @@ import { applyMatteFinish, createMatteMaterial, PALETTE, shadeHex } from "../fx/
 
 const FPS = 60;
 
+/**
+ * Fator unico que multiplica TODAS as medidas lineares do coelho, no mesmo
+ * espirito do `TOWER_SCALE` de `MushroomTower.ts`. `AUTHORED_RABBIT_HEIGHT` e
+ * a extensao em Y da geometria abaixo COM fator 1: do fundo do torso
+ * (esfera de diametro `BODY_DIAMETER_Y` = 1.0, centrada em y=0 -> fundo em
+ * -0.5) ate o topo da orelha (centro em
+ * `BODY_DIAMETER_Y/2 + EAR_HEIGHT/2 - 0.12` = 0.955, altura `EAR_HEIGHT` = 1.15
+ * -> topo em 1.53). `1.53 - (-0.5)` = 2.03. Dividindo `RABBIT_HEIGHT_M`
+ * (0,70 m) por isso, o coelho passa a medir exatamente 0,70 m de orelha a pe.
+ */
+const AUTHORED_RABBIT_HEIGHT = 2.03;
+const RABBIT_SCALE = RABBIT_HEIGHT_M / AUTHORED_RABBIT_HEIGHT;
+
 // Corpo em forma de ovo, mais fundo que largo: le como coelho agachado, nao
-// como bola. Cabe pela boca da caverna (abertura de ~1,44 de largura).
-const BODY_DIAMETER_X = 1.15;
-const BODY_DIAMETER_Y = 1.0;
-const BODY_DIAMETER_Z = 1.3;
+// como bola. Cabe pela boca da caverna (abertura de ~1,44 de largura autoral).
+const BODY_DIAMETER_X = 1.15 * RABBIT_SCALE;
+const BODY_DIAMETER_Y = 1.0 * RABBIT_SCALE;
+const BODY_DIAMETER_Z = 1.3 * RABBIT_SCALE;
 
 // Orelhas compridas e finas, abertas em V. Sao a silhueta que identifica o
 // bicho a distancia — mais do que qualquer detalhe de rosto.
-const EAR_HEIGHT = 1.15;
-const EAR_WIDTH = 0.24;
-const EAR_DEPTH = 0.12;
-const EAR_OFFSET_X = 0.26;
+const EAR_HEIGHT = 1.15 * RABBIT_SCALE;
+const EAR_WIDTH = 0.24 * RABBIT_SCALE;
+const EAR_DEPTH = 0.12 * RABBIT_SCALE;
+const EAR_OFFSET_X = 0.26 * RABBIT_SCALE;
+/** Radianos — angulo, nao encolhe/cresce com a escala do bicho. */
 const EAR_TILT = 0.28;
 
 // Olhos DESPROPORCIONAIS de proposito: o pedido foi "olhos bem grandes", e a
 // desproporcao e o que faz o bicho ler como maluco em vez de fofo. Quase
 // metade da largura do corpo, cada um.
-const EYE_DIAMETER = 0.46;
-const EYE_OFFSET_X = 0.27;
-const EYE_OFFSET_Y = 0.16;
-const PUPIL_DIAMETER = 0.2;
+const EYE_DIAMETER = 0.46 * RABBIT_SCALE;
+const EYE_OFFSET_X = 0.27 * RABBIT_SCALE;
+const EYE_OFFSET_Y = 0.16 * RABBIT_SCALE;
+const PUPIL_DIAMETER = 0.2 * RABBIT_SCALE;
 
 // Cartola do Chapeleiro Maluco. A aba e mais larga que a distancia entre as
 // orelhas de proposito: elas atravessam a aba, e um chapeu enfiado na marra
 // por cima de orelhas que nao cabem le mais "maluco" do que qualquer detalhe
 // de modelagem que se pusesse nele.
-const HAT_BRIM_DIAMETER = 1.05;
-const HAT_BRIM_HEIGHT = 0.07;
-const HAT_CROWN_DIAMETER = 0.64;
-const HAT_CROWN_HEIGHT = 0.66;
-const HAT_BAND_DIAMETER = 0.69;
-const HAT_BAND_HEIGHT = 0.16;
-// Torto. Cartola no esquadro vira cartola de mordomo.
+const HAT_BRIM_DIAMETER = 1.05 * RABBIT_SCALE;
+const HAT_BRIM_HEIGHT = 0.07 * RABBIT_SCALE;
+const HAT_CROWN_DIAMETER = 0.64 * RABBIT_SCALE;
+const HAT_CROWN_HEIGHT = 0.66 * RABBIT_SCALE;
+const HAT_BAND_DIAMETER = 0.69 * RABBIT_SCALE;
+const HAT_BAND_HEIGHT = 0.16 * RABBIT_SCALE;
+// Torto. Cartola no esquadro vira cartola de mordomo. Radianos — angulo.
 const HAT_TILT = 0.19;
-// O "10/6" que o Chapeleiro carrega na fita NAO entra: o coelho tem ~1,15
-// unidades autorais, o que em RA da ~3,8 cm, e a fita fica com ~5 mm. Texto
-// ali seria borrao — o mesmo calculo em pixels de tela que dimensionou a placa
-// "CUIDADO" (ver `CautionSign.ts`) reprova essa etiqueta.
+// O "10/6" que o Chapeleiro carrega na fita continua NAO entrando: mesmo com
+// o coelho agora medindo `RABBIT_HEIGHT_M` (0,70 m) de verdade, a fita
+// (`HAT_BAND_HEIGHT` * `RABBIT_SCALE`, uns 5,5 cm) e uma decisao de conteudo
+// separada da conversao de escala desta etapa — nao entra so por a etiqueta
+// caber fisicamente agora.
 
 /**
  * Onde o coelho pousa — e FICA —, no espaco local da boca da caverna.
@@ -92,23 +110,25 @@ const HAT_TILT = 0.19;
  * um que continua ali durante a partida inteira e um habitante, que e o que a
  * demo esta tentando fazer a pessoa acreditar.
  *
- * `LANDING_X` tira ele do CAMINHO: a faixa de invocacao vai de x = -2 a x = 2
- * em espaco de arena, e o coelho parado no meio dela ficaria sendo atravessado
- * pelas criaturas a partida toda. Em -2,6 ele fica fora da faixa e, somado ao
- * Z, a 3,28 do eixo da torre — livre da aba do chapeu, que tem raio 2,04.
+ * `LANDING_X` tira ele do CAMINHO: a faixa de invocacao vai de x = -tileSize a
+ * x = +tileSize em espaco de arena (`ArenaSystem.laneHalfWidth`, hoje 0,55 m),
+ * e o coelho parado no meio dela ficaria sendo atravessado pelas criaturas a
+ * partida toda. `LANDING_X` (~-0,90 m) fica fora da faixa e, somado ao Z
+ * (~0,69 m), a ~1,13 m do eixo da torre — livre da aba do chapeu, que tem
+ * raio `CAP_DIAMETER_XZ / 2` (~0,53 m).
  *
- * A placa "CUIDADO" fica em x = +1,5 (ver `CautionSign.ts`): coelho de um
+ * A placa "CUIDADO" fica do lado +X (ver `CautionSign.ts`): coelho de um
  * lado, placa do outro, a caverna acesa no meio.
  *
- * `LANDING_Y` desce da boca (a ~1,6 acima da base da torre) ate o chao, menos
- * a meia-altura do corpo, deixando ele apoiado.
+ * `LANDING_Y` desce da boca (perto da metade da altura da torre) ate o chao,
+ * menos a meia-altura do corpo, deixando ele apoiado.
  */
-const LANDING_X = -2.6;
-const LANDING_Y = -1.1;
-const LANDING_Z = 2.0;
-const APEX_X = -1.3;
-const APEX_Y = 1.5;
-const APEX_Z = 1.2;
+const LANDING_X = -2.6 * RABBIT_SCALE;
+const LANDING_Y = -1.1 * RABBIT_SCALE;
+const LANDING_Z = 2.0 * RABBIT_SCALE;
+const APEX_X = -1.3 * RABBIT_SCALE;
+const APEX_Y = 1.5 * RABBIT_SCALE;
+const APEX_Z = 1.2 * RABBIT_SCALE;
 
 // Respiracao continua depois do pouso. Roda num no PROPRIO, filho do root: o
 // salto anima `root.scaling` e a respiracao anima o filho, entao as duas nunca
@@ -240,12 +260,12 @@ class CrazyRabbitImpl implements CrazyRabbit {
     );
     position.setKeys([
       { frame: 0, value: new Vector3(0, 0, 0) },
-      { frame: at(0.08), value: new Vector3(0, 0.15, z(0.6)) },
+      { frame: at(0.08), value: new Vector3(0, 0.15 * RABBIT_SCALE, z(0.6 * RABBIT_SCALE)) },
       { frame: at(0.22), value: new Vector3(APEX_X, APEX_Y, z(APEX_Z)) },
       { frame: at(0.36), value: new Vector3(LANDING_X, LANDING_Y, z(LANDING_Z)) },
       // Repique curto: coelho que para seco parece objeto, coelho que quica
       // uma vez parece bicho.
-      { frame: at(0.44), value: new Vector3(LANDING_X, LANDING_Y + 0.28, z(LANDING_Z)) },
+      { frame: at(0.44), value: new Vector3(LANDING_X, LANDING_Y + 0.28 * RABBIT_SCALE, z(LANDING_Z)) },
       // Ultimo keyframe E o lugar onde ele fica. Nao ha volta para a caverna.
       { frame: at(0.54), value: new Vector3(LANDING_X, LANDING_Y, z(LANDING_Z)) },
       { frame: totalFrames, value: new Vector3(LANDING_X, LANDING_Y, z(LANDING_Z)) },
@@ -388,7 +408,7 @@ function createBody(scene: Scene): Mesh {
       { width: EAR_WIDTH, height: EAR_HEIGHT, depth: EAR_DEPTH },
       scene
     );
-    ear.position.set(side * EAR_OFFSET_X, BODY_DIAMETER_Y / 2 + EAR_HEIGHT / 2 - 0.12, 0);
+    ear.position.set(side * EAR_OFFSET_X, BODY_DIAMETER_Y / 2 + EAR_HEIGHT / 2 - 0.12 * RABBIT_SCALE, 0);
     ear.rotation.z = -side * EAR_TILT;
     return ear;
   });
@@ -412,7 +432,7 @@ function createBody(scene: Scene): Mesh {
  */
 function createHat(scene: Scene): Mesh {
   const material = createMatteMaterial(scene, PALETTE.accentTatu, "rabbit-hat-material");
-  const baseY = BODY_DIAMETER_Y / 2 - 0.05;
+  const baseY = BODY_DIAMETER_Y / 2 - 0.05 * RABBIT_SCALE;
 
   const brim = MeshBuilder.CreateCylinder(
     "rabbit-hat-brim-temp",
@@ -454,7 +474,7 @@ function createHatBand(scene: Scene): Mesh {
   band.material = material;
   // Na base da copa, logo acima da aba — e com a MESMA inclinacao do chapeu,
   // senao a fita descola dele.
-  band.position.y = BODY_DIAMETER_Y / 2 - 0.05 + HAT_BRIM_HEIGHT / 2 + HAT_BAND_HEIGHT / 2;
+  band.position.y = BODY_DIAMETER_Y / 2 - 0.05 * RABBIT_SCALE + HAT_BRIM_HEIGHT / 2 + HAT_BAND_HEIGHT / 2;
 
   return band;
 }
@@ -465,7 +485,7 @@ function createEyes(scene: Scene, facingSignZ: number): Mesh {
   return mergePair(scene, "rabbit-eyes", material, EYE_DIAMETER, {
     offsetX: EYE_OFFSET_X,
     offsetY: EYE_OFFSET_Y,
-    offsetZ: facingSignZ * (BODY_DIAMETER_Z / 2 - 0.1),
+    offsetZ: facingSignZ * (BODY_DIAMETER_Z / 2 - 0.1 * RABBIT_SCALE),
   });
 }
 
@@ -490,7 +510,7 @@ function createPupils(scene: Scene, facingSignZ: number): Mesh {
     offsetY: EYE_OFFSET_Y,
     // Mais protuberante que o olho, pelo mesmo motivo das pupilas do Tatu
     // Bola: duas esferas no mesmo plano brigam por z-fighting.
-    offsetZ: facingSignZ * (BODY_DIAMETER_Z / 2 + 0.06),
+    offsetZ: facingSignZ * (BODY_DIAMETER_Z / 2 + 0.06 * RABBIT_SCALE),
   });
 }
 

@@ -10,6 +10,7 @@ import type { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 
 import type { TeamId, TowerLaneId } from "../battle/BattleTypes";
+import { TOWER_HEIGHT_M } from "../arena/metrics";
 import { applyMatteFinish, createMatteMaterial, PALETTE } from "../fx/materials";
 
 /**
@@ -45,45 +46,55 @@ import { applyMatteFinish, createMatteMaterial, PALETTE } from "../fx/materials"
 /**
  * Fator unico que multiplica TODAS as medidas lineares do cogumelo.
  *
- * Existe por dois motivos. O primeiro e a evidencia: no teste de device de
- * 2026-08-14 o usuario relatou "a torre esta muito pequena". O cogumelo tinha
- * 2,7 unidades de altura contra ~1,8 de uma criatura — razao de 1,5:1, e na
- * tela as criaturas dominavam a torre. Com 1.7 a torre vai a ~4,6 unidades
- * (15,3 cm reais na arena de 80 cm), razao ~2,5:1, e volta a ler como marco
- * do campo.
+ * Ate a Etapa 1 este numero (1.7) era escolhido a olho contra outra unidade
+ * autoral, e a torre inteira ficava escalada mais uma vez pelo fator unico do
+ * `ArenaSystem` (extinto nesta etapa, ~0,0333) para virar tamanho fisico. A v3
+ * tem 1 unidade =
+ * 1 metro (`src/arena/metrics.ts`) em vez disso, entao o fator agora e
+ * DERIVADO do alvo real da torre: `TOWER_HEIGHT_M` (1,20 m) dividido pela
+ * altura que a geometria abaixo produz num fator de 1 (`AUTHORED_TOWER_HEIGHT`
+ * = `STEM_HEIGHT` + o degrau do centro do chapeu + a metade do chapeu, todos
+ * SEM o fator, isto e, `1.9 + 0.05 + 1.5/2` = 2,7 — o mesmo "2,7 unidades de
+ * altura" medido em device em 2026-08-14, ver historico deste comentario).
+ * Trocar `TOWER_HEIGHT_M` em `metrics.ts` reescala a torre inteira; nenhum
+ * numero aqui embaixo precisa mudar.
  *
- * O segundo motivo e de seguranca. As protuberancias da caverna e dos olhos
- * sao calculadas contra o RAIO DO CAULE naquela altura: mexer numa medida sem
- * mexer nas outras enterra a caverna dentro do caule opaco e ela simplesmente
- * desaparece (erro que ja aconteceu uma vez na construcao deste arquivo).
- * Escalando tudo pelo mesmo fator, essas relacoes ficam preservadas por
- * construcao — nao ha o que recalcular.
+ * O segundo motivo do fator unico e de seguranca. As protuberancias da caverna
+ * e dos olhos sao calculadas contra o RAIO DO CAULE naquela altura: mexer numa
+ * medida sem mexer nas outras enterra a caverna dentro do caule opaco e ela
+ * simplesmente desaparece (erro que ja aconteceu uma vez na construcao deste
+ * arquivo). Escalando tudo pelo mesmo fator, essas relacoes ficam preservadas
+ * por construcao — nao ha o que recalcular.
  *
- * Limite superior: o cogumelo nao pode passar da borda da arena. O chapeu tem
- * raio `CAP_DIAMETER_XZ / 2` e a torre fica em z = +-10, com a borda em
- * z = +-12; em 1.7 o chapeu vai ate 12,04 — praticamente rente. Subir mais
- * exige aproximar as torres do centro.
- *
- * Limite inferior de folga: as criaturas corpo-a-corpo param a 1,5 (Javali) e
- * 1,6 (Tatu) do CENTRO da torre. O raio do caule na base e
- * `STEM_DIAMETER_BOTTOM / 2` = 1,105 em 1.7 — elas ainda param fora do caule,
- * so que debaixo da aba do chapeu, que e onde devem ficar mesmo.
+ * Limite superior: o cogumelo nao pode passar da borda da arena (provisoria,
+ * Etapa 3 troca por arco polar). O chapeu tem raio `CAP_DIAMETER_XZ / 2` e a
+ * torre fica em z = ±2,0 m — com `TOWER_HEIGHT_M` = 1,20 m o chapeu vai ate
+ * z ≈ 2,53 m, alem da borda provisoria de ±2,2 m. E esperado nesta etapa (a
+ * arena retangular e descartavel); o arco da Etapa 3 resolve isso de verdade.
  */
-const TOWER_SCALE = 1.7;
+const AUTHORED_TOWER_HEIGHT = 1.9 + 0.05 + 1.5 / 2; // 2.7 — ver docblock acima.
+/**
+ * Exportado: `TowerActor` (barra de vida) e `CautionSign` (placa encostada na
+ * torre) precisam de paddings proporcionais ao tamanho REAL da torre, e devem
+ * derivar do mesmo fator em vez de repetir a conta.
+ */
+export const TOWER_SCALE = TOWER_HEIGHT_M / AUTHORED_TOWER_HEIGHT;
 
 // Caule: leve afunilamento pro topo (mais grosso na base), tessellation baixa
 // porque e uma forma simples vista de longe numa mesa — nao precisa dos 24
 // lados do cilindro antigo.
 const STEM_HEIGHT = 1.9 * TOWER_SCALE;
 const STEM_DIAMETER_TOP = 0.95 * TOWER_SCALE;
-const STEM_DIAMETER_BOTTOM = 1.3 * TOWER_SCALE;
+/** Exportado: `CautionSign` usa o raio da base para nao cravar a placa dentro do caule. */
+export const STEM_DIAMETER_BOTTOM = 1.3 * TOWER_SCALE;
 const STEM_TESSELLATION = 14;
 
 // Chapeu: metade de cima de uma esfera achatada (`slice` corta a esfera pela
 // altura, mantendo o polo de cima — ver CreateSphereVertexData). `slice` >
 // 0.5 deixa a aba descer um pouco alem do equador, que e a curva caracteristica
 // de um chapeu de cogumelo (nao um hemisferio perfeito).
-const CAP_DIAMETER_XZ = 2.4 * TOWER_SCALE;
+/** Diametro real do chapeu, em metros. Exportado: `ArenaSystem` deriva o blob de contato e o diametro nominal da torre dele; `CautionSign` deriva o raio a evitar. */
+export const CAP_DIAMETER_XZ = 2.4 * TOWER_SCALE;
 const CAP_DIAMETER_Y = 1.5 * TOWER_SCALE;
 const CAP_SLICE = 0.6;
 const CAP_SEGMENTS = 12;
@@ -206,7 +217,7 @@ const ENEMY_DEFAULT_GLOW = 0.55;
 export interface CreateMushroomTowerOptions {
   lane: TowerLaneId;
   team: TeamId;
-  /** Posicao no chao (y=0) em unidades autorais, local ao `arenaRoot`. */
+  /** Posicao no chao (y=0), em metros, local ao `arenaRoot`. */
   x: number;
   z: number;
 }

@@ -7,10 +7,27 @@ import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 
 import type { TeamId } from "../battle/BattleTypes";
+import { TROOP_HEIGHT_M } from "../arena/metrics";
 import type { TowerActor } from "../towers/TowerActor";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
 import { createContactShadow } from "../fx/contactShadow";
 import { IdleBehavior, type IdleBehaviorBounds } from "./idle/IdleBehavior";
+
+/**
+ * Fator de escala para os elementos de UI/ancoragem deste arquivo (anel de
+ * selecao, blob de contato, barra de vida) que NAO pertencem a uma criatura
+ * especifica — `BaseUnit` e compartilhado pelas quatro (`CururuBombado`,
+ * `DonaBarata`, `JavaliRaivoso`, `TatuBola`), cada uma com seu proprio fator
+ * de normalizacao para a PROPRIA geometria (ver o topo de cada arquivo).
+ *
+ * Como esses paddings nao tem um dono unico, usam `TROOP_HEIGHT_M` dividido
+ * por uma altura autoral DE REFERENCIA: a media arredondada da altura autoral
+ * das quatro criaturas medida na Etapa 2 (Cururu 2,86 / Barata 1,23 / Javali
+ * 1,47 / Tatu 1,61 ~= 1,8). Nao e exato para nenhuma criatura, mas mantem
+ * esses detalhes genericos na mesma ORDEM DE GRANDEZA relativa a uma tropa,
+ * sem inventar uma quinta constante de escala.
+ */
+const GENERIC_TROOP_UI_SCALE = TROOP_HEIGHT_M / 1.8;
 
 export interface BaseUnitOptions {
   attackIntervalMs: number;
@@ -94,8 +111,8 @@ export abstract class BaseUnit {
     const selectionRing = MeshBuilder.CreateTorus(
       `${this.id}-selection-ring`,
       {
-        diameter: 1.8,
-        thickness: 0.06,
+        diameter: 1.8 * GENERIC_TROOP_UI_SCALE,
+        thickness: 0.06 * GENERIC_TROOP_UI_SCALE,
       },
       this.scene
     );
@@ -107,7 +124,7 @@ export abstract class BaseUnit {
 
     selectionRing.material = ringMaterial;
     selectionRing.parent = this.root;
-    selectionRing.position.y = 0.08;
+    selectionRing.position.y = 0.08 * GENERIC_TROOP_UI_SCALE;
     selectionRing.rotation.x = Math.PI / 2;
     selectionRing.isPickable = false;
 
@@ -120,7 +137,10 @@ export abstract class BaseUnit {
   private createContactShadow(): void {
     const { min, max } = this.root.getHierarchyBoundingVectors(true);
     const span = Math.max(max.x - min.x, max.z - min.z);
-    const diameter = Scalar.Clamp(span * 1.2, 1, 3);
+    // `span` ja vem em metros (bounding box da geometria ja escalada por
+    // cada criatura); so o PISO/TETO do clamp (antes 1..3 em unidades
+    // autorais) precisa do fator generico deste arquivo.
+    const diameter = Scalar.Clamp(span * 1.2, 1 * GENERIC_TROOP_UI_SCALE, 3 * GENERIC_TROOP_UI_SCALE);
 
     const blob = createContactShadow(this.scene, {
       diameter,
@@ -128,7 +148,7 @@ export abstract class BaseUnit {
       name: `${this.id}-shadow`,
     });
     blob.parent = this.root;
-    blob.position.y = 0.02;
+    blob.position.y = 0.02 * GENERIC_TROOP_UI_SCALE;
   }
 
   protected abstract createVisual(): void;
@@ -327,15 +347,15 @@ export abstract class BaseUnit {
       borderColorHex: "#f5d0fe",
       emissiveIntensity: 0.85,
       fillColorHex: "#ff00ff",
-      height: 0.22,
+      height: 0.22 * GENERIC_TROOP_UI_SCALE,
       id: this.id,
       parent: this.root,
       scene: this.scene,
-      // Faixa reduzida de 1.35..2.1 para 1.1..1.7: a arena encolheu ~1.5x nos
-      // dois eixos e as criaturas nao, entao a barra antiga passava a valer 13%
-      // da largura do campo.
-      width: Scalar.Clamp(widestSpan * 0.8, 1.1, 1.7),
-      yOffset: unitHeight + 0.45,
+      // `widestSpan` ja vem em metros (bounding box real da criatura); so o
+      // PISO/TETO do clamp (antes 1.1..1.7 em unidades autorais) usa o fator
+      // generico deste arquivo.
+      width: Scalar.Clamp(widestSpan * 0.8, 1.1 * GENERIC_TROOP_UI_SCALE, 1.7 * GENERIC_TROOP_UI_SCALE),
+      yOffset: unitHeight + 0.45 * GENERIC_TROOP_UI_SCALE,
     });
   }
 

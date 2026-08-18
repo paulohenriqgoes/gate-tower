@@ -8,17 +8,19 @@
  * E logica pura, sem Babylon: a distancia e o instante atual entram por
  * parametro, no mesmo espirito do `MatchClock` (`src/battle/MatchClock.ts`)
  * — sem `Date.now()` interno, pra ficar deterministico em teste e agnostico
- * de RA vs. modo tela. A distancia e em UNIDADES AUTORAIS, o mesmo sistema
- * de `AR_ARENA_SCALE` (`src/arena/ArenaSystem.ts`, 1 unidade ~= 3,33 cm em
- * RA): assim o mesmo numero de config vale nos dois modos de renderizacao.
+ * de RA vs. modo tela. A distancia e em METROS (Etapa 2: 1 unidade do Babylon
+ * = 1 metro, `src/arena/metrics.ts`, nos dois modos de renderizacao) — os
+ * campos abaixo ainda se chamam `*Units` por nao termos investido numa
+ * renomeacao neste arquivo (candidato a remocao numa etapa futura, ver
+ * AGENTS.md), mas o valor que carregam e metros direto.
  */
 
 export type WakeStage = "asleep" | "peeking" | "leaping";
 
 export interface ProximityTriggerConfig {
-  /** Distancia (unidades autorais) abaixo da qual a caverna comeca a espiar. */
+  /** Distancia (metros) abaixo da qual a caverna comeca a espiar. */
   peekDistanceUnits: number;
-  /** Distancia (unidades autorais) abaixo da qual o dwell do salto passa a contar. */
+  /** Distancia (metros) abaixo da qual o dwell do salto passa a contar. */
   leapDistanceUnits: number;
   /**
    * Margem de histerese aplicada nas DUAS fronteiras (peek e leap): a
@@ -49,18 +51,21 @@ export interface ProximityTriggerConfig {
  *   provavelmente nao fecharia.
  *
  * Dai os valores atuais: espiar comeca a **1,0 m** (a pessoa se inclinando
- * sobre a mesa) e o salto dispara a **0,30 cm**, faixa onde a sessao mostra
+ * sobre a mesa) e o salto dispara a **0,45 m**, faixa onde a sessao mostra
  * 3,5 s de permanencia — folga de sobra para o dwell.
  *
- * A conversao e `AR_ARENA_SCALE` (1 unidade autoral = 3,33 cm em RA).
+ * Etapa 2: os campos abaixo passaram a guardar METROS direto (antes eram
+ * "unidades autorais" convertidas por um fator global que a Etapa 2 aboliu —
+ * ver `src/arena/metrics.ts`). Os numeros sao os MESMOS valores reais de
+ * sempre (1,0 m / 0,45 m / 0,05 m), so escritos sem a conversao intermediaria.
  */
 const DEFAULT_CONFIG: ProximityTriggerConfig = {
-  /** 30 unidades = ~1,00 m. */
-  peekDistanceUnits: 30,
+  /** 1,00 m. */
+  peekDistanceUnits: 1.0,
   /**
-   * 13,5 unidades = ~0,45 m.
+   * 0,45 m.
    *
-   * Era 9 (0,30 m). O device de 2026-08-14 disparou certinho a 0,290 m — o
+   * Era 0,30 m. O device de 2026-08-14 disparou certinho a 0,290 m — o
    * gatilho funcionou — mas o relato foi "tive que chegar muito perto para
    * liberar". 30 cm de um cogumelo de 15 cm exige quase encostar o celular
    * nele, o que e desconfortavel de segurar e arrisca esbarrar na mesa.
@@ -70,8 +75,8 @@ const DEFAULT_CONFIG: ProximityTriggerConfig = {
    * entao o Beat 4 continua confortavelmente acima dos 5 s que a spec usa
    * como piso de "o mundo nao convenceu".
    */
-  leapDistanceUnits: 13.5,
-  hysteresisUnits: 1.5,
+  leapDistanceUnits: 0.45,
+  hysteresisUnits: 0.05,
   leapDwellMs: 800
 };
 
