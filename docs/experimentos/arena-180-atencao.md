@@ -34,6 +34,95 @@ Tres tensoes que puxam em direcoes opostas:
 
 ## Linha do tempo
 
+### (sem commit) — o chao nunca precisou ser medido (2026-08-19)
+
+**Feito:** um spike descartavel em `spike/origin-recenter/` (fora de `src/`, nao
+importado por nada), a extracao da superficie de API real do engine em
+`.claude/skills/babylonjs-game-dev/references/8thwall-api-surface.md` (854
+linhas, com procedencia por simbolo), e a [spec 08](../specs/08-fundacao-ar.md),
+que substitui a spec 07.
+
+**Provou:** o projeto estava resolvendo um problema que o 8th Wall nao tem. O
+exemplo oficial de world tracking do repo `8thwall/8thwall`
+(`threejs-world-effects-example`) tem 60 linhas, **nao chama `hitTest` nenhuma
+vez**, poe conteudo em `y = 0` e declara `camera.position.set(0, 2, 2)` com o
+comentario "This must be at a height greater than y=0". O chao e autorado, nao
+medido: `XR8.XrController.updateCameraProjectionMatrix({ origin, facing })`
+declara onde a camera comeca, e se `origin.y` for a altura do jogador o piso cai
+em `y = 0` no frame zero. No Niantic Studio o evento de toque ja entrega
+`e.data.worldPosition` pronto.
+
+Isso reclassifica o bloqueador da medicao de piso: nao era "o `hitTest` nao mede
+piso", era o projeto fazendo uma pergunta que o engine nao espera. `placementGate.ts`,
+`floorEstimate.ts` e `hitTestSampling.ts` existem para nada.
+
+A segunda inversao e maior: em todo codigo oficial **o conteudo nunca se move**.
+Ele fica em coordenadas autorais fixas e quem se move e a origem da camera, via
+`recenter()`. O projeto faz o oposto, arrastando `arenaRoot.position`.
+
+Tres bugs sairam do spike, e a producao tem os tres hoje:
+
+1. **`window.BABYLON` precisa existir antes do `xr.js` executar.** No bundle,
+   `XR8.Babylonjs` sai de `mQ()`, chamada na construcao do namespace, e ela so
+   cria os temporarios internos `if (window.BABYLON)`. O projeto instala o shim
+   dentro de `enterAR()`, muito depois do script `async`. Os temporarios ficam
+   `undefined` para sempre.
+2. **O ramo destro do modulo Babylon esta quebrado neste build.** O conversor de
+   quaternion usa esses temporarios so no caminho destro. Antes do conserto de
+   ordem ele lancava `TypeError: Cannot read properties of undefined (reading
+   'copyFrom')`; depois do conserto ele para de lancar e passa a produzir
+   quaternion **NaN** — pose morta, tela preta sobre o feed. A producao so nao
+   viu porque e canhota. **Ligar `useRightHandedSystem` quebra a RA inteira.**
+3. **O azimute 0 esta 180 graus invertido**, nao espelhado. Ver a revogacao
+   abaixo.
+
+E `recenter()` foi caracterizado: reseta **so o yaw** (`yaw -> 0,0` exato com
+pitch 48,5 e roll -1,8 preservados, arena continua nivelada — a vertical vem do
+IMU e sobrevive ao gesto), mas **descarta o mapa do SLAM** (cai para `LIMITED`,
+o coaching overlay volta, mais de 30 s para reconvergir). Ou seja: qualquer
+varredura de calibracao tem de vir **depois** do gesto de colocacao, nunca
+antes; e o gesto e caro demais para ser oferecido como correcao instantanea no
+meio da acao.
+
+**Nao resolveu:** a tentativa de **estimar deriva em partida**. A ideia era
+acumular a soma vetorial dos saltos de relocalizacao — deslocamento por frame
+acima do que a mao consegue produzir — e disparar o gesto acima de um limiar.
+Primeira versao usava limiar por frame (5 cm) e contou movimento real como salto,
+porque 5 cm/frame so vale 3 m/s a 60 fps e o loop nao roda a 60 fps. Corrigido
+para velocidade real com `dt` e exigindo pico isolado, ainda assim as seis
+medicoes pareadas deram media estimada de 0,155 m contra 0,082 m real, com
+correlacao **levemente negativa**. **A abordagem foi abandonada por decisao (D2
+da spec 08): reposicionar vira botao, sem medicao.** Nao repita este ciclo sem
+sinal novo.
+
+Tambem nao se sustentou a leitura de que **declarar altura maior estabiliza a
+deriva**. As medianas de laco fechado foram 0,08 m com 1,55 m declarado e 0,07 m
+com 2,00 m — iguais. `declaredHeightM` so alimenta `origin.y`, que e offset de
+sistema de coordenadas e nunca entra em conta de tracking. O que separava as duas
+sessoes era **textura de ambiente**: a de 2,00 m foi feita numa bancada cheia de
+caixa e cabo, a de 1,55 m contra parede lisa.
+
+**Resultado em device (Android/Chrome, 2026-08-19):**
+
+| Medicao | Numero |
+| --- | --- |
+| Piso declarado assenta no chao | Sim; melhor calibracao com `delta 0.00` a 1,55 m |
+| Deriva de laco fechado, varredura de flanco (+-90 graus) | 0,04 · 0,05 · 0,07 · 0,08 · 0,10 · 0,15 m (mediana 0,075) |
+| Deriva de laco fechado, giro de 360 graus | 0,78 m |
+| Deriva apontando para carpete liso, pitch 74 graus | 0,78 m (a pior de todas) |
+| Amplitude de `camera.y` por janela | 0,36 a 1,68 m — segue a mao, nao serve de sensor isolado |
+
+O metodo importa: o **laco fechado** (marcar, girar, voltar FISICAMENTE ao mesmo
+ponto, ler o residuo) e o unico honesto. A metrica ingenua de distancia ate a
+marca mistura deriva com deslocamento real e com o circulo que o celular percorre
+quando a pessoa pivota — ela produziu leituras de 0,30 e 0,87 m que nao eram
+deriva.
+
+O numero de +-90 graus e o que importa, porque **o arco tem 180 graus**: cobrir a
+arena inteira e girar +-90 do centro, e giro de 360 esta fora do envelope de
+design. Isso virou a decisao D1 da spec 08, em forma geometrica e testavel: nada
+pode chamar a atencao do jogador para fora do arco.
+
 ### (sem commit) — o arco parava de pular, e o chao nunca esteve sendo medido (2026-08-19)
 
 Sessao inteira dedicada a uma queixa de device: *"posicionar o arco ja estava
@@ -240,12 +329,18 @@ primeiro playtest, e esta marcada como provisoria no proprio documento.
 | Escala de sala, torre 1,20 m (Etapa 2) | **Implementada**; nao avaliada em device por si so |
 | Ancoragem egocentrica (Etapa 3) | **Implementada e em device** — ancora, mas ver as duas linhas abaixo |
 | Arco do preview tremendo/inclinando | **RESOLVIDO**, confirmado em device 2026-08-19 |
-| Medicao do piso | **QUEBRADA**. `spreadM` mediano de 32 cm; 12 recusas seguidas por `bad-height` com o jogador de pe. Endereçada pela [spec 07](../specs/07-calibracao-manual-do-piso.md), nao iniciada |
-| Deslize girando no lugar | **MEDIDO, e ruim**: 1,09 m -> 2,9 m sob `NORMAL` num giro de 360 graus, chegando a 4,47 m em `LIMITED` |
+| Medicao do piso | **APOSENTADA**. O chao passa a ser declarado por `origin.y`, nao medido. `placementGate`, `floorEstimate` e `hitTestSampling` saem na F2 da [spec 08](../specs/08-fundacao-ar.md). A spec 07 esta obsoleta e nunca comecou |
+| Deriva girando no lugar | **MEDIDA com laco fechado (2026-08-19)**: mediana de **0,075 m** na varredura de flanco (+-90 graus, que e o envelope do jogo) e **0,78 m** no giro de 360, que o design nao exige. O numero antigo de 1,09 -> 2,9 m vinha de metrica que misturava deriva com deslocamento real |
+| Ordem de carregamento do `BABYLON` | **QUEBRADA em producao**. `window.BABYLON` tem de existir antes do `xr.js` executar; hoje o shim entra em `enterAR()`. Conserto na F2 |
+| `useRightHandedSystem` | **CAMINHO FECHADO**. O ramo destro deste build produz quaternion NaN. O projeto fica canhoto |
+| Azimute 0 | **INVERTIDO 180 graus**, nao espelhado. `atan2(x, -z)` deve virar `atan2(x, z)`. Conserto na F2 |
+| `recenter()` | **CARACTERIZADO**: reseta so o yaw, preserva a gravidade, e **descarta o mapa** do SLAM |
 | Ondas convergindo ao jogador (Etapa 4) | **Nao iniciada** |
 | Alertas de flanco e audio (Etapa 5) | **Nao iniciados**; o projeto continua **sem modulo de audio** |
 | Colocacao com anel, cartas, caldeirao, album (6-11) | **Nao iniciadas** |
-| Segunda sessao de RA sem recarregar | **Quebra** — herdado, nunca tocado |
+| Segunda sessao de RA sem recarregar | **Quebra** — herdado. A hipotese antiga (o projeto nunca chama `XR8.run()`/`stop()`) esta **errada**: o `xrCameraBehavior` chama os dois. Endereçada pela F5 da spec 08, com `XR8.reconfigureSession()` |
+| Superficie de API do engine | **DOCUMENTADA** em `.claude/skills/babylonjs-game-dev/references/8thwall-api-surface.md`, 854 linhas com procedencia por simbolo |
+| Skills de RA | **DESATUALIZADAS**. Ensinam fit de piso por `hitTest` e duas chamadas mortas. Reescrita na F7 da spec 08 |
 
 ## Hipoteses vivas
 
@@ -259,16 +354,23 @@ Em ordem de suspeita, com o teste que decide cada uma.
    propria spec §12 nomeia esse corte: "passos 1-4 provam a tese; se a mecanica
    de atencao nao for divertida ali, o resto nao salva".
 
-2. **RESPONDIDA EM 2026-08-19, e a resposta e ruim.** A hipotese era que ficar
-   parado perto da origem deixaria o VIO mais estavel. Medido: um giro de 360
-   graus com o jogador **parado** afastou a arena de 1,09 m para 2,9 m ainda sob
-   `trackingStatus: NORMAL`, e para 4,47 m depois de cair para `LIMITED`. O
-   criterio proposto era ~2 cm.
-   **O que continua aberto:** se a varredura de calibracao da Onda 4 (mapear os
-   flancos antes da partida) reduz isso a um numero jogavel, e se D7 — cair para
-   120 graus — vira necessidade em vez de valvula. **Nao existe hoje nenhuma
-   correcao para drift sob `NORMAL`**: a reancoragem so dispara em
-   `LIMITED -> NORMAL`.
+2. **RESPONDIDA, e a resposta melhorou muito com medicao honesta (2026-08-19).**
+   O registro anterior dizia 1,09 m -> 2,9 m sob `NORMAL`, e concluia que a tese
+   estava ameacada. Aquela metrica media distancia ate um ponto marcado, o que
+   mistura deriva com deslocamento real do jogador e com o circulo que o celular
+   percorre quando a pessoa pivota. Com **laco fechado** (voltar fisicamente ao
+   ponto), a deriva na varredura de flanco (+-90 graus) e de **0,075 m de
+   mediana**, e o pior caso — 0,78 m — aparece so no giro de 360 graus e
+   apontando para carpete liso.
+   Como o arco tem 180 graus, +-90 **e** o envelope do jogo. A tese nao esta
+   ameacada pela deriva; ela esta condicionada a **nao induzir giro para fora do
+   arco** (decisao D1) e a ambiente com textura.
+   **O que continua aberto:** se a deriva **acumula** ao longo de uma partida de
+   3 minutos. As tres medidas de uma sessao curta foram 0,05 -> 0,08 -> 0,15
+   (parece crescer) e as de outra foram 0,07 -> 0,10 -> 0,04 (nao cresce). Duas
+   amostras nao decidem.
+   **Teste:** entrar, marcar, fazer so varredura de flanco por 3 minutos, e medir
+   o laco fechado a cada minuto.
 
 3. **D6 (o Coelho trocando de setor) pode nao resolver nada.** Foi escolhida para
    evitar dois defeitos conhecidos, sem evidencia de que a terceira opcao nao tem
@@ -287,40 +389,66 @@ Em ordem de suspeita, com o teste que decide cada uma.
    **Teste:** instrumentar a taxa de coleta contra a taxa de dano tomado no
    mesmo intervalo.
 
-6. **A segunda sessao de RA falha porque o engine nunca para.** Hipotese herdada
-   do diario encerrado, com o diagnostico completo la: o projeto nunca chama
-   `XR8.run()`/`XR8.stop()`, e o ciclo de vida inteiro esta delegado ao
-   `xrCameraBehavior`.
-   **Teste:** `?debug=1`, entrar na RA, sair, entrar de novo e olhar o
-   `trackingStatus`. Se na primeira sessao ele progride e na segunda fica
-   `null`, esta confirmada. Enderecada pela Etapa 11 do plano.
+6. **REFUTADA NA PREMISSA (2026-08-19).** A hipotese dizia que a segunda sessao
+   falha porque "o projeto nunca chama `XR8.run()`/`XR8.stop()`". Lido no bundle:
+   o `xrCameraBehavior` chama **os dois** — o `attach` termina em
+   `XR8.run({ canvas, ownRunLoop: false, ... })` e o `detach` faz `XR8.stop()` +
+   `XR8.clearCameraPipelineModules()`. Quem seguir aquela pista procura no lugar
+   errado.
+   **Suspeito novo:** o `clearCameraPipelineModules()` no detach, que limpa
+   tambem os modulos do app. **Teste:** trocar o ciclo por
+   `XR8.reconfigureSession({ runConfig })`, que existe no bundle e e o que o
+   `xrextras` usa. Enderecada pela F5 da [spec 08](../specs/08-fundacao-ar.md).
 
 ## Proximos passos
 
-O plano de 11 etapas continua valendo para o **jogo**, mas a Onda 3 dele esta
-suspensa ate a ancoragem voltar a funcionar: nao adianta validar deslize num
-setup em que o jogador nao consegue ancorar.
+O plano de 11 etapas continua valendo para o **jogo**. A fundacao de RA saiu dele
+e virou a [spec 08](../specs/08-fundacao-ar.md), que **substitui a spec 07** — a
+spec 07 tentava consertar a medicao de piso, e a 08 remove a medicao de piso.
 
-**1. Onda 3 da [spec 07](../specs/07-calibracao-manual-do-piso.md) — altura
-manual do piso.** Etapa 6 (`floorCalibration.ts`) e Etapa 7 (arrasto no
-`WorldTapRouter`) em paralelo, arquivos disjuntos; depois a Etapa 8 (fiacao e
-poda do gate), serial. **Nada disso comecou.**
+**1. F2 da spec 08 — a arena vive na origem.** E a inversao arquitetural: arena
+autorada em `(0,0,0)`, piso declarado por `origin.y`, ordem de carregamento do
+`BABYLON` consertada, azimute corrigido para `atan2(x, z)`, e remocao de
+`placementGate.ts`, `floorEstimate.ts` e `hitTestSampling.ts`. Serial, sozinha
+na onda — refatora `EighthWallARManager.ts` inteiro.
 
-**2. Device.** Ancorar, ficar parado 30 s, girar 360 graus, exportar. As cinco
-perguntas estao na Etapa 9 da spec 07. A quarta — quanto a arena anda no giro —
-e a linha de base da Onda 4.
+**2. Device: validar F2.** Entrar em RA cinco vezes e ver a arena no chao nas
+cinco, sem recusa possivel. E conferir que o marcador de azimute 0 nasce **a
+frente**, nao atras.
 
-**3. Onda 4 — raio ajustavel, varredura dos flancos e fronteira viva.** So depois
-que ancorar funcionar, para que um resultado ruim aponte uma causa so.
+**3. F3 e F4, nesta ordem** (mesmo arquivo): altura do jogador como `origin.y`,
+depois `recenter()` como colocacao e reposicionamento.
 
-**4. Depois disso, retomar a Etapa 4 do plano** (diretor de ondas) e seguir para
-a validacao da tese com alguem de fora, que continua sendo o corte que decide o
-resto do projeto.
+**4. F5 e F6 em paralelo** (arquivos disjuntos): segunda sessao via
+`reconfigureSession`, e adocao do que o `xrextras` ja resolve.
 
-**Divida tecnica nomeada, fora do caminho critico:** `scene.useRightHandedSystem`
-nao e ligado em lugar nenhum, apesar de `src/ar/arenaHeading.ts` afirmar que
-`src/main.ts` liga. A cena e canhota, entao "azimute positivo = direita do
-jogador" e, na verdade, a esquerda. Hoje o erro se cancela — o desenho do arco e
-a medicao do yaw estao espelhados os dois, e `framedSectors` acerta. Ele deixa de
-se cancelar no instante em que algo disser a palavra "esquerda" para o jogador,
-ou seja na Etapa 5 (alertas de flanco).
+**5. F7 — reescrever as skills de RA.** Depende da evidencia de device das
+anteriores. E objetivo declarado do projeto, nao trabalho acessorio.
+
+**6. Depois disso, retomar a Etapa 4 do plano da v3** (diretor de ondas) e seguir
+para a validacao da tese com alguem de fora, que continua sendo o corte que
+decide o resto do projeto.
+
+**Medicao que ficou pendente:** se a deriva acumula ao longo de 3 minutos de
+varredura de flanco (hipotese 2). Ela nao bloqueia a F2.
+
+**Divida tecnica de lateralidade — REVOGADA EM PARTE (2026-08-19).** O registro
+anterior estava certo no fato e errado na consequencia. Certo: `scene.useRightHandedSystem`
+nao e ligado em lugar nenhum, apesar de `src/ar/arenaHeading.ts:26` afirmar que
+`src/main.ts` liga. **Errado:** a conclusao de que "azimute positivo = direita do
+jogador" seria na verdade a esquerda.
+
+Medido em device: com o marcador em `+X` a **direita** do jogador e o de `-X` a
+esquerda, o sinal esta **correto** na cena canhota. O que esta errado e o **zero**:
+`headingDegFromForward` usa `Math.atan2(x, -z)` (frente = `-Z`, convencao destra),
+mas a frente da camera com `facing` identidade no runtime canhoto e `+Z`. O
+marcador de azimute 0 colocado em `-Z` nasce **atras** do jogador e so aparece
+com `yaw` perto de 180 graus.
+
+O conserto e `Math.atan2(x, z)`. E como `relativeYawDeg` e uma subtracao de dois
+headings, o offset de 180 graus **cancela** para medidas relativas — por isso
+`framedSectors` pode estar acertando hoje por acidente. O que nao cancela e a
+orientacao da geometria local do arco.
+
+E o caminho "so ligar `useRightHandedSystem`" esta **fechado**: ele produz
+quaternion NaN neste build do engine. Ver o bug 2 da entrada de 2026-08-19.

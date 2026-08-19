@@ -1,5 +1,12 @@
 # 07 — Calibracao manual do piso (Onda 3 da v3)
 
+> **OBSOLETA (2026-08-19). Nao execute esta spec.** Ela tenta consertar a medicao
+> de piso por `hitTest`. A [spec 08](08-fundacao-ar.md) **remove** a medicao de
+> piso: o chao passa a ser declarado por `origin.y` em
+> `XR8.XrController.updateCameraProjectionMatrix`, como faz o codigo oficial do
+> 8th Wall. Esta spec nunca chegou a comecar. Fica no repo como historico da
+> abordagem descartada.
+
 **Status:** escrito em 2026-08-19, **nao executado**. Nenhuma etapa abaixo comecou.
 
 Spec auto-contido: da para executar sem ler a investigacao que o originou. O

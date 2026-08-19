@@ -19,6 +19,12 @@ paralelas rodam, cada agent com um conjunto **exclusivo** de arquivos gravaveis.
 | 2 | [06-integracao](06-integracao.md) | serial, um agent — e onde tudo se encontra |
 | 3 | HUD responsivo | condicional: so existe se o teste de device da onda 0 apontar portrait |
 
+**Fora dessa tabela, e vigente:** [08-fundacao-ar](08-fundacao-ar.md) — a
+refundacao da RA (arena na origem, piso declarado, `recenter` como colocacao) e
+a reescrita das skills de RA. Ela substitui a
+[07-calibracao-manual-do-piso](07-calibracao-manual-do-piso.md), que esta
+**obsoleta e nunca comecou**. As ondas da spec 08 estao dentro dela.
+
 Onda 1 so comeca depois que a onda 0 passar em `npx tsc --noEmit`.
 
 ## Mapa de arquivos exclusivos

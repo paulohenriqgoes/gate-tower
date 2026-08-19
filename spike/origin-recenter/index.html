@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Spike — origem declarada e recenter</title>
+    <!--
+      O xr.js NAO e carregado aqui de proposito. `XR8.Babylonjs` e construido
+      EAGER no load do engine (`Babylonjs: mQ()`), e a fabrica so cria os
+      temporarios internos se `window.BABYLON` ja existir naquele instante.
+      Quem injeta o script, depois de instalar o shim, e o spike.ts.
+    -->
+    <script src="/coaching-overlay/coaching-overlay.js" async crossorigin="anonymous"></script>
+    <style>
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #05080c; }
+      #renderCanvas { width: 100%; height: 100%; touch-action: none; display: block; }
+
+      #panel {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #e8f0f8; background: rgba(5, 8, 12, 0.82);
+        padding: 8px 10px; white-space: pre; overflow-x: auto;
+        border-bottom: 1px solid rgba(160, 200, 255, 0.25);
+      }
+      #panel b { color: #7dd3fc; font-weight: normal; }
+      .warn { color: #fbbf24; }
+      .bad { color: #f87171; }
+      .good { color: #4ade80; }
+
+      #buttons {
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 8px;
+        background: linear-gradient(transparent, rgba(5, 8, 12, 0.9) 30%);
+      }
+      #buttons button {
+        appearance: none; border: 1px solid rgba(160, 200, 255, 0.4);
+        background: rgba(15, 26, 40, 0.92); color: #e8f0f8;
+        font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+        padding: 13px 6px; border-radius: 8px; touch-action: manipulation;
+      }
+      #buttons button:active { background: #1e3a5f; }
+      #buttons button.wide { grid-column: span 3; }
+      #buttons button.half { grid-column: span 3; }
+    </style>
+  </head>
+  <body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="panel">carregando…</div>
+    <div id="buttons">
+      <button id="btn-enter" class="wide">ENTRAR EM RA</button>
+      <button id="btn-h-minus">altura −5cm</button>
+      <button id="btn-h-plus">altura +5cm</button>
+      <button id="btn-mark">MARCAR aqui</button>
+      <button id="btn-back" class="half">VOLTEI AO PONTO (mede deriva)</button>
+      <button id="btn-recenter" class="half">RECENTER</button>
+      <button id="btn-reset" class="half">zerar estatisticas</button>
+    </div>
+    <script type="module" src="/spike/origin-recenter/spike.ts"></script>
+  </body>
+</html>

@@ -25,14 +25,17 @@ O plano de execucao esta em
 device.** A investigacao vive em
 [`docs/experimentos/arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md).
 
-**O plano esta suspenso na Onda 3 por um bloqueador de device (2026-08-19):
-nao da para ancorar.** A medicao do piso por `hitTest` nao esta medindo piso —
-dispersao mediana de **32 cm** na nuvem de pontos, que produziu **12 recusas
-seguidas** por altura de device invalida (0,41 m com o jogador de pe). O conserto
-mudou de abordagem: em vez de adivinhar o chao, **o jogador marca a altura dele
-com o dedo**. O plano executavel esta em
-[`docs/specs/07-calibracao-manual-do-piso.md`](docs/specs/07-calibracao-manual-do-piso.md)
-e **nao comecou**.
+**A fundacao de RA foi refeita do zero em 2026-08-19, depois de ler o codigo
+oficial do 8th Wall.** O projeto media o chao com `hitTest`; o engine espera que
+voce o **declare**. O exemplo oficial de world tracking nao chama `hitTest`
+nenhuma vez: ele poe conteudo em `y = 0` e declara a posicao inicial da camera
+com `XR8.XrController.updateCameraProjectionMatrix({ origin, facing })`. Se
+`origin.y` for a altura do jogador, o piso cai em `y = 0` de graca.
+
+O plano executavel esta em
+[`docs/specs/08-fundacao-ar.md`](docs/specs/08-fundacao-ar.md) e **nao comecou**.
+Ele **substitui a spec 07**, que tentava consertar a medicao de piso e ficou
+obsoleta sem nunca ter comecado.
 
 A demo do mundo vivo foi **encerrada por mudanca de direcao**, nao por resposta:
 a pergunta dela nunca chegou a ser medida com alguem de fora, e o palco em que
@@ -42,27 +45,39 @@ ela media saiu de escopo.
 
 Leia isto antes de mexer em qualquer coisa:
 
-1. **Nao da para ancorar a arena de forma confiavel.** A altura do piso vem de um
-   fit de plano sobre ~12 `hitTest`, e a nuvem tem dispersao mediana de 32 cm —
-   nao e um plano. Em 2026-08-19 isso produziu 12 recusas seguidas por
-   `bad-height`, com altura medida de 0,41 m e 0,65 m com o jogador de pe, e
-   deixou a sessao intocavel. **E o bloqueador mais caro hoje.** Endereçado pela
-   [spec 07](docs/specs/07-calibracao-manual-do-piso.md) (altura marcada pelo
-   jogador), que **nao comecou**.
-2. **A arena desliza quando o jogador gira no lugar.** Medido em 2026-08-19: um
-   giro de 360 graus com o jogador parado afastou a arena de 1,09 m para **2,9 m
-   ainda sob `trackingStatus: NORMAL`**, e para 4,47 m depois de cair para
-   `LIMITED`. Como a v3 e feita de girar o tronco, isto ameaca a tese, e nao so o
-   conforto. A reancoragem existente so dispara em `LIMITED -> NORMAL`: **drift
-   sob `NORMAL` nao tem correcao nenhuma hoje**. Mitigacao planejada na Onda 4 da
-   spec 07 (a calibracao vira varredura e mapeia os flancos antes da partida).
-3. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
-   antigo, **nao tocado ate hoje**). A camera liga e mais nada acontece.
-   Suspeito nomeado: o projeto **nunca chama `XR8.run()` nem `XR8.stop()`** — o
-   ciclo de vida inteiro esta delegado ao `xrCameraBehavior`. Enderecado pela
-   Etapa 11 do plano da v3.
-4. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
+1. **`window.BABYLON` e instalado tarde demais.** O bundle constroi
+   `XR8.Babylonjs` no carregamento do `xr.js` e so cria os temporarios internos
+   dele `if (window.BABYLON)`. O projeto instala o shim dentro de `enterAR()`,
+   depois do script `async` — entao esses temporarios ficam `undefined` para
+   sempre. Hoje isso e invisivel porque a cena e canhota e o caminho canhoto nao
+   os usa, mas e uma bomba armada. Conserto na F2 da
+   [spec 08](docs/specs/08-fundacao-ar.md).
+2. **Ligar `scene.useRightHandedSystem` quebra a RA inteira.** O ramo destro do
+   modulo Babylon deste build produz quaternion **NaN**: a pose morre e a tela
+   fica preta sobre o feed da camera. Confirmado em device em 2026-08-19.
+   **`src/ar/arenaHeading.ts:26` manda ligar essa flag e afirma que `main.ts` ja
+   liga — as duas coisas sao falsas.** Nao siga esse comentario; ele sai na F2.
+3. **O azimute 0 esta 180 graus invertido.** `headingDegFromForward` usa
+   `atan2(x, -z)` (frente = `-Z`, convencao destra), mas a frente do runtime
+   canhoto e `+Z`. O sinal esta certo; o zero nao. Como `relativeYawDeg` e uma
+   subtracao, o erro **cancela** em medidas relativas — por isso a selecao de
+   setor pode estar acertando por acidente. Conserto na F2.
+4. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
+   antigo, **nao tocado ate hoje**). A hipotese registrada antes — "o projeto
+   nunca chama `XR8.run()` nem `XR8.stop()`" — esta **errada**: o
+   `xrCameraBehavior` chama os dois. O suspeito e o
+   `XR8.clearCameraPipelineModules()` que o `detach` executa. Endereçado pela F5
+   da spec 08, com `XR8.reconfigureSession()`.
+5. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
    aposentou a pergunta, porque a arena nasce no chao ao redor do jogador.
+
+**Deixou de ser bloqueador:** o deslize ao girar. Medido com laco fechado
+(marcar, girar, voltar fisicamente ao ponto e ler o residuo) em 2026-08-19: a
+mediana e de **7,5 cm** na varredura de flanco de +-90 graus, que e o envelope
+real do jogo, porque o arco tem 180 graus. Os 0,78 m aparecem so no giro de 360
+graus, que o design nao exige, e apontando para carpete liso. O numero antigo de
+1,09 -> 2,9 m vinha de uma metrica que misturava deriva com deslocamento real do
+jogador.
 
 **Fechados em `e036b37`, todos confirmados em device:** o toque na carta em RA
 (era descompasso de tamanho de canvas, nao `cameraToUseForPointers`), as
@@ -217,39 +232,47 @@ de jogo quando a spec da demo tirou paisagem de escopo.
   celular projetado no piso e o azimute 0 e a direcao em que ele aponta no
   fechamento; o toque so diz "agora". Mundo em metros, escala absoluta,
   `arenaRoot.scaling` sempre 1.
+- **A cena e CANHOTA, e tem de continuar assim.** O ramo destro do modulo Babylon
+  deste build do engine produz quaternion NaN — pose morta, tela preta. O
+  comentario em `src/ar/arenaHeading.ts` que manda ligar `useRightHandedSystem`
+  esta errado e e perigoso.
 - **A arena e sempre nivelada pela gravidade.** Ela ja copiou a normal medida do
   fit de plano, com clamp de 12 graus; isso foi removido em 2026-08-19 porque, num
   arco de 2,2 m de raio, os 12 graus valem 47 cm — e a normal medida tem mediana
   de 13 graus e picos de 48, ou seja e ruido. A inclinacao continua sendo medida
   e registrada na telemetria, nunca aplicada na cena.
-- **A altura do piso e o ponto fraco de todo o pipeline, e esta sendo trocada.**
-  Ela vem de um fit sobre ~12 `hitTest` numa faixa da metade inferior da tela, e
-  a nuvem tem dispersao mediana de 32 cm — nao e um plano. Ver o bloqueador 1 e a
-  [spec 07](docs/specs/07-calibracao-manual-do-piso.md), que passa a marcacao da
-  altura para o dedo do jogador.
-- **`FEATURE_POINT` continua na lista de tipos de `hitTest`.** Remove-lo ja foi
-  tentado e deixou o sensor mudo — nada ficava verde. Nao reverta sem dado novo.
+- **O piso e DECLARADO, nao medido** (decisao de 2026-08-19; implementacao na F2
+  da [spec 08](docs/specs/08-fundacao-ar.md)). `origin.y` da
+  `XR8.XrController.updateCameraProjectionMatrix` define onde a camera comeca na
+  cena; com ele igual a altura do jogador, o piso e `y = 0` por construcao. E o
+  que o exemplo oficial de world tracking do 8th Wall faz, e ele **nao chama
+  `hitTest` nenhuma vez**. Todo o pipeline de fit de plano (`placementGate`,
+  `floorEstimate`, `hitTestSampling`) sai do projeto.
+- **`hitTest` sai do caminho critico.** O aprendizado sobre `FEATURE_POINT`
+  (remove-lo deixava o sensor mudo) continua valido para quem for usar `hitTest`
+  para consulta pontual de geometria, mas ele deixa de ser fundacao de
+  ancoragem.
 - Antes de ancorar, o jogador ve o **arco real** deitado no piso estimado,
   centrado nele e girando junto. **O toque so confirma o que o contorno mostra**:
   ele nao mede nada por conta propria.
-- A avaliacao roda em **dois ritmos**: a pose do arco acompanha o jogador a cada
-  frame (zero hitTest, puro calculo, e filtrada) e a medicao de piso e refeita a
-  cada 200 ms (12 hitTests).
-- **O gate recusa por prova contraria, nao por falta de prova.** Uma sonda que
-  nao devolve leitura nao reprova nada: o hitTest do SLAM fica mudo o tempo todo
-  em incidencia rasa, e tratar esse silencio como "nao cabe" recusou 79 toques em
-  dois testes de device sem ancorar uma vez. So reprovam **duas ou mais** sondas
-  que batam em superficie real fora do plano — o degrau que denuncia a borda da
-  mesa. A arena **nunca** e reescalada para caber.
+- **A arena vive na origem do mundo e nunca se move.** Em todo codigo oficial do
+  8th Wall o conteudo fica em coordenadas autorais fixas, e quem se move e a
+  origem da camera, via `recenter()`. Como o jogador e o vertice do arco, ele
+  **e** a origem: ancorar e reposicionar viram o mesmo gesto.
+- **O gate de colocacao deixa de existir.** Com o piso declarado nao ha o que
+  reprovar. O aprendizado que o produziu continua valendo em geral — silencio de
+  sensor nao e evidencia, e gate por prova positiva recusou 79 toques sem ancorar
+  uma vez — mas nao ha mais gate neste projeto.
 - A orientacao de tela nao e mais responsabilidade do AR Manager: quem aplica a
   politica e o `GameFlow`, **antes** de subir a sessao. Com a sessao no ar nao se
   pede tela cheia nem `screen.orientation.lock` — as duas coisas redimensionam o
   canvas e reprojetam a cena no meio do tracking.
-- **O engine nunca e parado.** Nao existe chamada a `XR8.run()` nem
-  `XR8.stop()` no projeto: entrar em RA e adicionar o `xrCameraBehavior` a uma
-  `FreeCamera`, e sair e descartar essa camera. Por isso **a segunda sessao de
-  RA nao sobe sem recarregar a pagina** — ver os bloqueadores acima e a hipotese
-  1 em [`docs/experimentos/demo-mundo-vivo.md`](docs/experimentos/demo-mundo-vivo.md).
+- **O `xrCameraBehavior` chama `XR8.run()` e `XR8.stop()` por voce** (lido no
+  bundle em 2026-08-19). O `attach` termina em
+  `XR8.run({ canvas, ownRunLoop: false, ... })`; o `detach` faz `XR8.stop()` +
+  `XR8.clearCameraPipelineModules()` — e e esse `clear` o suspeito da segunda
+  sessao nao subir. A afirmacao anterior aqui ("o projeto nunca chama `run`/`stop`")
+  estava **errada** e mandava quem investigasse para o lugar errado.
 - **Circular a arena funciona so em partes.** Confirmado em device
   (2026-08-12): passar para **tras** da arena faz a camera enquadrar area que o
   SLAM ainda nao mapeou, e o conteudo comeca a driftar. Esta em investigacao —
