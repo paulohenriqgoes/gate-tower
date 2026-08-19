@@ -111,9 +111,20 @@ engenharia reversa de `dist/xr.js` e `dist/xr-slam.js`):
   `[0,1]` e `(0,0)` no **topo-esquerdo**. Retorna
   `{ type, position: {x,y,z}, rotation: {x,y,z,w}, distance }[]`. Vive no chunk
   `xr-slam.js`.
-- **As coordenadas batem direto com o mundo do Babylon.** O módulo Babylon do
-  8th Wall ativa `scene.useRightHandedSystem` e dirige a projeção e a pose 6DoF
-  por frame — não há flip de Z a aplicar.
+- **As coordenadas batem direto com o mundo do Babylon, mas o módulo NÃO escolhe
+  a lateralidade por você.** Ele **lê** `scene.useRightHandedSystem` e configura o
+  engine de acordo (`XR8.XrController.configure({ leftHandedAxes: !useRightHandedSystem })`),
+  ajustando pose e projeção — então não há flip de Z a aplicar, seja qual for a
+  sua escolha. **Mas quem escolhe é você, e o default do Babylon é canhoto.** Se a
+  sua matemática de ângulo assume "frente = -Z e direita = +X" (a convenção
+  destra), ela fica **espelhada** numa cena canhota: virar para a direita produz
+  yaw negativo, e "flanco esquerdo" nasce à direita. O sintoma é cruel porque
+  costuma se **cancelar** — se o desenho e a medição estão espelhados os dois, o
+  enquadramento acerta e nada aparece. O erro só emerge quando algo enfim diz a
+  palavra "esquerda" para o jogador. Ligue `scene.useRightHandedSystem = true`
+  explicitamente na criação da cena e escreva um teste do sinal do yaw; não
+  confie em comentário dizendo que alguém já ligou (verificado em campo: o
+  comentário existia, a linha não).
 - **Superfície costuma demorar ou faltar.** `DETECTED_SURFACE` e
   `ESTIMATED_SURFACE` simplesmente não existem em boa parte dos pontos, ainda
   mais em incidência rasa (cantos distantes de um retângulo grande). Por isso os
@@ -153,14 +164,16 @@ AR roda a decodificação da câmera, o SLAM e o render do Babylon.js ao mesmo t
 
 Estes são os problemas que **só aparecem no device** com world tracking real — não dá pra pegar no desktop (o SLAM não roda fora do celular). Trate esta seção como um playbook de diagnóstico.
 
-### Passo 1 — separe os DOIS "drifts", porque a cura é diferente
+### Passo 1 — separe os TRÊS "drifts", porque a cura é diferente
 
-Quando o usuário diz "a arena não fica no lugar", quase sempre é um de dois fenômenos distintos:
+Quando o usuário diz "a arena não fica no lugar", quase sempre é um de três fenômenos distintos:
 
 1. **Salto de relocalização (SLAM):** o sistema de coordenadas inteiro dá um pulo quando o engine re-localiza. Acontece **com o celular parado ou não**, em degrau. **Nada** que você pendura na cena corrige — o binário distribuído do 8th Wall não expõe anchor persistente por objeto em world tracking (só `recenter()`). Dá pra **mitigar/mascarar** (gating por tracking status, absorção de salto, ou pivotar para **Image Target** que tem anchor real), nunca eliminar.
 2. **Escorregar por profundidade errada:** a arena "desliza em relação ao chão real" **só quando a câmera se move** (pior ao aproximar — paralaxe é máxima perto). Isso é âncora na profundidade errada, **não** SLAM. **Esse tem cura.**
 
-Pergunta de triagem: "escorrega parado, ou só quando você move o celular?" → parado = item 1; só movendo = item 2.
+3. **Deriva por rotação pura, com o tracking dizendo que está tudo bem.** Girar no lugar não gera **paralaxe** e tira do quadro todo o conjunto de features que o VIO estava usando — então a posição estimada passeia sem que o `trackingStatus` saia de `NORMAL`. Medido neste projeto: um giro de 360° com a pessoa **parada** afastou o conteúdo âncorado de 1,09 m para **2,9 m ainda sob `NORMAL`**, e para 4,47 m depois de cair para `LIMITED`; a relocalização depois trouxe de volta. É o pior dos três para diagnosticar, porque toda a instrumentação de qualidade de tracking está verde enquanto acontece. **Se o seu jogo é feito de girar o corpo, este é o seu problema principal, não um detalhe.** Mitigações, em ordem de retorno: fazer o **setup varrer as direções que o jogo vai usar** (o SLAM só mapeia o que já viu — se a calibração obriga a pessoa a olhar para os flancos antes de começar, o mapa existe quando importa); reancorar na recuperação de tracking; e converter o resíduo em **regra de jogo visível** ("você está olhando para fora da área escaneada") em vez de deixá-lo como erro silencioso.
+
+Pergunta de triagem: "escorrega parado, escorrega ao andar, ou escorrega ao **girar** no lugar?" → parado = item 1; andando = item 2; girando = item 3. E instrumente a distância câmera→âncora ao longo do tempo: sem essa série você não distingue os três, e vai debitar todos do mesmo culpado.
 
 ### Passo 2 — conserte o item 2 (o comum): place-once na superfície real
 
@@ -169,7 +182,8 @@ A causa clássica é posicionar o conteúdo por raycast contra um **plano matem�
 Receita (não precisa de reancoragem contínua — ela é pro item 1 e costuma introduzir *swim*/tremor):
 
 - No toque, dispare **vários `hitTest`** num grid ao redor do ponto (não um só — um feature point ruim faz a arena pular).
-- Faça **fit de um plano** com os pontos: altura mediana + rejeição de outlier (MAD); normal por mínimos quadrados (campo de altura `y=a·x+b·z+c`, resolvido por Cramer).
+- Faça **fit de um plano** com os pontos, mas use dele **só a altura** (mediana dos inliers, nunca o centroide). A normal, não — ver o item "Tilt" no passo 3.
+- **Antes de confiar no fit, meça a DISPERSÃO dos pontos que sobraram** (`max(y) − min(y)` dos inliers) e jogue esse número no painel. É o teste de uma linha que diz se você está medindo um plano ou uma sopa: um piso medido decentemente dá **2 a 5 cm**. Medido neste projeto, numa faixa que varria de 1 a 3 m à frente: **mediana de 32 cm, pico de 2,8 m, com 11 dos 12 pontos passando pela rejeição de outlier**. Repare no detalhe cruel — a rejeição mediana+MAD **não filtra nada** quando a maioria dos pontos é ruim, porque MAD grande gera tolerância grande e o lixo entra como inlier. Sem esse número você vai passar sessões trocando de estimador achando que o problema é o cálculo, quando o sensor não está medindo chão. Se a dispersão for grande, pare de melhorar o estimador e mude a fonte do dado (superfície mais baixa em vez de mediana da nuvem; ou tirar a pergunta do sensor e dar para o jogador marcar).
 - Posicione na **profundidade real** e **trave**. Um ponto fixo na altura certa fica grudado quando você anda.
 - Ofereça um botão **"reposicionar"** manual para o resíduo (que é item 1).
 
@@ -178,7 +192,8 @@ Receita (não precisa de reancoragem contínua — ela é pro item 1 e costuma i
 - **`hitTest` estoura o WASM se chamado cedo demais.** Chamar `XR8.XrController.hitTest` antes do SLAM ter pose lança `RuntimeError: memory access out of bounds` — e no render loop isso **mata o app inteiro**. Faça gate: só chame quando o `trackingStatus === "NORMAL"` (via `onUpdate` → `event.processCpuResult.reality.trackingStatus`), e envolva toda chamada em `try/catch` como rede de segurança. Cuidado: `LIMITED` pode ter pose mas deixar o tracking instável demais para posicionar bem — prefira `NORMAL`.
 - **Normalização de coordenadas do `hitTest`.** As coords são `[0,1]`. Normalize por `canvas.clientWidth/clientHeight` (**px CSS**), **nunca** por `engine.getRenderWidth/Height()` (px de dispositivo, ×devicePixelRatio ~3 no mobile). Misturar faz o hitTest mirar no lugar errado.
 - **Celular não tem console acessível.** Não dá pra depender de `console.log` no device. Jogue estado crítico (ex.: `trackingStatus`) **na própria tela** (um `TextBlock`/GUI). Isso desbloqueia o diagnóstico remoto.
-- **Tilt: o "up" do SLAM às vezes não bate com o piso.** Se a arena parece levemente inclinada (um lado "pra cima"), alinhe o *up* do conteúdo à **normal medida** no fit do plano — com um clamp (ex.: rejeitar normais > ~12° da vertical, que são ruído) pra nunca tombar. **Isso vale para o preview tanto quanto para o objeto final:** um contorno de pré-visualização deitado na horizontal do *mundo*, enquanto o conteúdo real vai deitar na normal do *piso*, aparece visivelmente torto e ainda desloca qualquer amostragem derivada da pose dele.
+- **Tilt: NÃO incline o conteúdo pela normal medida.** A recomendação aqui já foi a oposta ("alinhe o *up* à normal do fit, com clamp de ~12°"), e ela **custou uma sessão de device inteira** — está revogada. Duas razões, nesta ordem: (1) a vertical do mundo do 8th Wall vem do **IMU**, ou seja da gravidade, e é uma estimativa de nível muito melhor do que um punhado de `hitTest` em incidência rasa; (2) a normal de um fit é a grandeza **pior medida** de todo o pipeline — medido em device (79 amostras, arco de 2,2 m de raio): mediana de **13°**, p75 de 24°, pico de **48°**. Com um clamp de 12°, metade das medições era descartada e a outra metade aplicada, e o conteúdo **alternava entre nivelado e inclinado a cada ciclo de medição** — que é exatamente o sintoma de "fica tremendo/dando umas inclinadas" que faz você procurar drift no lugar errado. **Meça a inclinação e mande para o painel/telemetria; nunca aplique na cena.** Um piso real fora do nível é raro; um fit ruim é o caso comum. Se depois de tudo o conteúdo ainda parecer torto contra o piso real *e* a inclinação medida for consistentemente pequena (uns 2-3°), aí sim considere um clamp — apertado, nunca 12°.
+- **Toda tolerância em graus carrega um raio implícito. Ao mudar a escala do conteúdo, recalcule o limiar em centímetros na borda — nunca o herde.** É a armadilha que produziu o item acima: 12° foram escolhidos numa arena de mesa de 80 cm, onde valem **8 cm** na borda e são um remédio barato. O mesmo número num arco de 2,2 m de raio vale **47 cm**, e vira a doença. Vale para clamp de normal, tolerância de plano, limiar de "mesma superfície", raio de amostragem: escreva o limiar junto com a distância em que ele foi calibrado, e refaça a conta quando a distância mudar.
 - **Não extrapole um plano para além do raio que o produziu.** Um fit tirado de um anel de ~4 cm no centro da tela, usado para julgar pontos a 40 cm de distância, amplia qualquer erro de normal por 10x: 3° viram 2 cm na ponta, 5° viram 4,4 cm. Se você precisa avaliar uma área grande, **refaça o fit sobre os próprios pontos daquela área** — um estimador robusto (mediana+MAD) aguenta os outliers bem melhor do que a extrapolação aguenta o erro angular.
 - **Silêncio do sensor não é evidência.** É a armadilha mais cara desta lista, porque não parece um bug. Um hitTest que não devolve nada significa "não sei", não "não tem superfície aí" — e a diferença decide a polaridade de qualquer gate que você construir em cima. Um gate que exige **prova positiva** de N amostras confirmadas recusa o tempo todo em ambiente real; um que exige **prova contrária** (amostras que bateram numa superfície *fora* do plano esperado, o degrau que denuncia a borda de uma mesa) recusa quando deve. Neste projeto a primeira política produziu 79 recusas e zero posicionamentos em dois testes de device, incluindo apontando para o chão de uma cozinha; a inversão ancorou no primeiro toque.
 

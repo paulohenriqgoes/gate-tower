@@ -4,7 +4,7 @@ Diario da v3 do Tower Gate — a reformulacao que existe para responder **uma
 pergunta que a demo anterior nao podia responder**: *a RA da para ser mecanica, e
 nao cenografia?* Registra o que foi decidido, o que foi construido, o que cada
 teste em device mostrou e o que continua aberto. Ultima atualizacao:
-**2026-08-17**.
+**2026-08-19**.
 
 ## Objetivo
 
@@ -33,6 +33,126 @@ Tres tensoes que puxam em direcoes opostas:
   flancos.
 
 ## Linha do tempo
+
+### (sem commit) — o arco parava de pular, e o chao nunca esteve sendo medido (2026-08-19)
+
+Sessao inteira dedicada a uma queixa de device: *"posicionar o arco ja estava
+ruim, agora ficou bem pior, ela ancora meio em diagonal"*, refinada pelo usuario
+para *"o arco fica pulando muito, nao fica estavel, fica verde mas da umas
+inclinadas ou muda de lugar"*.
+
+**Feito.** Quatro etapas, todas so compiladas antes de ir a device:
+
+1. `src/ar/floorEstimate.ts` (novo) — altura de piso por mediana e um filtro
+   temporal (`FloorTracker`) com histerese;
+2. `src/ar/poseSmoothing.ts` (novo) — suavizacao exponencial independente de
+   frame rate, com snap, para origem e heading do arco;
+3. telemetria: `arena_placed` passou a carregar `trackingStatus`,
+   `deviceHeightM`, `floorY` e `tiltDeg`, e entrou o evento `floor_fit_sample`;
+4. fiacao no `EighthWallARManager`: **a arena deixou de copiar a normal medida do
+   piso** (so yaw), a projecao do jogador no chao virou vertical, e o fechamento
+   passou a usar os valores filtrados.
+
+Saiu junto o codigo morto que o modelo de colocacao por toque deixou
+(`fitGroundPlane`, `GroundPlaneFit`, `buildSampleOffsets`). Saldo de -169 linhas.
+
+**Provou** — tres coisas, todas com numero de device (sessao das 00:22 UTC de
+2026-08-19, 79 amostras de piso logadas a 1 Hz de 5 Hz reais):
+
+1. **O arco parou de pular. Confirmado pelo usuario em device.** E o log explica
+   o mecanismo do sintoma antigo: **53% das medicoes passavam do clamp de 12
+   graus** (arena nivelada) e 47% ficavam abaixo dele (arena inclinada em ate 12
+   graus). O contorno alternava entre os dois a cada 200 ms. "Da umas inclinadas"
+   era isso, literalmente.
+
+2. **A normal do fit nao e medicao, e ruido — e o `tiltDeg` mediu isso.**
+   Mediana de **13,3 graus**, p75 de 24,5, maximo de **47,7**. A decisao de parar
+   de inclinar a arena esta confirmada, mas **pelo motivo oposto ao previsto**: a
+   hipotese era "a vertical do SLAM ja e o nivel, e o `tiltDeg` vai viver abaixo
+   de 2 graus". Ele vive em 13. Isso nao diz que o chao esta torto — diz que o
+   fit nao sabe onde o chao esta.
+
+3. **O achado maior: a nuvem de pontos nao e um plano.** `spreadM` mediano de
+   **32 cm**, p75 de 58 cm, maximo de 2,82 m, com **11 dos 12 pontos sobrevivendo**
+   a rejeicao por mediana+MAD. Um piso medido decentemente teria 2 a 5 cm. A
+   rejeicao nao filtra nada justamente porque a maioria dos pontos e ruim: MAD
+   grande gera tolerancia grande, e o lixo entra como inlier. Nenhum estimador
+   conserta um sensor que nao esta medindo a coisa.
+
+**Nao resolveu.** Duas falhas, uma delas causada por esta propria sessao:
+
+- **12 recusas de ancoragem em sequencia**, todas `bad-height`, com altura de
+  device medida em **0,41 m** (6 toques) e **0,65 m** (6 toques), com o usuario de
+  pe. O gate estava certo em recusar; a medicao e que estava errada. O jogo ficou
+  intocavel. A reancoragem pos-relocalizacao tambem nao rodou nenhuma vez na
+  sessao — morre no mesmo gate;
+- **o `FloorTracker` trocou "pula sempre" por "trava numa leitura impossivel e
+  defende ela".** Depois do "Reposicionar" o filtro e zerado, a primeira amostra
+  aceita vira a altura vigente sem filtro nenhum, e ela veio errada. Para
+  corrigir depois disso o filtro exige 3 amostras aceitas, fora da tolerancia e
+  concordando entre si em 5 cm — mas **86% das amostras sao descartadas** pelo
+  `MAX_SPREAD_M` de 12 cm, que foi escolhido por palpite e nao por medicao. Tres
+  aceitas e concordantes quase nunca acontecem. O usuario relatou: "ficou alta
+  demais e nao liberava nunca". E falha de projeto do filtro, nao do gate.
+
+**Revoga** — duas conclusoes anteriores:
+
+- **a recomendacao de alinhar o conteudo a normal medida do piso, com clamp de 12
+  graus**, escrita na secao "Tilt" de
+  `.claude/skills/babylonjs-game-dev/references/ar-xr-8thwall.md` e repetida no
+  comentario de `ArenaGhost.setPose`. Ela nasceu na arena de mesa de 80 cm, onde
+  12 graus valem 8 cm na borda. Num arco de 2,2 m de raio os mesmos 12 graus
+  valem **47 cm**, e a normal e a grandeza pior medida do pipeline inteiro. O
+  comentario do codigo ja foi corrigido nesta sessao; **a skill continua errada**
+  (ver Fase 4 / proposta pendente);
+- **a afirmacao, no comentario de `ArenaGhost.setPose`, de que "a world-up do
+  SLAM nao bate com o chao no caso comum".** O que nao bate e o fit. Corrigido no
+  arquivo.
+
+### (sem commit) — a hipotese 2 respondida, e uma virada de abordagem (2026-08-19)
+
+**Provou.** O usuario ficou **parado** e deu um giro de 360 graus para olhar
+atras de si. Nesse intervalo a distancia camera->arena subiu de **1,09 m para
+2,9 m ainda com `trackingStatus: NORMAL`**; so depois o SLAM admitiu `LIMITED` (39
+s) e a distancia chegou a **4,47 m**, voltando para ~0,9 m apos a relocalizacao.
+
+Isso responde a **hipotese 2 deste diario** — "a ancoragem egocentrica pode
+driftar mais que a atual, nao menos" — com evidencia **contra** a ancoragem
+egocentrica na forma atual. Girar no lugar nao produz paralaxe e leva o quadro
+para regioes que o SLAM nunca mapeou. E girar o tronco nao e um caso de uso
+qualquer da v3: **e a mecanica inteira**.
+
+Dois detalhes que a correcao precisa respeitar:
+
+- a reancoragem so dispara em `LIMITED -> NORMAL`. **O deslocamento de 1,8 m
+  aconteceu inteiro sob `NORMAL`**, onde nao existe correcao nenhuma hoje. Esse
+  buraco continua aberto;
+- `FEATURE_POINT` **nao deve ser removido** da lista de tipos aceitos. O usuario
+  registrou historico de device: sem ele o `hitTest` emudece e nada fica verde.
+  Isso vale mais que o argumento teorico de que feature point nao e superficie.
+
+**Decisao de direcao, do usuario:** parar de tentar adivinhar o chao e **deixar o
+jogador marca-lo com o dedo**. Ele tem, a 1,4 m do chao, oclusao, perspectiva e
+sombra real como referencia; o SLAM tem 12 pontos ruidosos. A altura do piso e 1
+grau de liberdade.
+
+A parte nao obvia da ideia, e o motivo dela valer mais que "calibracao":
+**pedir para o jogador girar para a direita e para a esquerda no setup obriga o
+SLAM a mapear exatamente as direcoes que o jogo vai usar, antes da partida
+comecar.** O gesto de calibracao paga a divida que causou o drift medido acima. E
+o "pisca a tela ao passar do campo escaneado" converte o residuo de drift em
+regra de jogo legivel, o que a v3 ja quer.
+
+O plano executavel esta em
+[`docs/specs/07-calibracao-manual-do-piso.md`](../specs/07-calibracao-manual-do-piso.md).
+Foi **fatiado em duas ondas** por decisao do usuario: Onda 3 entrega so a altura
+manual (que e o que desbloqueia), Onda 4 traz raio ajustavel, varredura e
+fronteira. O motivo do corte: a pergunta da varredura ("mapear antes reduz o
+drift?") so e mensuravel depois que ancorar voltar a funcionar; juntas, um
+resultado ruim nao diria qual das duas falhou.
+
+**Nada da Onda 3 foi implementado.** Esta entrada registra um plano e dois
+resultados de device, nao uma entrega.
 
 ### (sem commit) — spec v3, storyboard e plano de execucao (2026-08-17)
 
@@ -109,24 +229,23 @@ nao resultados.
 **D6 e a mais fragil** — e a decisao do plano com maior chance de cair no
 primeiro playtest, e esta marcada como provisoria no proprio documento.
 
-## Estado atual (2026-08-17)
+## Estado atual (2026-08-19)
 
 | | Situacao |
 |---|---|
 | Spec v3 e storyboard | **Escritos**, no repo, sem commit |
-| Plano de execucao em 11 etapas | **Escrito** (`docs/guias/tower_gate_v3_plano_etapas.md`); nenhuma etapa iniciada |
+| Plano de execucao em 11 etapas | **Escrito**; Etapas 1, 2 e 3 implementadas |
 | Tese central (atencao como recurso) | **Sem nenhuma evidencia** — nao existe prototipo que a exercite |
-| Arena polar de 180 graus | **Nao iniciada** (Etapa 1) |
-| Escala de sala (torre 1,20 m) | **Nao iniciada** (Etapa 2) — a escala atual em device foi aprovada, mas era a de mesa |
-| Ancoragem egocentrica | **Nao iniciada** (Etapa 3) |
-| Ondas convergindo ao jogador | **Nao iniciada** (Etapa 4) |
-| Alertas de flanco e audio espacial | **Nao iniciados** (Etapa 5); o projeto continua **sem modulo de audio** |
-| Colocacao direta com anel | **Nao iniciada** (Etapa 6) |
-| Cartas presas ao jogador | **Nao iniciada** (Etapa 7) |
-| Caldeirao, economia, intro, album | **Nao iniciados** (Etapas 8-11) |
-| Fundacao de RA herdada (calibracao, coaching, fit de plano, gate) | **Funciona** — confirmado em device em 2026-08-14, ver o diario encerrado |
-| Segunda sessao de RA sem recarregar | **Quebra** — herdado, nunca tocado; agora bloqueia o Ato 4 |
-| Deslize girando no lugar | **Nao medido** — criterio novo, ver achado 4 acima |
+| Arena polar de 180 graus (Etapa 1) | **Implementada**, logica pura com teste |
+| Escala de sala, torre 1,20 m (Etapa 2) | **Implementada**; nao avaliada em device por si so |
+| Ancoragem egocentrica (Etapa 3) | **Implementada e em device** — ancora, mas ver as duas linhas abaixo |
+| Arco do preview tremendo/inclinando | **RESOLVIDO**, confirmado em device 2026-08-19 |
+| Medicao do piso | **QUEBRADA**. `spreadM` mediano de 32 cm; 12 recusas seguidas por `bad-height` com o jogador de pe. Endereçada pela [spec 07](../specs/07-calibracao-manual-do-piso.md), nao iniciada |
+| Deslize girando no lugar | **MEDIDO, e ruim**: 1,09 m -> 2,9 m sob `NORMAL` num giro de 360 graus, chegando a 4,47 m em `LIMITED` |
+| Ondas convergindo ao jogador (Etapa 4) | **Nao iniciada** |
+| Alertas de flanco e audio (Etapa 5) | **Nao iniciados**; o projeto continua **sem modulo de audio** |
+| Colocacao com anel, cartas, caldeirao, album (6-11) | **Nao iniciadas** |
+| Segunda sessao de RA sem recarregar | **Quebra** — herdado, nunca tocado |
 
 ## Hipoteses vivas
 
@@ -140,13 +259,16 @@ Em ordem de suspeita, com o teste que decide cada uma.
    propria spec §12 nomeia esse corte: "passos 1-4 provam a tese; se a mecanica
    de atencao nao for divertida ali, o resto nao salva".
 
-2. **A ancoragem egocentrica pode driftar mais que a atual, nao menos.** O
-   argumento da spec §1 e que ficar parado perto da origem da ancora deixa o VIO
-   mais estavel. Plausivel, mas nao testado: girar 180 graus troca o conjunto de
-   features enquadrado, que e exatamente o que a spec diz que causa drift.
-   **Teste:** fechar a arena, girar o tronco de flanco a flanco por 60 s sem
-   caminhar, e medir o deslocamento aparente da base da torre. Criterio proposto:
-   ~2 cm. Se falhar, D7 vira a valvula — cair para 120 graus.
+2. **RESPONDIDA EM 2026-08-19, e a resposta e ruim.** A hipotese era que ficar
+   parado perto da origem deixaria o VIO mais estavel. Medido: um giro de 360
+   graus com o jogador **parado** afastou a arena de 1,09 m para 2,9 m ainda sob
+   `trackingStatus: NORMAL`, e para 4,47 m depois de cair para `LIMITED`. O
+   criterio proposto era ~2 cm.
+   **O que continua aberto:** se a varredura de calibracao da Onda 4 (mapear os
+   flancos antes da partida) reduz isso a um numero jogavel, e se D7 — cair para
+   120 graus — vira necessidade em vez de valvula. **Nao existe hoje nenhuma
+   correcao para drift sob `NORMAL`**: a reancoragem so dispara em
+   `LIMITED -> NORMAL`.
 
 3. **D6 (o Coelho trocando de setor) pode nao resolver nada.** Foi escolhida para
    evitar dois defeitos conhecidos, sem evidencia de que a terceira opcao nao tem
@@ -175,31 +297,30 @@ Em ordem de suspeita, com o teste que decide cada uma.
 
 ## Proximos passos
 
-Seguem as ondas do plano
-([`tower_gate_v3_plano_etapas.md`](../guias/tower_gate_v3_plano_etapas.md) §4).
-Duas serializacoes sao obrigatorias e nao devem ser negociadas por pressa:
+O plano de 11 etapas continua valendo para o **jogo**, mas a Onda 3 dele esta
+suspensa ate a ancoragem voltar a funcionar: nao adianta validar deslize num
+setup em que o jogador nao consegue ancorar.
 
-**1. Onda 1 — `ArenaArc` (Etapa 1) e escala metrica (Etapa 2), em paralelo.**
-Sao os dois alicerces e nao tem dependencia. `ArenaArc` e logica pura, testavel
-sem Babylon; a escala metrica mata `AR_ARENA_SCALE`.
+**1. Onda 3 da [spec 07](../specs/07-calibracao-manual-do-piso.md) — altura
+manual do piso.** Etapa 6 (`floorCalibration.ts`) e Etapa 7 (arrasto no
+`WorldTapRouter`) em paralelo, arquivos disjuntos; depois a Etapa 8 (fiacao e
+poda do gate), serial. **Nada disso comecou.**
 
-**2. Onda 2 — ancoragem egocentrica (Etapa 3) e diretor de ondas (Etapa 4).**
+**2. Device.** Ancorar, ficar parado 30 s, girar 360 graus, exportar. As cinco
+perguntas estao na Etapa 9 da spec 07. A quarta — quanto a arena anda no giro —
+e a linha de base da Onda 4.
 
-**3. Onda 3 — validacao em device da ancoragem.** Serial e obrigatoria: responde
-a hipotese 2. Se a arena nao ficar parada com o jogador girando, o resto do plano
-esta construido sobre nada.
+**3. Onda 4 — raio ajustavel, varredura dos flancos e fronteira viva.** So depois
+que ancorar funcionar, para que um resultado ruim aponte uma causa so.
 
-**4. Onda 4 — alertas de flanco (Etapa 5) e colocacao com anel (Etapa 6).**
+**4. Depois disso, retomar a Etapa 4 do plano** (diretor de ondas) e seguir para
+a validacao da tese com alguem de fora, que continua sendo o corte que decide o
+resto do projeto.
 
-**5. Onda 5 — cartas presas ao jogador (Etapa 7).** Serial por conflito de
-escrita em `HudLayer.ts`, nao por dependencia.
-
-**6. Onda 6 — validacao da tese, com alguem que nao conhece o jogo.** Serial e
-obrigatoria: responde a hipotese 1. **Nenhuma das Etapas 8-11 comeca antes deste
-veredito.** O README ja registra o erro de medir com o autor testando o proprio
-jogo; nao repetir.
-
-**7. Ondas 7-9 — caldeirao e economia (8, 9), intro (10), fim de partida e album
-(11).** A Etapa 11 e onde o bloqueador da segunda sessao de RA e pago; se surgir
-necessidade de testar com varias pessoas seguidas antes disso, ela sobe de
-posicao.
+**Divida tecnica nomeada, fora do caminho critico:** `scene.useRightHandedSystem`
+nao e ligado em lugar nenhum, apesar de `src/ar/arenaHeading.ts` afirmar que
+`src/main.ts` liga. A cena e canhota, entao "azimute positivo = direita do
+jogador" e, na verdade, a esquerda. Hoje o erro se cancela — o desenho do arco e
+a medicao do yaw estao espelhados os dois, e `framedSectors` acerta. Ele deixa de
+se cancelar no instante em que algo disser a palavra "esquerda" para o jogador,
+ou seja na Etapa 5 (alertas de flanco).

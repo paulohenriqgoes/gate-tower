@@ -2,7 +2,7 @@ import type { Behavior } from "@babylonjs/core/Behaviors/behavior";
 import type { Camera } from "@babylonjs/core/Cameras/camera";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import "@babylonjs/core/Culling/ray";
-import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Observable } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
@@ -10,18 +10,25 @@ import { Button, Control, Ellipse, Rectangle, StackPanel, TextBlock } from "@bab
 
 import type {
   ArenaAnchor,
+  ArenaAnchorReport,
   ArenaReanchor,
   ArSessionController,
+  FloorFitSample,
   PlacementRejection,
 } from "./ArSessionController";
 import { ArenaGhost } from "./ArenaGhost";
 import { arenaRootYawRad, headingDegFromForward, relativeYawDeg } from "./arenaHeading";
 import { installBabylonGlobalsForXR8 } from "./babylonRuntimeGlobals";
+import { FloorTracker, measureFloor, type FloorSample } from "./floorEstimate";
+import { buildFloorBandSamples } from "./hitTestSampling";
 import {
-  buildFloorBandSamples,
-  fitGroundPlane,
-  type GroundPlaneFit,
-} from "./hitTestSampling";
+  HEADING_SNAP_DEG,
+  HEADING_TAU_SECONDS,
+  ORIGIN_SNAP_M,
+  ORIGIN_TAU_SECONDS,
+  SmoothedAngleDeg,
+  SmoothedScalar,
+} from "./poseSmoothing";
 import {
   canPlace,
   MAX_DEVICE_HEIGHT_M,
@@ -112,7 +119,17 @@ const SETUP_BUTTON_WIDTH = 140;
  * altura do piso e medida por fit de plano e vive na ancora.
  */
 export class EighthWallARManager implements ArSessionController {
-  public readonly onArenaClosedObservable = new Observable<ArenaAnchor>();
+  public readonly onArenaClosedObservable = new Observable<ArenaAnchorReport>();
+  /**
+   * Cada medicao de piso, crua, na cadencia da avaliacao (~5 Hz). Quem consome
+   * decide o que fazer com a vazao — a telemetria da sessao limita a 1 Hz.
+   *
+   * Existe porque a instabilidade do piso so foi diagnosticada olhando numero:
+   * sem esta serie, "o arco parou de pular" e impressao, nao resultado. E e o
+   * unico jeito de descobrir em device se a premissa desta etapa — a de que a
+   * vertical do SLAM ja e o nivel — vale ou nao.
+   */
+  public readonly onFloorFitSampledObservable = new Observable<FloorFitSample>();
   /**
    * Arena devolvida ao jogador depois de uma relocalizacao do SLAM, com quanto
    * ela tinha se afastado. O numero e o ponto: e a medida direta do problema
@@ -167,16 +184,41 @@ export class EighthWallARManager implements ArSessionController {
    */
   private anchor: ArenaAnchor | null = null;
 
-  // Estado do preview de fechamento. `previewFit` e o fit da ULTIMA avaliacao
-  // — e ele que ancora a arena no toque, e nao um fit novo tirado no instante
-  // do toque: assim a arena fecha exatamente onde o contorno prometeu.
+  // Estado do preview de fechamento. A regra que atravessa tudo aqui: o toque
+  // nao mede nada, ele CONFIRMA o que o contorno esta mostrando — entao todo
+  // valor usado no fechamento e o mesmo valor, ja filtrado, que estava na tela.
   private previewState: PlacementPreviewState = "waiting-tracking";
   private previewFailures = 0;
-  private previewFit: GroundPlaneFit | null = null;
-  // Origem do arco na ultima pose: o device projetado no piso medido. Guardada
-  // porque o fechamento usa a mesma que o contorno estava mostrando.
+  /**
+   * Altura do piso ao longo do tempo, e nao o fit da ultima avaliacao.
+   *
+   * Esta troca e o conserto central da etapa. Antes cada fit de 200 ms virava
+   * pose na hora: uma medicao ruim isolada movia a arena inteira (uma sessao de
+   * device ancorou com o "chao" 40 cm alto demais) e a sequencia delas fazia o
+   * contorno pular 5x por segundo. Agora uma amostra sozinha nao move nada —
+   * ruido vira EMA, degrau real precisa de tres leituras seguidas concordando.
+   */
+  private readonly floorTracker = new FloorTracker();
+  /** Ultima amostra de piso medida, so para diagnostico e telemetria. */
+  private lastFloorSample: FloorSample | null = null;
+  /**
+   * Suavizadores da pose do arco. O jogador esta escolhendo uma DIRECAO, nao
+   * pilotando um cursor: a 2,2 m de raio, 2 graus de tremor de mao viram 7,7 cm
+   * de deslocamento na borda do arco, e e isso que le como "nao fica parado".
+   *
+   * O snap embutido neles e o que impede a cura de virar doenca: salto de
+   * relocalizacao do SLAM (medidos 0,53 m, 1,44 m e 2,53 m numa sessao) precisa
+   * ser instantaneo. Suavizar um teletransporte produziria uma varredura lenta,
+   * que e pior do que o salto.
+   */
+  private readonly smoothedOriginX = new SmoothedScalar(ORIGIN_TAU_SECONDS, ORIGIN_SNAP_M);
+  private readonly smoothedOriginZ = new SmoothedScalar(ORIGIN_TAU_SECONDS, ORIGIN_SNAP_M);
+  private readonly smoothedHeadingDeg = new SmoothedAngleDeg(HEADING_TAU_SECONDS, HEADING_SNAP_DEG);
+  // Origem do arco na ultima pose, ja suavizada e ja na altura do piso
+  // filtrado. Guardada porque o fechamento usa a mesma que o contorno mostrava.
   private previewOrigin: Vector3 | null = null;
-  // Heading (graus, convencao de `arenaHeading`) do device na ultima pose.
+  // Heading (graus, convencao de `arenaHeading`) do device na ultima pose, ja
+  // suavizado.
   private previewHeadingDeg = 0;
   private lastPreviewEvalMs = 0;
 
@@ -272,7 +314,7 @@ export class EighthWallARManager implements ArSessionController {
       return { ok: false, reason: "arena-ja-fechada" };
     }
 
-    if (!canPlace(this.previewState) || !this.previewFit || !this.previewOrigin) {
+    if (!canPlace(this.previewState) || this.floorTracker.current === null || !this.previewOrigin) {
       return { ok: false, reason: placementReason(this.previewState) };
     }
 
@@ -611,22 +653,32 @@ export class EighthWallARManager implements ArSessionController {
       return;
     }
 
-    const fit = this.sampleFloorFit();
+    const sample = this.sampleFloor();
     const cameraPosition = this.arCamera?.globalPosition;
 
-    if (!fit || !cameraPosition) {
+    if (!sample || !cameraPosition) {
       this.pendingReanchorAtMs = null;
       return;
     }
 
-    const heightM = this.measureDeviceHeight(fit);
+    // O rastreador foi ZERADO ao agendar esta reancoragem (ver o callback de
+    // trackingStatus), entao esta amostra vira a altura vigente direto, sem
+    // filtro. E o comportamento correto e nao um furo: depois de uma
+    // relocalizacao o sistema de coordenadas do SLAM e outro, e a altura de
+    // piso medida antes dela nao descreve mais lugar nenhum. O preco e que a
+    // reancoragem confia numa amostra so — mas ela ja exige que essa amostra
+    // passe pela faixa de altura do gate, que e o mesmo criterio de antes.
+    const floorY = this.floorTracker.push(sample);
+    this.lastFloorSample = sample;
 
-    if (heightM === null || heightM < MIN_DEVICE_HEIGHT_M || heightM > MAX_DEVICE_HEIGHT_M) {
+    const heightM = this.measureDeviceHeight(floorY);
+
+    if (floorY === null || heightM === null || heightM < MIN_DEVICE_HEIGHT_M || heightM > MAX_DEVICE_HEIGHT_M) {
       this.pendingReanchorAtMs = null;
       return;
     }
 
-    const origin = this.projectOntoPlane(cameraPosition, fit);
+    const origin = new Vector3(cameraPosition.x, floorY, cameraPosition.z);
     const offsetM = Vector3.Distance(origin, this.anchor.origin);
 
     const anchor: ArenaAnchor = {
@@ -635,11 +687,10 @@ export class EighthWallARManager implements ArSessionController {
       origin: origin.clone(),
     };
 
-    this.arenaRoot.rotationQuaternion = this.buildAnchorRotation(fit.normal, anchor.forwardYawDeg);
+    this.arenaRoot.rotationQuaternion = this.buildAnchorRotation(anchor.forwardYawDeg);
     this.arenaRoot.position.copyFrom(anchor.origin);
 
     this.anchor = anchor;
-    this.previewFit = fit;
     this.pendingReanchorAtMs = null;
 
     console.info(`[EighthWallARManager] arena reancorada apos relocalizacao (${offsetM.toFixed(2)} m)`);
@@ -658,50 +709,73 @@ export class EighthWallARManager implements ArSessionController {
    * pose valida. Nao dispara hitTest nenhum: roda a 60 fps.
    */
   private updateGhostPose(ghost: ArenaGhost): boolean {
-    const fit = this.previewFit;
+    const floorY = this.floorTracker.current;
     const cameraPosition = this.arCamera?.globalPosition;
 
-    if (!fit || !cameraPosition) {
+    if (floorY === null || !cameraPosition) {
       return false;
     }
 
-    const origin = this.projectOntoPlane(cameraPosition, fit);
-    const headingDeg = this.currentHeadingDeg();
+    // A projecao e VERTICAL, e nao mais ao longo da normal medida do piso. Com
+    // a normal, um erro angular do fit deslocava a origem na horizontal em
+    // h * tan(erro) — a 1,4 m de altura, 12 graus de fit ruim tiravam o vertice
+    // do arco 30 cm de baixo dos pes do jogador, alem de inclinar a arena.
+    const dtSeconds = this.scene.getEngine().getDeltaTime() / 1000;
+    const x = this.smoothedOriginX.push(cameraPosition.x, dtSeconds);
+    const z = this.smoothedOriginZ.push(cameraPosition.z, dtSeconds);
+    const headingDeg = this.smoothedHeadingDeg.push(this.currentHeadingDeg(), dtSeconds);
 
-    this.previewOrigin = origin;
+    // Reaproveita o vetor entre frames: isto roda a 60 fps e o fechamento clona
+    // antes de guardar na ancora, entao ninguem retem a referencia.
+    if (this.previewOrigin) {
+      this.previewOrigin.set(x, floorY, z);
+    } else {
+      this.previewOrigin = new Vector3(x, floorY, z);
+    }
+
     this.previewHeadingDeg = headingDeg;
 
-    ghost.setPose(origin, this.buildAnchorRotation(fit.normal, headingDeg));
+    ghost.setPose(this.previewOrigin, this.buildAnchorRotation(headingDeg));
 
     return true;
   }
 
   /**
-   * Uma rodada da avaliacao cara: fit do piso pela faixa inferior da tela + as
-   * sondas de desobstrucao ao redor do jogador. O resultado alimenta o gate
-   * puro, que e quem decide o estado — aqui nao ha regra de decisao nenhuma, so
-   * medicao.
+   * Uma rodada da avaliacao cara: a medicao do piso pela faixa inferior da
+   * tela. O resultado alimenta o gate puro, que e quem decide o estado — aqui
+   * nao ha regra de decisao nenhuma, so medicao.
    */
   private evaluatePreview(): void {
-    const ghost = this.arenaGhost;
-
-    if (!ghost) {
+    if (!this.arenaGhost) {
       return;
     }
 
-    const fit = this.sampleFloorFit();
+    const sample = this.sampleFloor();
 
-    // O fit e guardado ANTES do veredito, ao contrario do modelo antigo. La o
-    // fit so valia se o estado aprovasse, porque ele era o ponto de ancoragem
-    // vindo de um toque; aqui ele e a MEDICAO DO CHAO, e uma medicao de chao
-    // continua valendo mesmo quando a altura do device reprova — e o que
-    // permite ao contorno continuar deitado no piso certo enquanto vermelho.
-    if (fit) {
-      this.previewFit = fit;
-      this.updateGhostPose(ghost);
+    // A medicao entra no rastreador ANTES do veredito, ao contrario do modelo
+    // antigo. La o fit so valia se o estado aprovasse, porque ele era o ponto
+    // de ancoragem vindo de um toque; aqui ele e a MEDICAO DO CHAO, e uma
+    // medicao de chao continua valendo mesmo quando a altura do device reprova
+    // — e o que permite ao contorno continuar deitado no piso certo enquanto
+    // vermelho.
+    //
+    // Quem decide se a medicao move alguma coisa e o `FloorTracker`, nao este
+    // metodo: `push` devolve a altura vigente, que pode ser exatamente a mesma
+    // de antes se a amostra nao tiver convencido.
+    const floorY = this.floorTracker.push(sample);
+
+    if (sample) {
+      this.lastFloorSample = sample;
     }
 
-    const deviceHeightM = this.measureDeviceHeight(fit);
+    // A pose NAO e atualizada aqui, e essa omissao e deliberada. Este metodo
+    // roda dentro do mesmo frame em que `registerGhostTracking` ja chamou
+    // `updateGhostPose`, e agora aquele metodo tem ESTADO: chamar duas vezes no
+    // mesmo frame aplicaria o passo de suavizacao em dobro, com o mesmo `dt`,
+    // um frame em cada doze. A altura nova entra na pose no proximo frame — 16
+    // ms de atraso que ninguem ve, contra um filtro que se comporta diferente
+    // dependendo do frame.
+    const deviceHeightM = this.measureDeviceHeight(floorY);
 
     const resolved = resolvePreviewState({
       consecutiveFailures: this.previewFailures,
@@ -716,6 +790,15 @@ export class EighthWallARManager implements ArSessionController {
     this.diagnostics?.setFields({
       cameraYawDeg: this.getCameraYawDeg().toFixed(1),
       deviceHeightM: deviceHeightM === null ? "-" : deviceHeightM.toFixed(2),
+      // `floorTilt` e o numero que julga a decisao desta etapa: a arena deixou
+      // de copiar a inclinacao do fit porque a vertical do SLAM (que vem do
+      // IMU, ou seja, da gravidade) deveria ser uma estimativa melhor de nivel
+      // do que tres hitTests em incidencia rasa. Se este campo viver perto de
+      // zero, a premissa esta certa; se ele for grande E a arena parecer torta
+      // contra o piso real, ela esta errada e volta um clamp — apertado, nao os
+      // 12 graus de antes.
+      floorTilt: this.lastFloorSample === null ? "-" : `${this.lastFloorSample.tiltDeg.toFixed(1)}deg`,
+      floorY: floorY === null ? "-" : floorY.toFixed(2),
       previewState: resolved.state,
     });
 
@@ -723,29 +806,39 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Altura do device acima do piso medido, ao longo da NORMAL do plano — nao a
-   * diferenca de Y. Num piso com 5 graus de caimento (ou com a world-up do SLAM
-   * levemente torta, que e o caso comum) as duas medidas divergem, e quem
-   * decide o gate e a distancia real ao chao, nao a coordenada vertical.
+   * Altura do device acima do piso, em metros: diferenca de Y pura.
+   *
+   * Era medida ao longo da normal do fit, com o argumento de que num piso em
+   * caimento as duas divergem. O argumento caiu junto com a inclinacao: a arena
+   * nao copia mais a normal medida, entao medir altura contra ela seria usar
+   * uma referencia que o resto do sistema nao usa mais — e a normal do fit e
+   * justamente a grandeza menos confiavel de toda a medicao.
    */
-  private measureDeviceHeight(fit: GroundPlaneFit | null): number | null {
+  private measureDeviceHeight(floorY: number | null): number | null {
     const cameraPosition = this.arCamera?.globalPosition;
 
-    if (!fit || !cameraPosition) {
+    if (floorY === null || !cameraPosition) {
       return null;
     }
 
-    return Vector3.Dot(cameraPosition.subtract(fit.position), this.safeNormal(fit.normal));
+    return cameraPosition.y - floorY;
   }
 
   /**
-   * Dispara a grade de hitTests da faixa de piso e faz o fit robusto do plano.
+   * Dispara a grade de hitTests da faixa de piso e mede UMA amostra de piso.
    *
    * As coordenadas ja saem normalizadas em [0,1] de `buildFloorBandSamples`, que
    * e o espaco que o `hitTest` do 8th Wall espera — nao passam por
    * `normalizeToCanvas` porque nao vem de pixel nenhum.
+   *
+   * Publica a amostra em `onFloorFitSampledObservable` inclusive quando ela e
+   * nula: "nao consegui medir o chao agora" e informacao, e uma serie cheia de
+   * buracos e o que distingue "o filtro esta segurando bem" de "o sensor parou
+   * de responder". Aqui isso vira `inliers: 0` — `measureFloor` nao diferencia
+   * "nenhum ponto voltou" de "voltaram poucos demais", e inventar essa
+   * distincao no relatorio seria reportar um dado que ninguem mediu.
    */
-  private sampleFloorFit(): GroundPlaneFit | null {
+  private sampleFloor(): FloorSample | null {
     const xr8 = window.XR8;
 
     if (!xr8) {
@@ -771,7 +864,20 @@ export class EighthWallARManager implements ArSessionController {
       }
     }
 
-    return fitGroundPlane(points, MIN_INLIERS);
+    const sample = measureFloor(points, MIN_INLIERS);
+
+    this.onFloorFitSampledObservable.notifyObservers(
+      sample === null
+        ? { floorY: null, inliers: 0, spreadM: null, tiltDeg: null }
+        : {
+            floorY: sample.floorY,
+            inliers: sample.inliers,
+            spreadM: sample.spreadM,
+            tiltDeg: sample.tiltDeg,
+          }
+    );
+
+    return sample;
   }
 
   /** Aplica o estado no fantasma e no HUD, so quando ele muda de verdade. */
@@ -832,7 +938,7 @@ export class EighthWallARManager implements ArSessionController {
       // "toquei e nao aconteceu nada" — o jogador nunca via a reprovacao, e a
       // medicao do toque podia discordar do que estava na tela.
       this.onPlacementRejectedObservable.notifyObservers({
-        deviceHeightM: this.measureDeviceHeight(this.previewFit),
+        deviceHeightM: this.measureDeviceHeight(this.floorTracker.current),
         reason: this.previewState,
       });
       this.updateUI();
@@ -855,10 +961,15 @@ export class EighthWallARManager implements ArSessionController {
    * arena por enquadramento do Coelho, sem toque nenhum.
    */
   public closeArenaAtPlayer(): ArenaAnchor | null {
-    const fit = this.previewFit;
     const origin = this.previewOrigin;
 
-    if (!this.isInAR || this.hasClosedArena || !fit || !origin || !canPlace(this.previewState)) {
+    if (
+      !this.isInAR
+      || this.hasClosedArena
+      || this.floorTracker.current === null
+      || !origin
+      || !canPlace(this.previewState)
+    ) {
       return null;
     }
 
@@ -868,7 +979,7 @@ export class EighthWallARManager implements ArSessionController {
       origin: origin.clone(),
     };
 
-    this.arenaRoot.rotationQuaternion = this.buildAnchorRotation(fit.normal, anchor.forwardYawDeg);
+    this.arenaRoot.rotationQuaternion = this.buildAnchorRotation(anchor.forwardYawDeg);
     this.arenaRoot.position.copyFrom(anchor.origin);
     this.applyArenaScale();
     this.arenaRoot.setEnabled(true);
@@ -882,7 +993,17 @@ export class EighthWallARManager implements ArSessionController {
     this.finishPlacementCoaching();
     this.reportAnchorDiagnostics(anchor);
     this.updateUI();
-    this.onArenaClosedObservable.notifyObservers(anchor);
+    // O relatorio carrega a MEDICAO que produziu a ancora, e nao so a ancora.
+    // Sem isso, uma ancoragem ruim no device e indistinguivel de uma boa depois
+    // do fato: nao da para saber se o culpado foi tracking degradado, altura
+    // errada do piso ou postura do jogador — tres causas com conserto diferente
+    // que produzem a mesma queixa.
+    this.onArenaClosedObservable.notifyObservers({
+      anchor,
+      deviceHeightM: this.measureDeviceHeight(this.floorTracker.current),
+      tiltDeg: this.lastFloorSample?.tiltDeg ?? null,
+      trackingStatus: this.latestTrackingStatus,
+    });
 
     return anchor;
   }
@@ -949,37 +1070,39 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Rotacao do `arenaRoot` (ou do contorno) para um heading: primeiro o yaw que
-   * poe o -Z local no heading pedido, depois a inclinacao ate a normal medida
-   * do piso.
+   * Rotacao do `arenaRoot` (ou do contorno) para um heading: SO o yaw que poe o
+   * -Z local no heading pedido. A arena fica nivelada, sempre.
+   *
+   * ## Por que a inclinacao saiu
+   *
+   * Ate aqui esta rotacao inclinava a arena ate a normal medida do fit do piso,
+   * com clamp de 12 graus — receita herdada da arena de mesa de 80 cm, onde
+   * 12 graus valiam 8 cm na borda e o remedio era barato. A v3 tem um arco de
+   * 2,2 m de RAIO: os mesmos 12 graus viram 47 cm de erro na borda e a torre
+   * da frente flutuando 40 cm acima do chao.
+   *
+   * E a normal e justamente a grandeza pior medida de todo o pipeline. Ela sai
+   * de um fit por minimos quadrados sobre ~12 hitTests em incidencia rasa, com
+   * minimo de 3 pontos — com 3 pontos o plano passa exatamente por eles e o
+   * ruido vira inclinacao inteira. Pior: o fit e tirado de uma faixa 1 a 3 m a
+   * FRENTE do jogador e aplicado a uma arena que cobre 2,2 m atras dele, onde
+   * nao ha um unico ponto medido. Extrapolar plano para fora do raio que o
+   * produziu multiplica o erro angular pela distancia.
+   *
+   * A vertical do mundo do 8th Wall vem do IMU, ou seja, da gravidade. Ela e
+   * uma estimativa muito melhor de "onde e o nivel" do que tres hitTests
+   * rasos — e um piso real fora do nivel e raro, enquanto um fit ruim e o caso
+   * comum. A inclinacao continua sendo MEDIDA (`FloorSample.tiltDeg`, no painel
+   * de debug e na telemetria) exatamente para essa premissa poder ser derrubada
+   * por dado em device em vez de defendida por argumento.
    *
    * O yaw sai de `arenaRootYawRad`, e o sinal dele NAO e obvio — e o NEGATIVO
    * do heading, com a derivacao escrita naquele arquivo. Errar esse sinal
    * espelha a arena inteira: o flanco esquerdo nasce a direita e ninguem
    * percebe olhando o codigo.
    */
-  private buildAnchorRotation(normal: Vector3, headingDeg: number): Quaternion {
-    return this.buildGroundAlignedRotation(
-      normal,
-      Quaternion.FromEulerAngles(0, arenaRootYawRad(headingDeg), 0)
-    );
-  }
-
-  /**
-   * Projeta um ponto do mundo no plano do piso, ao longo da normal dele. E como
-   * "o jogador projetado no chao" e calculado: o device menos a propria altura,
-   * medida na direcao da normal.
-   */
-  private projectOntoPlane(point: Vector3, fit: GroundPlaneFit): Vector3 {
-    const normal = this.safeNormal(fit.normal);
-    const height = Vector3.Dot(point.subtract(fit.position), normal);
-
-    return point.subtract(normal.scale(height));
-  }
-
-  /** Normal do fit, com fallback vertical — um fit degenerado nao pode virar NaN. */
-  private safeNormal(normal: Vector3): Vector3 {
-    return normal.lengthSquared() > 1e-6 ? normal.normalizeToNew() : Vector3.Up();
+  private buildAnchorRotation(headingDeg: number): Quaternion {
+    return Quaternion.FromEulerAngles(0, arenaRootYawRad(headingDeg), 0);
   }
 
   /**
@@ -1227,6 +1350,13 @@ export class EighthWallARManager implements ArSessionController {
           && previousStatus !== "NORMAL"
         ) {
           this.pendingReanchorAtMs = performance.now() + REANCHOR_SETTLE_MS;
+          // O rastreador de piso e zerado JUNTO, e isso e obrigatorio: a
+          // relocalizacao move o sistema de coordenadas inteiro (saltos de ate
+          // 2,53 m ja foram medidos), entao a altura de piso acumulada antes
+          // dela descreve um mundo que nao existe mais. Sem o reset, o filtro
+          // faria exatamente o que foi projetado para fazer — recusar o degrau
+          // por tres amostras — e a reancoragem cairia na altura velha.
+          this.floorTracker.reset();
         }
 
         // Quem transforma isso em `tracking_lost`/`tracking_recovered` e a
@@ -1327,33 +1457,6 @@ export class EighthWallARManager implements ArSessionController {
   }
 
   /**
-   * Compoe a rotacao final: primeiro o yaw (direcao), depois inclina o "up" da
-   * arena ate a normal medida do piso. Rejeita normais muito fora da vertical
-   * (ruido do fit): acima de MAX_TILT mantem nivelado, evitando tombar a arena.
-   */
-  private buildGroundAlignedRotation(normal: Vector3, yawRotation: Quaternion): Quaternion {
-    const MAX_TILT_RAD = (12 * Math.PI) / 180;
-    const up = Vector3.Up();
-
-    if (normal.lengthSquared() < 1e-6) {
-      return yawRotation;
-    }
-
-    const n = normal.normalizeToNew();
-    const angle = Math.acos(Math.min(1, Math.max(-1, Vector3.Dot(up, n))));
-
-    if (!Number.isFinite(angle) || angle > MAX_TILT_RAD) {
-      return yawRotation;
-    }
-
-    const tilt = new Quaternion();
-    Quaternion.FromUnitVectorsToRef(up, n, tilt);
-
-    // tilt * yaw = aplica o yaw primeiro (em torno do up), depois inclina.
-    return tilt.multiply(yawRotation);
-  }
-
-  /**
    * Zera o preview de posicionamento. Chamado ao entrar e ao sair da RA: sem
    * isto a sessao seguinte comecaria com o contorno na cor da anterior e com
    * um `previewFit` velho, que ancoraria a arena num plano que nao existe
@@ -1362,11 +1465,18 @@ export class EighthWallARManager implements ArSessionController {
   private resetPreview(): void {
     this.previewState = "waiting-tracking";
     this.previewFailures = 0;
-    this.previewFit = null;
-    // Origem e heading vao junto com o fit, e nao por simetria: os tres sao a
+    this.floorTracker.reset();
+    this.lastFloorSample = null;
+    // Origem e heading vao junto com o piso, e nao por simetria: os tres sao a
     // MESMA medicao vista de tres angulos, e sobreviver um sem os outros
     // deixaria o proximo fechamento usar uma origem de um piso que nao existe
-    // mais.
+    // mais. Os suavizadores entram na mesma lista pelo mesmo motivo: o valor
+    // vigente dentro deles e memoria de uma sessao que acabou, e ele apareceria
+    // como um arrasto do arco vindo do lugar antigo no primeiro frame da
+    // proxima.
+    this.smoothedOriginX.reset();
+    this.smoothedOriginZ.reset();
+    this.smoothedHeadingDeg.reset();
     this.previewOrigin = null;
     this.previewHeadingDeg = 0;
     this.lastPreviewEvalMs = 0;

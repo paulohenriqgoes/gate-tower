@@ -118,7 +118,10 @@ interface TelemetryWiringOptions {
  * fora do `createScene` para deixar explicito ONDE cada evento da spec e
  * logado:
  *
- * - `arena_placed`: na ancoragem da arena (inicio do Beat 4);
+ * - `arena_placed`: na ancoragem da arena (inicio do Beat 4), com tracking status,
+ *   altura do device, altura do piso e inclinacao medida;
+ * - `floor_fit_sample`: a cada ~1 s durante a sessao, amostra do fit do piso
+ *   (inclinacao, altura, qualidade);
  * - `enemy_awakened`: no toque que acorda a torre inimiga (fim do Beat 4);
  * - `camera_distance_sample`: a cada 500 ms a partir de `arena_placed`;
  * - `tracking_lost` / `tracking_recovered`: nas mudancas de `trackingStatus`;
@@ -155,8 +158,14 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 	let isTrackingMonitorActive = false;
 	let hasLostTracking = false;
 
-	const arenaClosedObserver = arManager.onArenaClosedObservable.add(() => {
-		telemetry.log({ type: "arena_placed" });
+	const arenaClosedObserver = arManager.onArenaClosedObservable.add((report) => {
+		telemetry.log({
+			type: "arena_placed",
+			trackingStatus: report.trackingStatus ?? null,
+			deviceHeightM: report.deviceHeightM,
+			floorY: report.anchor.floorY,
+			tiltDeg: report.tiltDeg,
+		});
 		isTrackingMonitorActive = true;
 		telemetry.startCameraSampling(measureCameraDistanceMeters);
 	});
@@ -170,6 +179,18 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 
 	const reanchoredObserver = arManager.onArenaReanchoredObservable.add(({ offsetM }) => {
 		telemetry.log({ offsetM, type: "arena_reanchored" });
+	});
+
+	// Throttle de 1 Hz para evitar ruido: a medicao roda a 5 Hz e uma partida
+	// de 3 min geraria ~900 eventos se nao houvesse limite.
+	let lastFloorFitSampleLoggedMs = 0;
+	const floorFitSampledObserver = arManager.onFloorFitSampledObservable.add((sample) => {
+		const nowMs = performance.now();
+		if (nowMs - lastFloorFitSampleLoggedMs < 1000) {
+			return;
+		}
+		lastFloorFitSampleLoggedMs = nowMs;
+		telemetry.log({ type: "floor_fit_sample", ...sample });
 	});
 
 	const enemyAwakenedObserver = gameFlow.onEnemyAwakenedObservable.add(() => {
@@ -217,6 +238,7 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 	return () => {
 		arManager.onArenaClosedObservable.remove(arenaClosedObserver);
 		arManager.onArenaReanchoredObservable.remove(reanchoredObserver);
+		arManager.onFloorFitSampledObservable.remove(floorFitSampledObserver);
 		arManager.onPlacementRejectedObservable.remove(placementRejectedObserver);
 		arManager.onTrackingStatusChangedObservable.remove(trackingObserver);
 		gameFlow.onEnemyAwakenedObservable.remove(enemyAwakenedObserver);

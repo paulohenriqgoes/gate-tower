@@ -21,40 +21,48 @@ graus de campo de visao para cobrir um arco de 180, com dois tercos sempre cegos
 Com isso morrem a arena de mesa, o caminho unico central e o HUD 2D de combate.
 O plano de execucao esta em
 [`docs/guias/tower_gate_v3_plano_etapas.md`](docs/guias/tower_gate_v3_plano_etapas.md)
-— 11 etapas em 9 ondas, com validacao obrigatoria em device depois da Etapa 3 e
-de novo depois da Etapa 7, que e onde a tese e provada ou cai. **Nenhuma etapa
-comecou**: nada de `src/` foi tocado ate 2026-08-17. A investigacao vive em
+— 11 etapas em 9 ondas. **As Etapas 1, 2 e 3 estao implementadas e foram a
+device.** A investigacao vive em
 [`docs/experimentos/arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md).
+
+**O plano esta suspenso na Onda 3 por um bloqueador de device (2026-08-19):
+nao da para ancorar.** A medicao do piso por `hitTest` nao esta medindo piso —
+dispersao mediana de **32 cm** na nuvem de pontos, que produziu **12 recusas
+seguidas** por altura de device invalida (0,41 m com o jogador de pe). O conserto
+mudou de abordagem: em vez de adivinhar o chao, **o jogador marca a altura dele
+com o dedo**. O plano executavel esta em
+[`docs/specs/07-calibracao-manual-do-piso.md`](docs/specs/07-calibracao-manual-do-piso.md)
+e **nao comecou**.
 
 A demo do mundo vivo foi **encerrada por mudanca de direcao**, nao por resposta:
 a pergunta dela nunca chegou a ser medida com alguem de fora, e o palco em que
-ela media saiu de escopo. Tudo abaixo descreve o prototipo que existe **hoje no
-codigo** — a base de RA atravessa a v3 inteira; o modelo de jogo, nao.
+ela media saiu de escopo.
 
-### Bloqueadores conhecidos (2026-08-14, vistos em device)
+### Bloqueadores conhecidos (2026-08-19, vistos em device)
 
 Leia isto antes de mexer em qualquer coisa:
 
-1. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
+1. **Nao da para ancorar a arena de forma confiavel.** A altura do piso vem de um
+   fit de plano sobre ~12 `hitTest`, e a nuvem tem dispersao mediana de 32 cm —
+   nao e um plano. Em 2026-08-19 isso produziu 12 recusas seguidas por
+   `bad-height`, com altura medida de 0,41 m e 0,65 m com o jogador de pe, e
+   deixou a sessao intocavel. **E o bloqueador mais caro hoje.** Endereçado pela
+   [spec 07](docs/specs/07-calibracao-manual-do-piso.md) (altura marcada pelo
+   jogador), que **nao comecou**.
+2. **A arena desliza quando o jogador gira no lugar.** Medido em 2026-08-19: um
+   giro de 360 graus com o jogador parado afastou a arena de 1,09 m para **2,9 m
+   ainda sob `trackingStatus: NORMAL`**, e para 4,47 m depois de cair para
+   `LIMITED`. Como a v3 e feita de girar o tronco, isto ameaca a tese, e nao so o
+   conforto. A reancoragem existente so dispara em `LIMITED -> NORMAL`: **drift
+   sob `NORMAL` nao tem correcao nenhuma hoje**. Mitigacao planejada na Onda 4 da
+   spec 07 (a calibracao vira varredura e mapeia os flancos antes da partida).
+3. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
    antigo, **nao tocado ate hoje**). A camera liga e mais nada acontece.
    Suspeito nomeado: o projeto **nunca chama `XR8.run()` nem `XR8.stop()`** — o
-   ciclo de vida inteiro esta delegado ao `xrCameraBehavior`, entao "sair da RA"
-   solta a camera do Babylon mas nao para o engine. **E o bloqueador mais caro
-   que resta**, e ficou mais caro com a v3: antes impedia testar varias pessoas
-   seguidas; agora impede o proprio Ato 4, que termina em "jogar de novo" e exige
-   sair da partida para o album e voltar. Enderecado pela Etapa 11 do plano da v3
-   — e se surgir necessidade de testar em serie antes disso, essa etapa sobe de
-   posicao.
-2. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre** — o
-   usuario nao conseguiu antes da inversao do gate e nunca retestou depois, e a
-   v3 aposentou a pergunta: a arena deixa de ser um retangulo colocado numa
-   superficie e passa a nascer no chao, ao redor do jogador.
-3. **O deslize da arena nunca foi medido** (criterio do Beat 3: no maximo ~2 cm
-   em 60 s circulando). **O criterio mudou de forma com a v3**, nao so de numero:
-   como a v3 proibe deslocamento — o jogador gira o tronco e nao caminha —, medir
-   deslize *circulando* deixou de descrever o que o jogo faz. O equivalente passa
-   a ser deslize **girando no lugar**, e e a validacao serial da Onda 3 do plano.
-   O criterio antigo nao foi respondido; foi aposentado.
+   ciclo de vida inteiro esta delegado ao `xrCameraBehavior`. Enderecado pela
+   Etapa 11 do plano da v3.
+4. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
+   aposentou a pergunta, porque a arena nasce no chao ao redor do jogador.
 
 **Fechados em `e036b37`, todos confirmados em device:** o toque na carta em RA
 (era descompasso de tamanho de canvas, nao `cameraToUseForPointers`), as
@@ -64,9 +72,33 @@ O historico completo esta em
 
 ### Entregue
 
-Compila, com 183 testes de logica pura passando. **O que foi confirmado em
+Compila, com **253 testes** de logica pura passando. **O que foi confirmado em
 device e o que so compila esta separado na tabela "Estado atual" do diario** —
 consulte antes de assumir que algo funciona.
+
+**Da v3 (Etapas 1 a 3, mais a estabilizacao de 2026-08-19):**
+
+- **arco polar** (`src/arena/ArenaArc.ts`): setor, azimute, raio, enquadramento e
+  escolha de setor de spawn, como logica pura com teste. `ARENA_ARC_DEG` e
+  parametrizavel (decisao D7)
+- **escala de sala**: 1 unidade Babylon = 1 metro nos dois modos
+  (`src/arena/metrics.ts`); `AR_ARENA_SCALE` deixou de existir
+- **ancoragem egocentrica**: a arena nasce no jogador, com o azimute 0 na direcao
+  do celular no fechamento. **Ancora em device**, mas ver o bloqueador 1
+- **a arena e sempre nivelada pela gravidade** (2026-08-19). Ela copiava a normal
+  medida do piso, com clamp de 12 graus — herança da arena de mesa de 80 cm, onde
+  isso valia 8 cm. Num arco de 2,2 m de raio valia **47 cm**, e a medicao tem
+  mediana de 13 graus de inclinacao e picos de 48: e ruido, nao geometria. A
+  inclinacao continua sendo **medida** e vai para a telemetria, para a decisao
+  poder ser derrubada por dado
+- **a pose do arco e filtrada** (`src/ar/poseSmoothing.ts`, `src/ar/floorEstimate.ts`):
+  suavizacao exponencial independente de frame rate com snap em salto de
+  relocalizacao. **Confirmado em device: o arco parou de pular**
+- **telemetria da ancoragem**: `arena_placed` carrega `trackingStatus`,
+  `deviceHeightM`, `floorY` e `tiltDeg`; o evento `floor_fit_sample` registra a
+  qualidade da medicao de piso
+
+**Do prototipo table-scale (a v3 aposenta o modelo de jogo; a base de RA fica):**
 
 - **partida completa com vitoria do jogador** (2026-08-14, Android/Chrome):
   ancorar, explorar, acordar o inimigo por aproximacao, jogar cartas e vencer
@@ -181,22 +213,28 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 
 - O modo RA usa o engine 8th Wall (`@8thwall/engine-binary`), que roda em qualquer navegador mobile (iOS Safari incluido) — WebXR nao e mais utilizado.
 - Os artefatos do engine sao copiados de `node_modules` para `public/8thwall/` automaticamente no `npm install` (script `postinstall`).
-- O chao estimado pelo SLAM fica no plano `y = 0`; a arena e ancorada uma unica
-  vez, na profundidade real do piso estimada por um fit de plano ao redor do
-  toque (mundo em metros, escala absoluta).
-- **A escala em RA e fixa, nao ajustavel.** A arena tem um tamanho fisico
-  definido — 0,80 m no maior eixo — e o fator de conversao das unidades autorais
-  para metros e a constante `AR_ARENA_SCALE` (`0.8 / 24 ≈ 0.0333`), exportada por
-  `src/arena/ArenaSystem.ts`. O slider de escala foi removido: ele so serviria
-  para o jogador desmentir o tamanho da arena.
-- Antes de ancorar, o jogador ve o **contorno real da arena** deitado na
-  superficie, acompanhando o centro da tela. O ponto mirado e o **centro** da
-  arena. A cor do contorno diz se da para ancorar ali, e **o toque so confirma o
-  que o contorno mostra** — ele nao mede nada por conta propria, e ancora no
-  mesmo fit de plano que estava sendo exibido.
-- A avaliacao roda em **dois ritmos**: a pose do contorno acompanha a tela a cada
-  frame (1 hitTest central), e o veredito e recalculado a cada 200 ms (fit de
-  plano + 8 sondas nos cantos e meios de borda do contorno).
+- **A arena nasce no jogador, nao num ponto tocado do chao.** A origem e o
+  celular projetado no piso e o azimute 0 e a direcao em que ele aponta no
+  fechamento; o toque so diz "agora". Mundo em metros, escala absoluta,
+  `arenaRoot.scaling` sempre 1.
+- **A arena e sempre nivelada pela gravidade.** Ela ja copiou a normal medida do
+  fit de plano, com clamp de 12 graus; isso foi removido em 2026-08-19 porque, num
+  arco de 2,2 m de raio, os 12 graus valem 47 cm — e a normal medida tem mediana
+  de 13 graus e picos de 48, ou seja e ruido. A inclinacao continua sendo medida
+  e registrada na telemetria, nunca aplicada na cena.
+- **A altura do piso e o ponto fraco de todo o pipeline, e esta sendo trocada.**
+  Ela vem de um fit sobre ~12 `hitTest` numa faixa da metade inferior da tela, e
+  a nuvem tem dispersao mediana de 32 cm — nao e um plano. Ver o bloqueador 1 e a
+  [spec 07](docs/specs/07-calibracao-manual-do-piso.md), que passa a marcacao da
+  altura para o dedo do jogador.
+- **`FEATURE_POINT` continua na lista de tipos de `hitTest`.** Remove-lo ja foi
+  tentado e deixou o sensor mudo — nada ficava verde. Nao reverta sem dado novo.
+- Antes de ancorar, o jogador ve o **arco real** deitado no piso estimado,
+  centrado nele e girando junto. **O toque so confirma o que o contorno mostra**:
+  ele nao mede nada por conta propria.
+- A avaliacao roda em **dois ritmos**: a pose do arco acompanha o jogador a cada
+  frame (zero hitTest, puro calculo, e filtrada) e a medicao de piso e refeita a
+  cada 200 ms (12 hitTests).
 - **O gate recusa por prova contraria, nao por falta de prova.** Uma sonda que
   nao devolve leitura nao reprova nada: o hitTest do SLAM fica mudo o tempo todo
   em incidencia rasa, e tratar esse silencio como "nao cabe" recusou 79 toques em

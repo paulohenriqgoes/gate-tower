@@ -16,7 +16,17 @@
  */
 
 export type TelemetryEvent =
-  | { type: "arena_placed" }
+  | {
+      type: "arena_placed";
+      /** Status de tracking do SLAM no instante do fechamento. Discrimina se o tracking estava degradado. */
+      trackingStatus: string | null;
+      /** Altura do device sobre o piso medido, em metros. Discrimina se estava agachado ou se o fit pegou a mesa. */
+      deviceHeightM: number | null;
+      /** Altura do piso medido, em coordenada de mundo. Diagnostico da superficie encontrada pelo fit. */
+      floorY: number | null;
+      /** Inclinacao MEDIDA do fit do piso, em graus. Diagnostico de quao plana a superficie estava. */
+      tiltDeg: number | null;
+    }
   /**
    * Toque que nao fechou a arena, com o motivo vindo do gate
    * (`searching`, `bad-height`, `waiting-tracking`) e a altura de device
@@ -41,6 +51,12 @@ export type TelemetryEvent =
    * crescendo.
    */
   | { type: "arena_reanchored"; offsetM: number }
+  /**
+   * Amostra do fit do piso, registrada a ~1 Hz durante a sessao de jogo. Permite
+   * diagnosticar flutuacoes da medicao de piso e deslize da arena em tempo real:
+   * tiltDeg variando e floorY derivando caracterizam instabilidade da superficie.
+   */
+  | { type: "floor_fit_sample"; tiltDeg: number | null; floorY: number | null; inliers: number; spreadM: number | null }
   | { type: "enemy_awakened" }
   /**
    * Estagio do gatilho de proximidade da torre inimiga (dorme -> espia ->

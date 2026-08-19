@@ -130,10 +130,17 @@ export class ArenaGhost {
    *
    * `position` e a ORIGEM DO ARCO — o jogador projetado no piso estimado, e nao
    * um ponto apontado na tela. A rotacao vem pronta de quem chama e precisa ser
-   * a MESMA que o fechamento vai aplicar no `arenaRoot`, inclusive o
-   * alinhamento a normal real do piso: quando a world-up do SLAM nao bate com o
-   * chao (o caso comum), um contorno deitado na horizontal do mundo aparece
-   * visivelmente torto em relacao ao piso real.
+   * a MESMA que o fechamento vai aplicar no `arenaRoot` — se o contorno mostrar
+   * uma pose e o fechamento aplicar outra, o toque deixa de confirmar o que
+   * esta na tela, que e a regra que sustenta o gate inteiro.
+   *
+   * Ate a Etapa 3 essa rotacao incluia o alinhamento a normal medida do piso, e
+   * este comentario defendia isso dizendo que a world-up do SLAM "nao bate com
+   * o chao no caso comum". A sessao de device desmentiu: o que nao batia era o
+   * FIT — 3 hitTests rasos estimam normal muito pior do que o IMU estima a
+   * gravidade, e num arco de 2,2 m de raio o erro do fit virava 47 cm de
+   * inclinacao. Hoje a rotacao e so o yaw. Ver `buildAnchorRotation` em
+   * `EighthWallARManager.ts`.
    */
   public setPose(position: Vector3, rotation: Quaternion): void {
     this.root.rotationQuaternion = rotation;

@@ -65,6 +65,29 @@ export interface PlacementRejection {
 }
 
 /**
+ * A ancoragem MAIS a medicao que a produziu. O `ArenaAnchor` continua sendo so
+ * o referencial do jogo; o resto e diagnostico, e vive aqui para nao poluir a
+ * ancora com campos que o jogo nunca le.
+ */
+export interface ArenaAnchorReport {
+  anchor: ArenaAnchor;
+  /** Status de tracking do SLAM no instante do fechamento. */
+  trackingStatus: XR8TrackingStatus | null;
+  /** Altura do device sobre o piso, em metros. */
+  deviceHeightM: number | null;
+  /** Inclinacao MEDIDA do fit do piso, em graus. Medida, nunca aplicada na cena. */
+  tiltDeg: number | null;
+}
+
+/** Uma medicao de piso, amostrada a ~1 Hz para a telemetria. */
+export interface FloorFitSample {
+  tiltDeg: number | null;
+  floorY: number | null;
+  inliers: number;
+  spreadM: number | null;
+}
+
+/**
  * Contrato da sessao de RA visto pelo fluxo de jogo. Existe para inverter a
  * dependencia: o `GameFlow` fala com esta abstracao, nunca com o engine do
  * 8th Wall — e a regra de "logica de jogo independente do modo de render"
@@ -72,11 +95,11 @@ export interface PlacementRejection {
  */
 export interface ArSessionController {
   /**
-   * Arena fechada em volta do jogador, com a ancora resultante. E o fim do
-   * setup de RA e o inicio do Beat 4 (`world-alive`): nao existe uma
-   * confirmacao intermediaria — fechar JA e comecar o mundo vivo.
+   * Arena fechada em volta do jogador, com a ancora resultante e as metricas
+   * da medicao. E o fim do setup de RA e o inicio do Beat 4 (`world-alive`):
+   * nao existe uma confirmacao intermediaria — fechar JA e comecar o mundo vivo.
    */
-  readonly onArenaClosedObservable: Observable<ArenaAnchor>;
+  readonly onArenaClosedObservable: Observable<ArenaAnchorReport>;
   /** Arena devolvida ao jogador depois de uma relocalizacao do SLAM. */
   readonly onArenaReanchoredObservable: Observable<ArenaReanchor>;
   /** Sessao caiu ou nao subiu; carrega a mensagem que o menu exibe. */
@@ -98,6 +121,12 @@ export interface ArSessionController {
    * sem que o AR Manager precise conhecer a telemetria.
    */
   readonly onPlacementRejectedObservable: Observable<PlacementRejection>;
+  /**
+   * Medicao de piso amostrada a ~1 Hz. Existe porque a estabilidade do piso so
+   * foi diagnosticada olhando numero: sem esta serie, "o arco parou de pular" e
+   * impressao, nao resultado.
+   */
+  readonly onFloorFitSampledObservable: Observable<FloorFitSample>;
 
   /** Engine carregado e device compativel. */
   isARAvailable(): boolean;
