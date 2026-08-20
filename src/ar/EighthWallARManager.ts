@@ -3,38 +3,42 @@ import type { Camera } from "@babylonjs/core/Cameras/camera";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
-import { Observable } from "@babylonjs/core/Misc/observable";
+import { Observable, type Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 import { Button, Control, Ellipse, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui";
 
 import type { ArenaClosedReport, ArSessionController } from "./ArSessionController";
 import { ArenaGhost } from "./ArenaGhost";
-import { headingDegFromForward } from "./arenaHeading";
+import { ARENA_FACING_FORWARD, headingDegFromForward } from "./arenaHeading";
 import { attachCoachingOverlay, detachCoachingOverlay } from "./coachingOverlay";
+import { addedSince } from "./observerLeak";
+import {
+  browserPlayerHeightStorage,
+  normalizePlayerHeightM,
+  readPlayerHeightM,
+  writePlayerHeightM,
+} from "./playerHeight";
 import { playSpawnScaleIn } from "../fx/spawnAnimation";
 import { DiagnosticsOverlay } from "../ui/DiagnosticsOverlay";
+import { HeightStepper } from "../ui/HeightStepper";
 import type { HudLayer } from "../ui/HudLayer";
 
 const XR8_LOAD_TIMEOUT_MS = 15000;
 // Teto de frames aguardando a viewport estabilizar depois do fullscreen.
 const VIEWPORT_SETTLE_MAX_FRAMES = 30;
 
-/**
- * Altura declarada do jogador, em metros. E o numero que POE O PISO EM ZERO.
- *
- * A camera de RA nasce em `(0, esta altura, 0)` e o manager declara essa mesma
- * origem ao engine. O 8th Wall trata `origin` como "onde a camera comeca na
- * cena", entao o chao real cai exatamente em `y = 0` no frame zero — sem
- * hitTest, sem fit de plano, sem gate. Medido em device (2026-08-19): melhor
- * calibracao com `delta 0.00` a 1,55 m declarado.
- *
- * Fixo aqui de proposito. Torna-lo ajustavel e a etapa F3, e ela existe porque
- * a origem e capturada quando o celular esta na pose de APERTAR UM BOTAO, nao
- * na de jogar.
- */
-const DEFAULT_PLAYER_HEIGHT_M = 1.55;
-
 const STATUS_MODULE_NAME = "gate-ar-status";
+
+/**
+ * Quantas etapas do ciclo de vida cabem no painel de `?debug=1`.
+ *
+ * O painel corta valor comprido pela DIREITA (`DiagnosticsOverlay.render`), e
+ * numa trilha que cresce a etapa mais nova e justamente a que interessa — ou
+ * seja, o corte dele apagaria a informacao. Entao a trilha do painel mostra a
+ * cauda e marca com reticencias que houve corte; o console recebe sempre a
+ * trilha inteira.
+ */
+const LIFECYCLE_TRAIL_MAX_STAGES = 4;
 
 // Alvos de toque do painel de setup. O espaco ideal do HUD vale ~0.54 px CSS
 // por px em celular, entao um botao precisa de ~82px aqui para chegar aos 44px
@@ -92,9 +96,32 @@ export class EighthWallARManager implements ArSessionController {
   private placePrompt: TextBlock | null = null;
   private arenaGridNode: TransformNode | null = null;
 
+  /**
+   * A camera de RA, criada UMA vez e reusada em todas as sessoes.
+   *
+   * Ela era descartada no `exitAR` e recriada no `enterAR` seguinte, e isso
+   * quebrava a segunda sessao de um jeito silencioso. O modulo `babylonjsrenderer`
+   * do 8th Wall guarda as ultimas intrinsics num fechamento que sobrevive ao
+   * `stop()`, e so chama `camera.freezeProjectionMatrix(...)` quando elas MUDAM
+   * — o mesmo aparelho devolve as mesmas intrinsics, entao uma camera nova
+   * nunca receberia a matriz de projecao do device e ficaria com o campo de
+   * visao padrao do Babylon, desalinhado do feed.
+   *
+   * Reusar a camera tem um preco que o `enterAR` paga explicitamente: a pose
+   * dela precisa voltar para a origem declarada antes de cada attach.
+   */
   private arCamera: FreeCamera | null = null;
   private previousCamera: Camera | null = null;
   private cameraBehavior: Behavior<Camera> | null = null;
+  /**
+   * Os observers de render que o `attach` do 8th Wall registrou nesta sessao,
+   * para que o `exitAR` possa remover o que o `detach` dele nao remove. Ver
+   * `./observerLeak.ts` para o mecanismo.
+   */
+  private behaviorRenderObservers: {
+    observable: Observable<Scene>;
+    observer: Observer<Scene>;
+  }[] = [];
 
   private isXR8Ready = false;
   private hasXR8LoadFailed = false;
@@ -105,8 +132,27 @@ export class EighthWallARManager implements ArSessionController {
   private nonARScale = new Vector3(1, 1, 1);
   private latestTrackingStatus: XR8TrackingStatus | null = null;
 
-  /** Altura declarada do jogador. F3 troca a constante por um controle. */
-  private playerHeightM = DEFAULT_PLAYER_HEIGHT_M;
+  /**
+   * O gesto de colocacao foi dado e a sessao espera o tracking voltar a
+   * `NORMAL` para revelar a arena. Ver `confirmArenaHere`.
+   */
+  private isSettlingArena = false;
+  /** O HUD de batalha foi escondido pela transicao e precisa voltar no fim. */
+  private restoreBattleHudOnSettle = false;
+
+  /** Quantas vezes esta pagina entrou em RA. So instrumentacao. */
+  private sessionCount = 0;
+  /** Etapas do ciclo de vida da sessao corrente, na ordem em que dispararam. */
+  private lifecycleTrace: string[] = [];
+
+  /**
+   * Altura declarada do jogador — o `origin.y` que poe o piso em zero. Nasce da
+   * preferencia persistida e so muda por `setPlayerHeight`, que e o dono unico
+   * deste numero em todo o projeto.
+   */
+  private playerHeightM = readPlayerHeightM(browserPlayerHeightStorage());
+  /** Controle de altura da fase de setup. Existe so com a sessao no ar. */
+  private heightStepper: HeightStepper | null = null;
 
   public constructor(
     scene: Scene,
@@ -130,21 +176,70 @@ export class EighthWallARManager implements ArSessionController {
     return this.isXR8Ready && this.isARSupported;
   }
 
+  /** A altura declarada em vigor, ja normalizada. */
+  public getPlayerHeight(): number {
+    return this.playerHeightM;
+  }
+
+  /**
+   * Declara a altura do jogador — e, com ela, onde fica o piso.
+   *
+   * Este e o dono unico de `origin.y`. Ele normaliza, persiste, atualiza o
+   * controle da sessao e, se a sessao estiver no ar, REDECLARA a origem ao
+   * engine na hora: a arena sobe e desce contra o piso real sem reiniciar nada.
+   *
+   * A correcao com a sessao no ar e a razao de esta unidade existir. A origem e
+   * capturada no `onAttach`, quando o celular esta na pose de apertar um botao
+   * e nao na de jogar; medido em device, isso deu `delta` de -0,49 a -0,92 m
+   * numa sessao em que o jogador entrou com a mao levantada. Sem recalibrar
+   * depois do attach, todo o resto da sessao herda o offset.
+   */
+  public setPlayerHeight(heightM: number): void {
+    // Normaliza ANTES de gravar o campo: `origin` nao-finito contamina o frame
+    // do engine de forma permanente, e o campo alimenta tambem a criacao da
+    // camera. Nenhum valor cru pode entrar aqui.
+    const next = normalizePlayerHeightM(heightM);
+
+    if (next === this.playerHeightM) {
+      return;
+    }
+
+    this.playerHeightM = next;
+    writePlayerHeightM(browserPlayerHeightStorage(), next);
+    this.heightStepper?.setValue(next);
+
+    if (this.isInAR) {
+      this.redeclareOriginHeight();
+    }
+  }
+
   /**
    * Volta para a fase de confirmacao sem derrubar a sessao. Privado: quem
    * aciona e o botao "Reposicionar" de `?debug=1`, aqui dentro.
    *
    * Nao ha mais ancora a zerar: a arena continua exatamente onde sempre esteve,
-   * na origem. O que muda e so quem esta em cena — a arena esconde e o contorno
-   * volta.
+   * na origem. O botao devolve a sessao ao modo de setup, e o proximo toque
+   * passa pelo MESMO `confirmArenaHere()` da colocacao inicial — reposicionar
+   * nao e um caminho paralelo, e o mesmo gesto uma segunda vez.
+   *
+   * O HUD de batalha sai de cena junto (`DR-3`: o gesto e uma transicao de
+   * fase, nao uma correcao no meio da acao) e volta quando o tracking voltar.
+   * O relogio da partida NAO para: ele e de parede por decisao antiga, e pausar
+   * a apresentacao nao pode virar pausar a partida.
    */
   private repositionArena(): void {
-    if (!this.isInAR) {
+    if (!this.isInAR || this.isSettlingArena) {
       return;
+    }
+
+    if (this.hasClosedArena) {
+      this.restoreBattleHudOnSettle = true;
+      this.hud.setBattleHudVisible(false);
     }
 
     this.hasClosedArena = false;
     this.arenaRoot.setEnabled(false);
+    this.arenaGhost?.setState("calibrating");
     this.arenaGhost?.setVisible(true);
     this.setSetupPanelVisible(false);
     this.updateUI();
@@ -275,17 +370,20 @@ export class EighthWallARManager implements ArSessionController {
     this.loaderPanel = panel;
     this.spinnerRotator = rotator;
 
-    // O texto mudou junto com a fundacao. "Vire para onde quer olhar" era
-    // verdade quando o azimute 0 saia da direcao do celular no toque; hoje o
-    // azimute 0 e o +Z do mundo, fixo desde o frame zero, e girar antes de
-    // tocar nao escolhe mais nada. Prometer escolha que nao existe e pior do
-    // que nao prometer nada. Quem devolve a escolha e a F4, com `recenter()`.
-    const prompt = new TextBlock("ar-place-prompt", "Toque para entrar no mundo");
+    // O texto voltou a prometer a escolha de direcao, e agora ele pode: a
+    // RA-F4 poe `recenter()` no toque, e o azimute 0 do arco passa a ser a
+    // direcao em que o celular aponta no momento do gesto. Entre a RA-F2 e a
+    // RA-F4 esta promessa era mentira — o azimute 0 era o +Z do mundo, fixo
+    // desde o frame zero, e girar antes de tocar nao escolhia nada.
+    const prompt = new TextBlock("ar-place-prompt", "Vire para onde quer olhar\ne toque para entrar");
     prompt.color = "white";
-    prompt.fontSize = 20;
+    // 28 e o piso de legibilidade que `src/ui/guiUnits.test.ts` mede (~16px CSS
+    // em retrato de ~412px). O valor era 20 desde quando o prompt cabia numa
+    // linha; agora ele tem duas, e e o texto central da fase de colocacao.
+    prompt.fontSize = 28;
     prompt.textWrapping = true;
     prompt.width = "78%";
-    prompt.height = "70px";
+    prompt.height = "88px";
     prompt.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     prompt.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     prompt.isHitTestVisible = false;
@@ -293,11 +391,41 @@ export class EighthWallARManager implements ArSessionController {
     ui.addControl(prompt);
     this.placePrompt = prompt;
 
+    this.createHeightStepperUI();
+
     this.scene.onBeforeRenderObservable.add(() => {
       if (this.spinnerRotator && this.loaderPanel?.isVisible) {
         this.spinnerRotator.rotation += 0.09;
       }
     });
+  }
+
+  /**
+   * Controle de altura da fase de setup, no terco inferior (zona do polegar).
+   *
+   * Ele fica ao lado do prompt de confirmacao, e nao na tela inicial apenas,
+   * porque o erro que ele conserta so aparece DEPOIS de entrar: a origem e
+   * capturada no `onAttach`, com o celular na pose de apertar um botao. Quem
+   * entra com a mao levantada declara um piso alto demais, e sem corrigir com a
+   * sessao no ar a partida inteira herda o offset.
+   *
+   * Tocar nele nao confirma a arena: o GUI marca `skipOnPointerObservable`, e o
+   * `WorldTapRouter` nem chega a ver o toque.
+   */
+  private createHeightStepperUI(): void {
+    const stepper = new HeightStepper("ar-height", "Sua altura", this.playerHeightM);
+
+    stepper.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    stepper.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    stepper.root.top = "-40px";
+    stepper.root.isVisible = false;
+
+    stepper.onChangedObservable.add((heightM) => {
+      this.setPlayerHeight(heightM);
+    });
+
+    this.hud.getTexture().addControl(stepper.root);
+    this.heightStepper = stepper;
   }
 
   /**
@@ -310,7 +438,11 @@ export class EighthWallARManager implements ArSessionController {
    */
   private refreshPlacementOverlay(): void {
     const inPlacement = this.isInAR && !this.hasClosedArena;
-    const ready = inPlacement && this.isTrackingReady();
+    // Durante a espera do gesto o toque JA foi dado e nao faz mais nada. Um
+    // prompt dizendo "toque" com o toque inerte le como controle quebrado — o
+    // projeto ja aprendeu isso com a carta que recusava em silencio.
+    const settling = this.isSettlingArena;
+    const ready = inPlacement && !settling && this.isTrackingReady();
     // So enquanto o engine nao reportou nada: a partir dai a calibracao e
     // comunicada pelo coaching overlay, e dois indicadores girando confundem.
     const waiting = inPlacement && !ready && this.latestTrackingStatus === null;
@@ -321,6 +453,13 @@ export class EighthWallARManager implements ArSessionController {
 
     if (this.placePrompt) {
       this.placePrompt.isVisible = ready;
+    }
+
+    // O controle de altura acompanha a fase de setup inteira, e nao so o
+    // momento `ready`: quem entra com a mao levantada precisa poder corrigir
+    // enquanto o tracking ainda converge, olhando a arena contra o piso.
+    if (this.heightStepper) {
+      this.heightStepper.root.isVisible = inPlacement && !settling;
     }
 
     // O texto do topo e MUDO por padrao. Ele so aparece quando ha um aviso
@@ -406,11 +545,97 @@ export class EighthWallARManager implements ArSessionController {
    * altura a validar nem superficie a encontrar — a arena ja esta na origem
    * desde o primeiro frame. "Toquei varias vezes e nao aconteceu nada" deixou
    * de ser um estado alcancavel.
+   *
+   * Desde a RA-F4 o toque tambem ESCOLHE A DIRECAO, via `confirmArenaHere()`.
+   * Por isso o `true` daqui nao significa mais "a arena apareceu": significa
+   * "o toque era meu". A arena aparece quando o tracking voltar a `NORMAL`, e
+   * quem avisa e o `onArenaClosedObservable`, como sempre.
    */
   public tryCloseArenaAtPlayer(): boolean {
-    if (!this.isInAR || this.hasClosedArena) {
+    if (!this.isInAR || this.hasClosedArena || this.isSettlingArena) {
       return false;
     }
+
+    this.confirmArenaHere();
+
+    return true;
+  }
+
+  /**
+   * O gesto de colocacao: o jogador vira o arco para onde esta olhando.
+   *
+   * `recenter()` e o UNICO jeito de mover a arena neste projeto — e ele nao
+   * move a arena, move o jogador. A arena continua onde sempre esteve, na
+   * origem; o que o engine faz e remapear o mundo para que a pose ATUAL do
+   * device vire a origem declarada, com o `facing` que fixa o azimute 0 no +Z.
+   * Como o jogador e o vertice do arco, ancorar e reposicionar sao o mesmo
+   * gesto, e este metodo serve aos dois.
+   *
+   * ## Por que ele entra como transicao, e nao como correcao instantanea
+   *
+   * Decisao `DR-3`: `recenter()` descarta o mapa do SLAM, o tracking cai para
+   * `LIMITED` e leva mais de 30 s para reconvergir. Entao o gesto devolve o
+   * coaching overlay, esconde a arena e so entrega o mundo de volta quando o
+   * tracking estiver `NORMAL` outra vez.
+   *
+   * **Isto ainda nao foi visto em device.** Se o custo previsto por `DR-3` nao
+   * aparecer — se o tracking nunca sair de `NORMAL` —, a transicao fecha no
+   * frame seguinte e o gesto parece instantaneo. Essa e a leitura honesta do
+   * resultado, e nao um bug: o gate espera pelo estado, nao por um relogio.
+   */
+  public confirmArenaHere(): void {
+    if (!this.isInAR || this.isSettlingArena) {
+      return;
+    }
+
+    const xr8 = window.XR8;
+
+    // A arena sai de cena ANTES do recenter: durante o remapeamento ela estaria
+    // desenhada contra um mundo que ja mudou de lugar.
+    this.hasClosedArena = false;
+    this.arenaRoot.setEnabled(false);
+    this.arenaGhost?.setState("calibrating");
+    this.arenaGhost?.setVisible(true);
+    this.setSetupPanelVisible(false);
+
+    // O overlay oficial volta a falar, porque a partir daqui o que o jogador
+    // precisa fazer e exatamente o que ele pede: mover o celular ate a escala
+    // reconvergir.
+    //
+    // Desanexar antes de anexar nao e paranoia: na colocacao INICIAL o modulo
+    // ainda esta registrado (quem o remove e `finishPlacementCoaching`, que so
+    // roda no fim), e o engine recusa nome repetido com um aviso no console em
+    // vez de re-anexar. O ciclo tambem re-arma o estado interno do overlay, que
+    // guarda o ultimo `trackingStatus` num fechamento de modulo.
+    if (xr8) {
+      detachCoachingOverlay(xr8);
+      attachCoachingOverlay(xr8);
+    }
+
+    this.isSettlingArena = true;
+    this.latestTrackingStatus = null;
+    this.diagnostics?.setField("arena", "recentrando");
+    this.traceLifecycle("recenter");
+
+    try {
+      xr8?.XrController.recenter();
+    } catch (error) {
+      console.error("[EighthWallARManager] Falha ao recentrar a arena.", error);
+    }
+
+    this.updateUI();
+  }
+
+  /**
+   * Fim da transicao: o tracking voltou, a arena volta com ele.
+   *
+   * Chamado do `onUpdate` do pipeline, a CADA frame em que a espera esteja
+   * aberta e o tracking pronto — e nao na mudanca de status. A diferenca
+   * importa: se `recenter()` nao derrubar o tracking, nao existe mudanca para
+   * escutar, e um gate preso em "espere virar NORMAL" nunca abriria.
+   */
+  private finishArenaSettle(): void {
+    this.isSettlingArena = false;
 
     this.applyArenaScale();
     this.arenaRoot.setEnabled(true);
@@ -421,13 +646,17 @@ export class EighthWallARManager implements ArSessionController {
     this.arenaGhost?.setVisible(false);
     this.finishPlacementCoaching();
     this.diagnostics?.setField("arena", "confirmada");
+
+    if (this.restoreBattleHudOnSettle) {
+      this.restoreBattleHudOnSettle = false;
+      this.hud.setBattleHudVisible(true);
+    }
+
     this.updateUI();
 
     this.onArenaClosedObservable.notifyObservers({
       trackingStatus: this.latestTrackingStatus,
     });
-
-    return true;
   }
 
   /**
@@ -450,13 +679,18 @@ export class EighthWallARManager implements ArSessionController {
    * A componente Y do olhar e descartada de proposito — inclinar o celular para
    * baixo para olhar o chao nao pode mudar para que flanco ele aponta.
    *
-   * Le `arCamera` quando existe e cai em `scene.activeCamera` fora da RA: no
+   * Le a camera de RA DENTRO da sessao e a `scene.activeCamera` fora dela: no
    * modo tela quem dirige a camera e o jogador pelo mouse/toque, e a mesma
    * medida vale — e o que mantem a regra de que a logica de jogo independe do
    * modo de render.
+   *
+   * A condicao e `isInAR`, e nao "a `arCamera` existe", porque desde que ela
+   * passou a ser reusada entre sessoes ela existe TAMBEM no modo tela — parada
+   * na ultima pose do device. Perguntar por existencia devolveria o yaw
+   * congelado da sessao anterior para o jogo inteiro.
    */
   private currentHeadingDeg(): number {
-    const camera = this.arCamera ?? this.scene.activeCamera;
+    const camera = this.isInAR && this.arCamera ? this.arCamera : this.scene.activeCamera;
 
     if (!camera) {
       return 0;
@@ -504,6 +738,9 @@ export class EighthWallARManager implements ArSessionController {
     }
 
     this.isEnteringAR = true;
+    this.sessionCount += 1;
+    this.lifecycleTrace.length = 0;
+    this.traceLifecycle("enter");
     this.updateUI("Iniciando RA...", false);
 
     try {
@@ -531,6 +768,8 @@ export class EighthWallARManager implements ArSessionController {
       this.applyArenaScale();
       this.arenaRoot.setEnabled(false);
       this.hasClosedArena = false;
+      this.isSettlingArena = false;
+      this.restoreBattleHudOnSettle = false;
       this.latestTrackingStatus = null;
       this.arenaGhost?.setState("calibrating");
       this.arenaGhost?.setVisible(true);
@@ -542,22 +781,26 @@ export class EighthWallARManager implements ArSessionController {
       this.previousCamera = this.scene.activeCamera;
       this.previousCamera?.detachControl();
 
-      // A posicao ANTES do attach e o que o modulo Babylon do 8th Wall le para
-      // declarar a origem do mundo. Piso em y = 0 nasce daqui — e por isso a
-      // camera nao nasce mais num `(0, 2, 0)` arbitrario.
-      this.arCamera = new FreeCamera(
-        "ar-camera",
-        new Vector3(0, this.playerHeightM, 0),
-        this.scene
-      );
-      this.arCamera.minZ = 0.01;
-      this.arCamera.maxZ = 1000;
-      this.scene.activeCamera = this.arCamera;
+      const camera = this.ensureArCamera();
+
+      // A POSE da camera antes do attach e o que declara a origem do mundo, e
+      // vale para as duas componentes: o `onAttach` do modulo Babylon do 8th
+      // Wall chama `updateCameraProjectionMatrix({origin: camera.position,
+      // facing: camera.rotationQuaternion})` — DEPOIS do `onStart` em que o
+      // nosso `applyDeclaredOrigin()` roda. Quem tem a ultima palavra, portanto,
+      // e esta pose; e por isso que o piso cai em y = 0 sem medir nada.
+      //
+      // Zerar aqui virou OBRIGATORIO quando a camera passou a sobreviver a
+      // sessao: sem isso a segunda entrada declararia como origem a pose em que
+      // o jogador largou o celular na primeira, e o arco nasceria girado.
+      camera.position.set(0, this.playerHeightM, 0);
+      camera.rotation.setAll(0);
+      this.scene.activeCamera = camera;
 
       this.cameraBehavior = xr8.Babylonjs.xrCameraBehavior({
         cameraConfig: { direction: xr8.XrConfig.camera().BACK },
       });
-      this.arCamera.addBehavior(this.cameraBehavior, true);
+      this.attachCameraBehavior(this.cameraBehavior, camera);
 
       this.isInAR = true;
       this.updateUI();
@@ -571,11 +814,30 @@ export class EighthWallARManager implements ArSessionController {
     }
   }
 
+  /**
+   * Derruba a sessao deixando o engine em estado de subir outra.
+   *
+   * ## A ordem aqui e o conserto, e ela e o inverso da anterior
+   *
+   * O `detach` do behavior do 8th Wall faz `XR8.stop()` seguido de
+   * `XR8.clearCameraPipelineModules()` — ou seja, ele JA remove o modulo de
+   * status e o coaching overlay, e na ordem que o engine promete: o `stop`
+   * entrega `onDetach` a quem ainda esta anexado, e so entao o `clear` entrega
+   * `onRemove` e apaga todo mundo. A versao anterior removia os nossos ANTES
+   * disso e com isso engolia o `onDetach` deles — justamente a marca que diz
+   * se a sessao chegou a subir.
+   *
+   * Sobra para nos o que o `detach` do 8th Wall esquece: os observers de render
+   * que o `attach` registrou na cena.
+   */
   public exitAR(): void {
-    // Os modulos eram adicionados a cada `enterAR` e nunca removidos: entrar,
-    // sair e entrar de novo empilhava uma instancia nova por vez.
     const xr8 = window.XR8;
-    if (xr8) {
+
+    if (this.cameraBehavior && this.arCamera) {
+      this.arCamera.removeBehavior(this.cameraBehavior);
+    } else if (xr8) {
+      // Sessao que caiu antes de anexar o behavior (permissao negada, viewport
+      // que nunca estabilizou). Ninguem vai limpar o pipeline por nos.
       try {
         xr8.removeCameraPipelineModule(STATUS_MODULE_NAME);
       } catch (error) {
@@ -585,16 +847,11 @@ export class EighthWallARManager implements ArSessionController {
       detachCoachingOverlay(xr8);
     }
 
-    if (this.arCamera && this.cameraBehavior) {
-      this.arCamera.removeBehavior(this.cameraBehavior);
-    }
-
     this.cameraBehavior = null;
+    this.releaseBehaviorRenderObservers();
 
-    if (this.arCamera) {
-      this.arCamera.dispose();
-      this.arCamera = null;
-    }
+    // A `arCamera` NAO e descartada — ver o campo. Ela sai de cena voltando a
+    // camera anterior, e volta na proxima sessao com a pose zerada.
 
     // O attach do behavior desliga o autoClear para desenhar o feed da camera.
     this.scene.autoClear = true;
@@ -607,6 +864,8 @@ export class EighthWallARManager implements ArSessionController {
 
     this.isInAR = false;
     this.hasClosedArena = false;
+    this.isSettlingArena = false;
+    this.restoreBattleHudOnSettle = false;
     this.latestTrackingStatus = null;
     this.arenaGhost?.setVisible(false);
     this.setSetupPanelVisible(false);
@@ -619,6 +878,93 @@ export class EighthWallARManager implements ArSessionController {
     this.setArenaGridVisible(true);
 
     this.updateUI();
+  }
+
+  /** A camera de RA, criada na primeira sessao e reusada em todas. */
+  private ensureArCamera(): FreeCamera {
+    if (this.arCamera) {
+      return this.arCamera;
+    }
+
+    const camera = new FreeCamera("ar-camera", new Vector3(0, this.playerHeightM, 0), this.scene);
+    camera.minZ = 0.01;
+    camera.maxZ = 1000;
+    this.arCamera = camera;
+
+    return camera;
+  }
+
+  /**
+   * Anexa o behavior do 8th Wall guardando os observers de render que ele
+   * registra na cena.
+   *
+   * O `attach` dele assina `onBeforeRenderObservable` e `onAfterRenderObservable`
+   * — e o `detach` nao remove nenhum dos dois. Como os dois `add` sao anonimos
+   * (o `Observer` devolvido e jogado fora), a unica forma de alcanca-los depois
+   * e comparar a lista antes e depois. O `true` do `addBehavior` e o que torna
+   * essa comparacao exata: com ele o attach roda AGORA, no mesmo tick, e nada
+   * mais entra na lista no meio.
+   *
+   * O porque de isto importar esta em `./observerLeak.ts`: sem a remocao, a
+   * enesima sessao dirige o pipeline do engine N vezes por frame.
+   */
+  private attachCameraBehavior(behavior: Behavior<Camera>, camera: FreeCamera): void {
+    const beforeRender = this.scene.onBeforeRenderObservable;
+    const afterRender = this.scene.onAfterRenderObservable;
+    const beforeSnapshot = beforeRender.observers.slice();
+    const afterSnapshot = afterRender.observers.slice();
+
+    camera.addBehavior(behavior, true);
+
+    this.behaviorRenderObservers = [
+      ...addedSince(beforeSnapshot, beforeRender.observers).map((observer) => ({
+        observable: beforeRender,
+        observer,
+      })),
+      ...addedSince(afterSnapshot, afterRender.observers).map((observer) => ({
+        observable: afterRender,
+        observer,
+      })),
+    ];
+
+    this.diagnostics?.setField("xr8Observers", String(this.behaviorRenderObservers.length));
+  }
+
+  /** Desfaz o que `attachCameraBehavior` guardou. Idempotente. */
+  private releaseBehaviorRenderObservers(): void {
+    for (const { observable, observer } of this.behaviorRenderObservers) {
+      observable.remove(observer);
+    }
+
+    this.behaviorRenderObservers = [];
+  }
+
+  /**
+   * Marca uma etapa do ciclo de vida da sessao e publica a trilha.
+   *
+   * Existe porque a leitura desta unidade so se decide em device, e device nao
+   * tem console: a trilha vai para o painel de `?debug=1` com o numero da
+   * sessao na frente. O que cada leitura diz:
+   *
+   * - `s2 enter>attach>start>update` — a sessao subiu e o pipeline entrega
+   *   frame; se a arena mesmo assim nao aparecer, o defeito nao e de ciclo de
+   *   vida;
+   * - `s2 enter>attach>start` sem `update` — a sessao subiu e o pipeline
+   *   emudeceu. E o sintoma de 2026-08-19, e a previsao do vazamento de
+   *   observers descrito em `./observerLeak.ts`;
+   * - `s2 enter` sozinho — o engine nem chegou a anexar o modulo, e o problema
+   *   e antes disso (permissao, canvas, `XR8.run`).
+   */
+  private traceLifecycle(stage: string): void {
+    this.lifecycleTrace.push(stage);
+
+    const shown = this.lifecycleTrace.slice(-LIFECYCLE_TRAIL_MAX_STAGES);
+    const elipse = shown.length < this.lifecycleTrace.length ? "…" : "";
+
+    console.info(
+      `[EighthWallARManager] sessao ${this.sessionCount}: ${this.lifecycleTrace.join(">")}`
+    );
+    this.diagnostics?.setField("lifecycle", `s${this.sessionCount} ${elipse}${shown.join(">")}`);
   }
 
   /**
@@ -640,29 +986,84 @@ export class EighthWallARManager implements ArSessionController {
       return;
     }
 
-    // Blindagem obrigatoria: `origin` nao-finito contamina o frame do engine de
-    // forma PERMANENTE — nao existe caminho de volta sem reiniciar a sessao.
-    if (!Number.isFinite(this.playerHeightM)) {
-      console.error(
-        `[EighthWallARManager] altura de jogador nao-finita (${this.playerHeightM}); origem nao declarada.`
-      );
+    const origin = this.declaredOrigin();
+
+    if (!origin) {
       return;
     }
 
     xr8.XrController.updateCameraProjectionMatrix({
-      origin: { x: 0, y: this.playerHeightM, z: 0 },
-      facing: { w: 1, x: 0, y: 0, z: 0 },
+      origin,
+      facing: ARENA_FACING_FORWARD,
     });
 
     this.diagnostics?.setField("originY", this.playerHeightM.toFixed(2));
   }
 
+  /**
+   * Redeclara SO a altura da origem, com a sessao no ar. E o que faz a arena
+   * subir e descer contra o piso real em tempo real.
+   *
+   * `facing` fica de fora de proposito, e a ausencia e o ponto: ele e a
+   * orientacao da origem, e reenvia-lo giraria o mundo inteiro debaixo de uma
+   * arena que nao tem rotacao para compensar. Ajustar a altura nao pode mexer
+   * em para onde o arco olha — quem faz isso e o gesto da RA-F4.
+   *
+   * `updateRecenterPoint: true` nao e detalhe: ele leva o ponto de `recenter()`
+   * junto com a origem nova. Sem ele, o gesto de colocacao da RA-F4 devolveria
+   * o jogador a altura antiga e desfaria este ajuste.
+   */
+  private redeclareOriginHeight(): void {
+    const xr8 = window.XR8;
+    const origin = this.declaredOrigin();
+
+    if (!xr8 || !origin) {
+      return;
+    }
+
+    xr8.XrController.updateCameraProjectionMatrix({ origin, updateRecenterPoint: true });
+
+    this.diagnostics?.setField("originY", this.playerHeightM.toFixed(2));
+  }
+
+  /**
+   * A origem declarada, ou `null` quando a altura nao presta.
+   *
+   * Blindagem obrigatoria e centralizada: `origin` nao-finito contamina o frame
+   * do engine de forma PERMANENTE — nao existe caminho de volta sem reiniciar a
+   * sessao. `setPlayerHeight` ja normaliza antes de gravar o campo, entao na
+   * pratica isto nunca dispara; e justamente por isso ele fica, e nao porque
+   * hoje ha um caminho conhecido ate aqui.
+   */
+  private declaredOrigin(): { x: number; y: number; z: number } | null {
+    if (!Number.isFinite(this.playerHeightM)) {
+      console.error(
+        `[EighthWallARManager] altura de jogador nao-finita (${this.playerHeightM}); origem nao declarada.`
+      );
+
+      return null;
+    }
+
+    return { x: 0, y: this.playerHeightM, z: 0 };
+  }
+
+  /**
+   * O modulo do app no pipeline do engine: declara a origem, le o tracking e
+   * — desde a RA-F5 — marca o ciclo de vida da sessao.
+   *
+   * As marcas nao sao decoracao: a causa da segunda sessao nao subir foi lida
+   * no bundle, nao observada em device, e o que separa "lido" de "provado" e
+   * exatamente saber quais destes callbacks disparam na segunda entrada. Ver
+   * `traceLifecycle` para como cada trilha se le.
+   */
   private createStatusPipelineModule(): XR8CameraPipelineModule {
     let hasDumpedEventKeys = false;
+    let hasTracedFirstUpdate = false;
 
     return {
       name: STATUS_MODULE_NAME,
       onAttach: (event) => {
+        this.traceLifecycle("attach");
         this.reportVideoSize(event);
 
         if (hasDumpedEventKeys) {
@@ -678,12 +1079,27 @@ export class EighthWallARManager implements ArSessionController {
         this.diagnostics?.setField("eventKeys", `${Object.keys(event).length} chaves`);
       },
       onStart: () => {
+        this.traceLifecycle("start");
         this.applyDeclaredOrigin();
+      },
+      onDetach: () => {
+        this.traceLifecycle("detach");
+      },
+      onRemove: () => {
+        this.traceLifecycle("remove");
       },
       onVideoSizeChange: (event) => {
         this.reportVideoSize(event);
       },
       onUpdate: (event) => {
+        // So o PRIMEIRO update da sessao vira marca: o que se quer saber e se o
+        // pipeline chegou a entregar um frame, e nao quantos. Marcar todos
+        // encheria a trilha e afogaria o console.
+        if (!hasTracedFirstUpdate) {
+          hasTracedFirstUpdate = true;
+          this.traceLifecycle("update");
+        }
+
         const status = event?.processCpuResult?.reality?.trackingStatus;
         const reason = event?.processCpuResult?.reality?.trackingReason;
 
@@ -693,6 +1109,13 @@ export class EighthWallARManager implements ArSessionController {
         });
 
         if (!status || status === this.latestTrackingStatus) {
+          // A espera do gesto de colocacao e avaliada AQUI tambem, e nao so no
+          // ramo de mudanca: se `recenter()` nao derrubar o tracking, nao ha
+          // mudanca de status para escutar e a arena nunca voltaria.
+          if (status && this.isSettlingArena && this.isTrackingReady()) {
+            this.finishArenaSettle();
+          }
+
           return;
         }
 
@@ -712,6 +1135,10 @@ export class EighthWallARManager implements ArSessionController {
         // Reflete o status na tela (celular nao tem console acessivel).
         if (this.isInAR) {
           this.updateUI();
+        }
+
+        if (this.isSettlingArena && this.isTrackingReady()) {
+          this.finishArenaSettle();
         }
       },
       onCameraStatusChange: ({ status }) => {

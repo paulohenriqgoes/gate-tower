@@ -1,7 +1,9 @@
 import { Button, Control, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui";
 import { Observable } from "@babylonjs/core/Misc/observable";
 
+import { browserPlayerHeightStorage, readPlayerHeightM } from "../ar/playerHeight";
 import type { GameMode } from "../game/GameTypes";
+import { HeightStepper } from "./HeightStepper";
 import type { HudLayer } from "./HudLayer";
 
 const OVERLAY_BACKGROUND = "#090e13e6";
@@ -20,10 +22,16 @@ const SUBTITLE_COLOR = "#cbd5e1";
  */
 export class StartScreen {
   public readonly onModeSelectedObservable = new Observable<GameMode>();
+  /**
+   * Altura declarada escolhida antes de entrar. Quem persiste e aplica e o
+   * `EighthWallARManager`, o dono unico de `origin.y` — aqui so se escolhe.
+   */
+  public readonly onPlayerHeightChangedObservable = new Observable<number>();
 
   private readonly root: Rectangle;
   private readonly arButton: Button;
   private readonly messageText: TextBlock;
+  private readonly heightStepper: HeightStepper;
 
   private isArAvailable = false;
 
@@ -84,8 +92,21 @@ export class StartScreen {
     this.messageText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     this.messageText.isVisible = false;
 
+    // A altura declarada e o que poe o piso em zero na RA. Escolhe-la aqui
+    // deixa a primeira entrada ja calibrada; corrigi-la depois, com a sessao no
+    // ar, e trabalho do controle equivalente na fase de setup.
+    this.heightStepper = new HeightStepper(
+      "start-screen-height",
+      "Sua altura (para a RA)",
+      readPlayerHeightM(browserPlayerHeightStorage())
+    );
+    this.heightStepper.onChangedObservable.add((heightM) => {
+      this.onPlayerHeightChangedObservable.notifyObservers(heightM);
+    });
+
     panel.addControl(title);
     panel.addControl(subtitle);
+    panel.addControl(this.heightStepper.root);
     panel.addControl(this.arButton);
     panel.addControl(canvasButton);
     panel.addControl(this.messageText);
@@ -110,6 +131,9 @@ export class StartScreen {
   }
 
   public show(): void {
+    // Rele a preferencia a cada abertura: o controle da fase de setup pode ter
+    // mudado a altura com a sessao no ar, e os dois nao podem discordar.
+    this.heightStepper.setValue(readPlayerHeightM(browserPlayerHeightStorage()));
     this.root.isVisible = true;
   }
 
@@ -130,8 +154,10 @@ export class StartScreen {
   }
 
   public dispose(): void {
+    this.heightStepper.dispose();
     this.root.dispose();
     this.onModeSelectedObservable.clear();
+    this.onPlayerHeightChangedObservable.clear();
   }
 
   /** Estilo compartilhado dos dois botoes: mesma altura, fonte e cantos. */

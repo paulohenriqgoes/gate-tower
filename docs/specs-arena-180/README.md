@@ -4,7 +4,7 @@
 na v3.** Se outro documento do repositorio afirmar estado de uma etapa, ele esta
 desatualizado e o certo e o que esta aqui.
 
-Ultima reconciliacao contra o codigo: **2026-08-19**.
+Ultima reconciliacao contra o codigo: **2026-08-20**.
 
 ## Para que serve, e o que NAO mora aqui
 
@@ -56,10 +56,10 @@ diz qual em cada caso.
 
 | Unidade | Nome | Estado | Evidencia / o que falta |
 | --- | --- | --- | --- |
-| RA-F2 | a arena vive na origem; o piso e declarado | `EM DEVICE` | `066a5d7`. Partida completa jogada e **vencida** em device 2026-08-19 (Android/Chrome, testada pelo autor), telemetria `tower-gate-sessao-1787184130010.json`: `arena_placed` NORMAL aos 33,1 s, `match_ended` win aos 128,7 s, zero `tracking_lost`. **Falta** o criterio de cinco entradas em RA — a segunda trava (ver RA-F5) |
-| RA-F3 | a altura do jogador e `origin.y` | `ABERTA` | — |
-| RA-F4 | `recenter()` e a colocacao | `ABERTA` | — |
-| RA-F5 | segunda sessao via `reconfigureSession` | `ABERTA` | A API existe no bundle (`public/8thwall/xr.js`). **E o gargalo de toda validacao seguinte**: sem ela cada teste em device custa um recarregamento de pagina |
+| RA-F2 | a arena vive na origem; o piso e declarado | `EM DEVICE` | `066a5d7`. Partida completa jogada e **vencida** em device 2026-08-19 (Android/Chrome, testada pelo autor), telemetria `tower-gate-sessao-1787184130010.json`: `arena_placed` NORMAL aos 33,1 s, `match_ended` win aos 128,7 s, zero `tracking_lost`. **Falta** o criterio de cinco entradas em RA. A segunda parou de travar em 2026-08-20 (RA-F5), entao o criterio virou cumprivel — mas o defeito da terceira partida (hipotese 9 do diario) atrapalha sessao longa |
+| RA-F3 | a altura do jogador e `origin.y` | `SUPERADA` | Pelo **device de 2026-08-20** mais decisao do dono do projeto. O engine **ignora** a altura declarada: em `scale: "absolute"` ele fixa `origin.y` em 1 m, e as quatro colocacoes com 1,55 declarado deram distancia camera-origem de 1,0049 / 0,9797 / 1,0134 / 1,0043. O controle mexia num numero descartado, e alem disso nao deve ser campo de tela. **Pendente**: remover os dois `HeightStepper`, anotado na JG-07. `src/ar/playerHeight.ts` fica como guarda de valor nao-finito |
+| RA-F4 | `recenter()` e a colocacao | `EM DEVICE` | `confirmArenaHere()` chama `recenter()` e entra como transicao de fase. Rodou em device 2026-08-20 e **confirmou a `DR-3`**: `arena_placed` 54,4 s -> `tracking_lost LIMITED` 54,6 s, e de novo 252,1 s -> 252,5 s. **Dois defeitos abertos**: (1) o portao da transicao fecha no `NORMAL` velho do frame seguinte ao `recenter()`, e a arena aparece antes de o SLAM cair (painel mostra `arena: confirmada` com `trackingStatus: LIMITED`); (2) com a partida em andamento o gesto recoloca a arena e `handleArenaClosed` ignora, porque a fase nao e `ar-setup` — ver JG-11 |
+| RA-F5 | segunda sessao (a `reconfigureSession` saiu do titulo) | `EM DEVICE` | **Funciona.** Device 2026-08-20 (Android/Chrome, testado pelo autor): `lifecycle` leu `s1 …recenter>detach>remove` no menu e depois `s2 enter>start>attach>update` com coaching overlay e arco fantasma, sem recarregar a pagina. `xr8Observers: 2` nas duas sessoes. A premissa da spec tinha caido antes — `reconfigureSession` lanca depois de `XR8.stop()`; a causa era o vazamento de observers de render do `attach` do `xrCameraBehavior`. **Falta para `VALIDADA`**: o criterio pede **cinco** entradas seguidas com arena no chao nas cinco; foram vistas **duas** |
 | RA-F6 | adotar o que o `xrextras` ja resolve | `ABERTA` | — |
 | RA-F7.a | dois erros ativos na skill de RA | `VALIDADA` | `9ba9e7a`. Criterio e `grep` no arquivo da skill, e ele passa — `imageTargets` e `recenterWithOrigin` sairam |
 | RA-F7.b | reescrever as skills a partir da API | `ABERTA` | `ar-xr-8thwall.md` ainda ensina fit de piso por `hitTest`, que a RA-F2 removeu do projeto |
@@ -74,11 +74,11 @@ diz qual em cada caso.
 | JG-04 | diretor de ondas e convergencia ao jogador | `PARCIAL` | `src/battle/WaveDirector.ts` e o teste dele **existem e estao orfaos** — nenhum arquivo os importa. **Falta**: fiar no `CombatEngine`, reescreve-lo para alvo-unico-jogador com navegacao radial, e remover `EnemyScript` e `DeploymentZone`, que continuam sendo o caminho vivo |
 | JG-05 | alertas de flanco e audio espacial | `ABERTA` | `FlankAlert`, `visibilityRaycast` e `SpatialCues` nao existem. O projeto continua **sem modulo de audio** |
 | JG-06 | colocacao direta no chao | `ABERTA` | `PlacementRing` nao existe |
-| JG-07 | cartas presas ao jogador; o HUD 2D morre | `ABERTA` | `HandCards3D` nao existe; `CardDeckHud.ts` continua vivo |
+| JG-07 | cartas presas ao jogador; o HUD 2D morre | `ABERTA` | `HandCards3D` nao existe; `CardDeckHud.ts` continua vivo. **Ganhou escopo em 2026-08-20**: remover os dois `HeightStepper` junto com o HUD 2D (a RA-F3 caiu por device + decisao) |
 | JG-08 | caldeirao fermentador | `ABERTA` | Nao existe `src/world/` |
 | JG-09 | economia de cartas: derrotado vira carta | `ABERTA` | `CardAlbum` e `CardStock` nao existem |
 | JG-10 | a intro: o gatilho e enquadrar | `ABERTA` | `FramingTrigger` e `FloorCrack` nao existem; `ProximityTrigger` continua sendo o gatilho. `GamePhase` tem 5 fases e esta etapa pede 7 |
-| JG-11 | fim de partida e album | `ABERTA` | `AlbumScreen` nao existe. **O escopo encolheu**: a tarefa do ciclo de vida da sessao de RA migrou para RA-F5 |
+| JG-11 | fim de partida e album | `ABERTA` | `AlbumScreen` nao existe. O ciclo de vida da sessao de RA migrou para RA-F5, mas em 2026-08-20 ela **ganhou o bug do replay**: da terceira partida seguida em diante o lado do jogo emudece e a maquina de estado nao acompanha (hipotese 9 do diario). E o unico defeito que hoje impede teste longo em device |
 
 ### Verificar com
 
@@ -86,17 +86,26 @@ Todo estado acima e falsificavel. Rode este bloco inteiro da raiz do repositorio
 e confira contra a coluna `Estado` — se divergir, o quadro e que esta errado.
 
 ```bash
-# a suite nao se move enquanto so documentacao muda: 180 testes, 16 arquivos
+# a suite nao se move enquanto so documentacao muda: 204 testes, 18 arquivos
 npx tsc --noEmit && npm run test
 
 # RA-F2 e RA-F7.a commitadas
 git log --oneline | grep -E "066a5d7|9ba9e7a"
 
-# RA-F3, RA-F4, RA-F5 ABERTA: nenhuma das tres APIs aparece no codigo
-grep -rn "setPlayerHeight\|XrController.recenter\|reconfigureSession" src/
+# RA-F4 EM DEVICE: o `recenter()` e chamado
+grep -rn "XrController.recenter()" src/
 
-# RA-F5 e viavel: a API existe no bundle
-grep -c "reconfigureSession" public/8thwall/xr.js
+# RA-F3 SUPERADA, mas o codigo dela ainda esta la — a remocao e trabalho da
+# JG-07. Enquanto este grep achar algo, a pendencia continua aberta:
+grep -rln "HeightStepper" src/
+
+# RA-F5 IMPLEMENTADA: a correcao e a remocao dos observers vazados,
+# e o modulo que a explica existe
+ls src/ar/observerLeak.ts && grep -n "releaseBehaviorRenderObservers" src/ar/EighthWallARManager.ts
+
+# `reconfigureSession` fica DECLARADA e NUNCA CHAMADA — ela nao reabre sessao
+# (lanca depois de `XR8.stop()`). Este grep deve achar so a tipagem:
+grep -rn "reconfigureSession" src/
 
 # RA-F6 ABERTA
 grep -c "xrextras" package.json
@@ -194,10 +203,14 @@ A ordem esta **fixada**, e nao e para ser re-decidida a cada sessao. Se a ordem
 mudar, mude aqui e escreva o motivo.
 
 ```
-Onda A (serial + device):  RA-F5    — destrava a 2a sessao de RA
-Onda B (serial):           RA-F3 -> RA-F4
-Onda C (device):           validar RA-F3 e RA-F4, e fechar o criterio de
-                                    cinco entradas da RA-F2
+Onda A (serial + device):  RA-F5    — FEITA em codigo; 2a sessao confirmada em
+                                    device 2026-08-20. Falta so o criterio de
+                                    cinco entradas
+Onda B (serial):           RA-F3 -> RA-F4    — RA-F3 SUPERADA pelo device (o
+                                    engine ignora a altura declarada); RA-F4
+                                    em device, com dois defeitos abertos
+Onda C (device):           fechar o criterio de cinco entradas (RA-F2 e RA-F5)
+                                    e conferir o flanco de spawn da RA-F4
 Onda D (serial):           JG-04    — fiar o WaveDirector, reescrever o CombatEngine
 Onda E (paralelo):         JG-05 . JG-06
 Onda F (serial):           JG-07
@@ -206,11 +219,16 @@ Onda H (paralelo):         JG-08 . JG-09
 Onda I (serial):           JG-10 -> JG-11
 ```
 
-**Por que RA-F5 vem primeiro, contra a ordem original da spec 08** (que a punha
-na Onda 5): o device de 2026-08-19 mostrou que ela e o gargalo de *toda*
-validacao seguinte. Sem segunda sessao nao da para cumprir o criterio de aceite
-da propria RA-F2, e cada teste de qualquer outra etapa custa um recarregamento
-de pagina inteiro.
+**Por que RA-F5 vinha primeiro, e o que mudou:** o device de 2026-08-19 mostrou
+que ela era o gargalo de *toda* validacao seguinte. Em 2026-08-20 ela passou — a
+segunda sessao sobe sem recarregar a pagina —, e com isso **o teste em device
+deixou de custar um reload por tentativa**. Foi o que permitiu, na mesma sessao,
+medir a altura declarada e derrubar a RA-F3.
+
+**O defeito que ficou no lugar dela:** a partir da terceira partida seguida o
+lado do jogo emudece (hipotese 9 do diario). Ele nao bloqueia as ondas de codigo,
+mas bloqueia qualquer teste LONGO em device — inclusive a Onda G, que precisa de
+alguem jogando de ponta a ponta. O conserto e da JG-11.
 
 **Por que a Onda B e serial:** RA-F3 e RA-F4 escrevem o mesmo
 `src/ar/EighthWallARManager.ts`.

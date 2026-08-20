@@ -18,6 +18,28 @@ Duas armadilhas ja pagas por este projeto, nomeadas para nao serem repetidas:
 - **UI nova entra na textura compartilhada** via `hud.getTexture()`. Nunca crie
   outra `AdvancedDynamicTexture` fullscreen.
 
+## Some junto: o controle de "Sua altura" (decisao de 2026-08-20)
+
+**Tire da tela os dois `HeightStepper`** — o da tela inicial (`StartScreen.ts`) e
+o da fase de colocacao da RA (`EighthWallARManager.createHeightStepperUI`). A
+decisao e do dono do projeto e tem duas pernas, uma de produto e uma de
+evidencia:
+
+- **produto:** perguntar a altura do jogador nao e um campo que deva existir na
+  tela deste jogo;
+- **evidencia:** o device de 2026-08-20 provou que o numero **nao chega ao
+  engine**. Em `scale: "absolute"` o 8th Wall sobrescreve `origin.y` para 1 m —
+  quatro colocacoes com 1,55 declarado deram distancia camera-origem de 1,0049,
+  0,9797, 1,0134 e 1,0043. O controle mexia num valor que o tracker descarta.
+  Ver a hipotese 8 do [diario](../experimentos/arena-180-atencao.md).
+
+O que **fica**: `src/ar/playerHeight.ts` e o teste dele continuam valendo como
+normalizacao e guarda de valor nao-finito de `origin.y` (`origin` com NaN
+contamina o frame do engine de forma permanente). O que sai e a UI e a
+persistencia em `localStorage`; a altura volta a ser constante, como era antes da
+RA-F3, **e o piso passa a depender de onde o jogador segura o celular no gesto de
+colocacao** — que e o que o engine de fato usa.
+
 ## Arquivos-alvo
 
 `src/ui/HandCards3D.ts` (novo), `src/ui/HandCards3D.test.ts` (novo — so a logica

@@ -41,6 +41,65 @@ Entram os tres bugs que a spec 08 encontrou: ordem de carregamento do
 `window.BABYLON`, ramo destro do modulo Babylon quebrado (quaternion NaN), e o
 par sinal/zero do azimute.
 
+### O CICLO DE VIDA da sessao, que hoje a skill ensina errado (achado de 2026-08-20)
+
+Esta secao e nova e vale por si so: a skill hoje diz, na linha 82, que o `exit()`
+do estado de RA "deve parar o `XR8.run()`/pausar o pipeline alem de chamar
+`scene.dispose()`" — e quem seguir isso escreve **exatamente** o bug que a RA-F5
+passou tres sessoes perseguindo. O que falta ensinar:
+
+- **o `xrCameraBehavior` do Babylon ja chama `XR8.run()` e `XR8.stop()` por
+  voce.** O `attach` termina em `XR8.run({canvas, ownRunLoop:false, ...})`; o
+  `detach` faz `XR8.stop()` + `XR8.clearCameraPipelineModules()`. Chamar de novo
+  por fora e o erro;
+- **o `attach` vaza dois observers de render e o `detach` nao os remove.** Ele
+  faz `scene.onBeforeRenderObservable.add(...)` e `onAfterRenderObservable.add(...)`
+  a cada chamada, com o `Observer` devolvido descartado. Como `XR8.Babylonjs` sai
+  de uma fabrica chamada UMA vez, a cena e a mesma sempre, e a enesima sessao
+  dirige o pipeline N vezes por frame. **Quem escreve entra/sai de RA em Babylon
+  precisa remover esses dois observers na mao**;
+- **nao descarte a camera de RA entre sessoes.** O modulo `babylonjsrenderer`
+  guarda as intrinsics num fechamento que sobrevive ao `stop()` e so chama
+  `freezeProjectionMatrix` quando elas MUDAM — camera nova recebe o campo de
+  visao padrao do Babylon, desalinhado do feed;
+- **`reconfigureSession` NAO reabre sessao.** Ela lanca quando a sessao nao esta
+  inicializada, ou seja depois de `XR8.stop()`, e nao redispara `onStart`. Serve
+  para trocar `runConfig` numa sessao viva. Este erro esta escrito em tutorial e
+  custou o contrato inteiro de uma spec deste projeto;
+- **a pose da camera antes do attach e quem declara a origem, nao a sua chamada.**
+  O engine dispara `onStart` e SO DEPOIS o `onAttach` do modulo Babylon, que
+  chama `updateCameraProjectionMatrix({origin: camera.position, facing:
+  camera.rotationQuaternion})`. Declarar a origem no `onStart` e correto, mas
+  quem tem a ultima palavra e a pose.
+
+**Confirmados em device em 2026-08-20** (Android/Chrome), menos onde dito o
+contrario: o vazamento de observers era mesmo a causa (a 2a sessao passou a
+subir), a ordem real e `enter>start>attach>update` — `onStart` ANTES de
+`onAttach` — e o `detach>remove` so aparece com o teardown na ordem certa.
+
+### A CORRECAO MAIS IMPORTANTE DA REESCRITA: "declarar o piso" tem um limite
+
+A skill vai ensinar que o piso e **declarado** e nao medido. Isso continua
+verdade, mas a versao ingenua da frase — "ponha `origin.y` na altura do jogador
+e o chao cai em `y = 0`" — **e falsa em escala absoluta**, e este projeto acreditou
+nela por um mes.
+
+Medido em device em 2026-08-20: com `scale: "absolute"`,
+`updateCameraProjectionMatrix` copia a origem recebida, guarda o ponto de
+`recenter()` com ela, e **entao faz `P.y = 1`**. Quatro colocacoes com 1,55
+declarado deram distancia camera-origem de **1,0049 / 0,9797 / 1,0134 / 1,0043**.
+
+O que a skill precisa dizer, em vez da frase ingenua:
+
+- em escala **absoluta**, o engine assume o dispositivo a **1 m do chao** no
+  instante da colocacao, e ignora o `origin.y` declarado. Quem define o piso e
+  **a altura em que a pessoa segura o celular no gesto**, nao um numero no codigo;
+- o `origin.y` declarado **nao e inutil**: ele ainda alimenta o ponto de
+  `recenter()` (`updateRecenterPoint`, default `true`) e, em escala
+  **responsiva**, ele vira a propria escala do mundo (`d = P.y`);
+- a guarda contra valor nao-finito continua obrigatoria em qualquer modo:
+  `origin` com NaN contamina o frame do engine de forma permanente.
+
 ### O que TEM de sobreviver a reescrita
 
 Nenhum destes esta errado; todos mudam de lugar. Perder qualquer um custa

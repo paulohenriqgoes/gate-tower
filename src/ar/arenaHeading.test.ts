@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { headingDegFromForward, normalizeAngleDeg } from "./arenaHeading";
+import {
+  ARENA_FACING_FORWARD,
+  headingDegFromFacing,
+  headingDegFromForward,
+  normalizeAngleDeg,
+} from "./arenaHeading";
 import { sectorOf, toArc, toLocal } from "../arena/ArenaArc";
 
 /**
@@ -117,5 +122,55 @@ describe("heading do mundo e azimute da arena sao o MESMO numero", () => {
     // 180 graus, entao as costas dele sao terra de ninguem — e precisam ser
     // reportadas como `null`, e nao como o setor mais proximo.
     expect(sectorOf(headingDegFromForward(0, -1))).toBeNull();
+  });
+});
+
+/**
+ * O `facing` declarado ao engine e o azimute que o jogo consome precisam ser a
+ * MESMA convencao, e essa concordancia e a que falha calada: um sinal trocado
+ * aqui nao lanca erro, so faz o inimigo nascer no flanco errado.
+ *
+ * A RA-F4 torna isso vivo. Ate ela, o `facing` era identidade e nunca mudava;
+ * com `recenter()` o jogador volta a escolher para onde o arco olha, e o
+ * caminho passa a ter um quaternion de verdade dentro. Por isso o zero e o
+ * sinal sao provados separados, como na RA-F2.
+ */
+describe("headingDegFromFacing — o ZERO", () => {
+  it("o facing identidade olha para o azimute 0 do arco", () => {
+    // Este e o contrato inteiro da arena na origem: `facing` identidade fixa o
+    // azimute 0 no +Z do mundo. Se este numero deixar de ser 0, a arena passa a
+    // nascer girada em relacao ao que o jogador enquadrou.
+    expect(headingDegFromFacing(ARENA_FACING_FORWARD)).toBe(0);
+  });
+
+  it("concorda com o +Z lido como direcao de olhar", () => {
+    expect(headingDegFromFacing(ARENA_FACING_FORWARD)).toBe(headingDegFromForward(0, 1));
+  });
+});
+
+describe("headingDegFromFacing — o SINAL", () => {
+  /** Quaternion de yaw puro, em graus, na convencao canhota da cena. */
+  const yawFacing = (deg: number) => {
+    const half = (deg * Math.PI) / 360;
+
+    return { w: Math.cos(half), x: 0, y: Math.sin(half), z: 0 };
+  };
+
+  it("yaw positivo aponta para a DIREITA do jogador", () => {
+    expect(headingDegFromFacing(yawFacing(90))).toBeCloseTo(90, 6);
+  });
+
+  it("yaw negativo aponta para a ESQUERDA do jogador", () => {
+    expect(headingDegFromFacing(yawFacing(-90))).toBeCloseTo(-90, 6);
+  });
+
+  it("meia volta cai na borda normalizada, e nao em -180", () => {
+    expect(headingDegFromFacing(yawFacing(180))).toBeCloseTo(180, 6);
+  });
+
+  it("quaternion com componente nao-finita devolve 0 em vez de contaminar o setor", () => {
+    // Mesma politica de `normalizeAngleDeg`: quem consome isto e a selecao de
+    // setor, e ela prefere um numero constante a um NaN que se espalha.
+    expect(headingDegFromFacing({ w: Number.NaN, x: 0, y: 0, z: 0 })).toBe(0);
   });
 });

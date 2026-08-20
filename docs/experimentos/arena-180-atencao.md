@@ -14,7 +14,7 @@ pe esta cada unidade vive em
 moravam aqui juntas, elas divergiram — o diario chegou a dizer "sem commit" para
 trabalho ja commitado.
 
-Ultima atualizacao: **2026-08-19**.
+Ultima atualizacao: **2026-08-20**.
 
 ## Objetivo
 
@@ -410,6 +410,138 @@ As oito, com o motivo de cada uma, vivem em
 `DJ-1`..`DJ-8`. A tabela que existia aqui era copia do documento de plano, e
 copia de spec e exatamente o que este diario deixou de carregar.
 
+### (sem commit) — a segunda sessao tem causa lida no codigo, e nao e a que a spec apostava (2026-08-20)
+
+**Feito:** as tres unidades da Onda A e da Onda B do quadro, sem device.
+`EighthWallARManager.ts` passou a reusar UMA `FreeCamera` por toda a vida do
+manager (antes ela era descartada e recriada a cada entrada), a remover os
+observers de render que o `xrCameraBehavior` registra e nunca remove
+(`src/ar/observerLeak.ts`), e a marcar o ciclo de vida da sessao —
+`enter>attach>start>update>recenter>detach>remove` — no console e no painel de
+`?debug=1`. A ordem do `exitAR` inverteu: o behavior desanexa PRIMEIRO, e os
+modulos do app saem no `clearCameraPipelineModules()` dele, em vez de serem
+removidos antes.
+
+Junto vieram a altura declarada ajustavel (`src/ar/playerHeight.ts` puro, com
+`setPlayerHeight` no manager e o mesmo `src/ui/HeightStepper.ts` montado na tela
+inicial e na fase de setup da RA) e o gesto de colocacao por
+`XR8.XrController.recenter()` (`confirmArenaHere()`), que entra como transicao de
+fase: a arena sai de cena, o coaching overlay volta, e o mundo so e devolvido
+quando o tracking estiver `NORMAL` de novo.
+
+`npx tsc --noEmit` limpo, `npm run build` sem erro, e a suite subiu de 180 para
+**204 testes em 18 arquivos** — os 24 novos cobrem o diff de observers, a
+normalizacao da altura declarada e a concordancia entre o `facing` enviado ao
+engine e o azimute que o jogo consome.
+
+**Provou:** tudo abaixo saiu de leitura do bundle (`public/8thwall/xr.js` e
+`public/8thwall/xr-slam.js`), que prova o que o engine FAZ — nao o que o aparelho
+mostra. A distincao importa e esta cobrada no fim desta entrada.
+
+*O `xrCameraBehavior` vaza dois observers de render por sessao, e o `detach` dele
+nao remove nenhum.* `XR8.Babylonjs` sai de uma fabrica chamada UMA vez, na
+construcao do namespace (`Babylonjs: mQ()`), entao todo behavior devolvido por
+`xrCameraBehavior()` compartilha o mesmo fechamento — inclusive a referencia de
+cena. O `attach` faz `Q.onBeforeRenderObservable.add(...)` e
+`Q.onAfterRenderObservable.add(...)` a cada chamada, com o `Observer` devolvido
+descartado; o `detach` e apenas `XR8.stop()` + `XR8.clearCameraPipelineModules()`.
+Consequencia direta: a enesima entrada em RA dirige `runPreRender`/`runRender`/
+`runPostRender` **N vezes por frame**, enquanto o `process-gpu` e a liberacao de
+textura continuam rodando uma vez. A contabilidade de estagio do pipeline nao
+suporta isso.
+
+*Os dois sintomas da segunda sessao tem uma causa comum, e ela e "o pipeline nao
+entrega frame".* O modulo do coaching overlay so fica visivel quando
+`updateVisibility` recebe `LIMITED` **com** `trackingReason INITIALIZING`, e esse
+par so chega pelo evento `reality.trackingstatus`, que nasce do pipeline. Ou seja
+"so o loader gira" (o nosso `latestTrackingStatus` nunca sai de `null`) e "sem
+coaching overlay" nao sao dois defeitos: sao a mesma ausencia de frame, vista de
+dois lugares.
+
+*`reconfigureSession` nao serve para reabrir sessao, e a premissa da RA-F5 estava
+errada.* No bundle ela comeca com `if (!i) throw new Error("[XR8] Cannot
+reinitialize session at this time.")`, onde `i` e o flag de sessao inicializada —
+depois de `XR8.stop()` ela **lanca**. E mesmo no caminho feliz ela nao redispara
+`onStart` nem o `onAttach` de quem ja estava anexado: ela reaproveita a sessao em
+vez de refazer o ciclo. E a API do `SessionReconfigureModule` do `xrextras`, que
+troca camera frontal/traseira no meio da sessao. A spec da RA-F5 foi escrita
+apostando nela como conserto.
+
+*Uma camera de RA nova em cada sessao nao recebe a matriz de projecao do device.*
+O modulo `babylonjsrenderer` guarda as ultimas intrinsics no mesmo fechamento da
+fabrica, e so chama `camera.freezeProjectionMatrix(...)` quando elas MUDAM. O
+mesmo aparelho devolve as mesmas intrinsics, entao a camera recriada na segunda
+sessao ficaria com o campo de visao padrao do Babylon, desalinhado do feed. E o
+motivo de a camera passar a ser reusada, e nao uma otimizacao.
+
+*A pose da camera antes do attach tem a ultima palavra sobre a origem, e nao a
+nossa chamada.* `rA()` dispara `onStart` e SO DEPOIS `R.attach()`; o `onAttach` do
+`babylonjsrenderer` chama `updateCameraProjectionMatrix({origin: camera.position,
+facing: camera.rotationQuaternion})`. Funcionava por acidente feliz ate agora — a
+camera era nova, em `(0, altura, 0)` e sem rotacao, entao concordava com o que o
+`applyDeclaredOrigin()` tinha acabado de declarar. Com a camera reusada isso deixa
+de ser gratuito, e zerar a pose antes do attach virou obrigatorio.
+
+*`updateRecenterPoint` ja era `true` por default*, e o ponto de `recenter()`
+guarda a origem declarada. Confirma o que a RA-F3 pedia por contrato.
+
+**Nao resolveu:** `reconfigureSession` foi **descartada como caminho** depois de
+lida (ver acima). Ela ficou declarada em `src/types/xr8.d.ts` com o motivo
+escrito, para ninguem reabrir o bundle e refazer a descoberta.
+
+O **bug do replay** apareceu e nao foi consertado, por decisao: a JG-07 e a JG-11
+vao reescrever boa parte do `GameFlow` e do HUD, e consertar antes seria consertar
+codigo que vai sair. O achado inteiro esta anotado na
+[JG-11](../specs-arena-180/JG-11-fim-album.md), que e a dona do "volta ao Ato 1".
+
+**Resultado em device (2026-08-20, Android/Chrome, testado pelo autor).**
+Evidencia: gravacao de tela de 126 s e telemetria
+`tower-gate-sessao-1787242680099.json` (426 eventos, exportada aos 318,7 s). O
+video comeca aos 219,7 s da telemetria, entao os dois se alinham quadro a quadro.
+
+*A segunda sessao de RA SOBE, e o painel mostra o ciclo inteiro.* Aos 56 s de
+video o `lifecycle` le `s1 …update>recenter>detach>remove` com o menu na tela; aos
+66 s, `s2 enter` com o loader girando; aos 75 s, `s2 enter>start>attach>update`
+com o coaching overlay desenhando "Mova o celular para frente e para tras" e o
+arco fantasma no chao. **O bloqueador mais antigo do projeto caiu.** O
+`xr8Observers` marca `2` em todos os quadros das duas sessoes — a captura pega
+exatamente o par que o behavior registra, uma vez por sessao.
+
+*O `onStart` dispara ANTES do `onAttach`.* A trilha e `enter>start>attach>update`,
+confirmando a ordem lida no bundle (`rA()` chama `NA()` e so depois `R.attach()`).
+O `detach>remove` so aparece porque a ordem do teardown foi invertida: com a
+ordem antiga o modulo saia antes do `stop()` e o `onDetach` era engolido.
+
+*`recenter()` custa tracking, e a `DR-3` deixa de ser suposicao.* `arena_placed`
+aos 54,4 s e `tracking_lost LIMITED` aos 54,6 s; de novo aos 252,1 s e 252,5 s. E
+o painel marca `trackingStatus: LIMITED / trackingReason: INITIALIZING` durante a
+maior parte do video.
+
+*A altura declarada NAO chega ao engine* — ver o "Cuidado ao ler" abaixo, que
+deixou de ser duvida e virou resultado.
+
+**Um defeito da propria RA-F4, provado pelo mesmo dado:** o portao da transicao
+abre cedo demais. Ele fecha no `NORMAL` que ainda esta de pe no frame seguinte ao
+`recenter()`, antes de o SLAM cair — por isso o painel mostra `arena: confirmada`
+com `trackingStatus: LIMITED`. A transicao existe, mas espera pelo estado errado.
+Junto vao dois campos de debug velhos (`arena:` sobrevive numa colocacao nova, e
+`tracking:` congela depois de confirmar) e um defeito antigo que so agora ficou
+alcancavel: o `hasLostTracking` de `main.ts` nunca e zerado quando o monitor
+rearma, entao os pares `tracking_lost`/`tracking_recovered` nao sao confiaveis
+entre partidas.
+
+**Cuidado ao ler esta etapa — a contradicao FECHOU, e contra a RA-F3.** O
+paragrafo abaixo foi escrito antes do device do mesmo dia; o device deu razao a
+leitura do bundle. Fica como estava, porque mostra o raciocinio que levou ao
+teste certo. Em `updateCameraProjectionMatrix`, com
+`scale: "absolute"` (o modo deste projeto), o codigo faz `P.y = 1` depois de
+copiar a origem declarada — a altura declarada e sobrescrita para 1 metro no
+`origin` que vai ao tracker, embora o ponto de `recenter()` guarde o valor
+declarado. Isso contradiz o que o device mostrou em 2026-08-19, quando a arena
+assentou no chao real com 1,55 m declarado e a melhor calibracao deu `delta 0.00`.
+Ou o bundle minificado foi lido errado, ou o 1,55 estava agindo por outro caminho.
+Virou a **hipotese 8** abaixo, e o criterio de aceite da RA-F3 a decide de graca.
+
 ## Hipoteses
 
 O progresso de validacao do experimento — o que ja foi respondido, o que foi
@@ -423,8 +555,10 @@ decide; hipotese sem teste e opiniao.
 | 3 | `DJ-6` (o Coelho trocando de setor) pode nao resolver nada | **VIVA** — so playtest responde |
 | 4 | a torre de 1,20 m pode intimidar crianca em festa | **VIVA** — nunca testada com crianca |
 | 5 | o cogumelo verde pode nao ter tuning viavel | **VIVA** — nao instrumentado |
-| 6 | a segunda sessao falha porque ninguem chama `run`/`stop` | **REFUTADA NA PREMISSA** (2026-08-19) — o behavior chama os dois |
+| 6 | a segunda sessao falha porque ninguem chama `run`/`stop` | **RESPONDIDA** (2026-08-20) — a causa eram observers de render vazados; removidos, a 2a sessao sobe em device |
 | 7 | a arena e grande demais para o comodo tipico | **VIVA** — uma medicao so, e num comodo que nao cabe |
+| 8 | em `scale: "absolute"` o engine ignora a altura declarada | **RESPONDIDA** (2026-08-20) — ignora mesmo: `origin.y` e fixado em 1 m, medido em device |
+| 9 | o jogo nao reseta a partir da terceira partida seguida | **VIVA** (2026-08-20) — visto em device; o lado do jogo emudece e o da RA continua |
 
 Ordenadas por suspeita, nao por ordem de descoberta. **A numeracao e estavel de
 proposito** — o README e as specs citam "hipotese 2" e "hipotese 6" pelo numero,
@@ -482,10 +616,36 @@ renumerar tudo.
    `XR8.run({ canvas, ownRunLoop: false, ... })` e o `detach` faz `XR8.stop()` +
    `XR8.clearCameraPipelineModules()`. Quem seguir aquela pista procura no lugar
    errado.
-   **Suspeito novo:** o `clearCameraPipelineModules()` no detach, que limpa
-   tambem os modulos do app. **Teste:** trocar o ciclo por
-   `XR8.reconfigureSession({ runConfig })`, que existe no bundle e e o que o
-   `xrextras` usa. Enderecada pela F5 da [spec 08](../specs/08-fundacao-ar.md).
+   **Suspeito de 2026-08-19 — enfraquecido:** o `clearCameraPipelineModules()`
+   no detach, que limpa tambem os modulos do app. Ele existe e faz isso, mas nao
+   explica sozinho: o `enterAR` seguinte re-adiciona os dois modulos, entao o
+   `clear` e simetrico. A saida proposta na epoca — trocar o ciclo por
+   `XR8.reconfigureSession({ runConfig })` — **nao existe**: lida no bundle em
+   2026-08-20, ela lanca quando a sessao nao esta inicializada, ou seja depois de
+   `XR8.stop()`. Ver a entrada de 2026-08-20 na linha do tempo.
+
+   **Suspeito de 2026-08-20, com mecanismo lido no codigo:** o `attach` do
+   `xrCameraBehavior` registra dois observers de render na cena a cada entrada, e
+   o `detach` dele nao remove nenhum. A enesima sessao dirige o pipeline do engine
+   N vezes por frame, com `process-gpu` e liberacao de textura rodando uma vez —
+   e "o pipeline nao entrega frame" explica os DOIS sintomas de uma vez (loader
+   eterno e coaching overlay ausente), porque o overlay so aparece por evento
+   `reality.trackingstatus`.
+
+   **RESPONDIDA em device (2026-08-20, Android/Chrome, testado pelo autor).**
+   O teste era ler o campo `lifecycle` com `?debug=1`, e ele leu
+   `s2 enter>start>attach>update` com o coaching overlay desenhando e o arco
+   fantasma no chao — a segunda sessao sobe, sem recarregar a pagina. O
+   `xr8Observers` marcou `2` nas duas sessoes, entao a captura pega exatamente o
+   par que o behavior registra. **A causa era o vazamento de observers.**
+
+   Dois detalhes que o teste entregou de brinde: a ordem real e
+   `enter>start>attach>update` (o `onStart` vem ANTES do `onAttach`, como o
+   bundle dizia), e o `detach>remove` so aparece porque a ordem do teardown foi
+   invertida.
+
+   **O que continua aberto:** o criterio de aceite da RA-F5 pede **cinco**
+   entradas seguidas com a arena no chao nas cinco. Foram vistas **duas**.
 
    **Evidencia nova (2026-08-19, device):** o sintoma foi observado por inteiro —
    na segunda entrada so o loader gira, **sem coaching overlay e sem arena** —, e
@@ -516,3 +676,68 @@ renumerar tudo.
    livre, sem mudar nada de codigo, e perguntar de novo sobre a torre. Se ali ela
    parecer certa, o problema e de comunicacao de requisito de espaco, nao de
    escala.
+
+8. **Em `scale: "absolute"` o engine pode estar ignorando a altura declarada**
+   (entra no fim por numeracao estavel, mas a suspeita e alta — ela questiona a
+   fundacao inteira da RA-F2). Lido em `public/8thwall/xr-slam.js` em 2026-08-20:
+   `updateCameraProjectionMatrix` copia a origem recebida, guarda o ponto de
+   `recenter()` com ela, e entao faz `P.y = 1` quando o modo e `absolute` — a
+   altura declarada nao chega ao tracker.
+
+   Isso **contradiz o device**. Em 2026-08-19 a arena assentou no chao real com
+   1,55 m declarado, e o painel deu melhor calibracao em `delta 0.00` — se
+   `origin.y` fosse sempre 1, declarar 1,55 ou 1,90 daria o mesmo resultado, e a
+   comparacao que escolheu 1,55 nao teria como ter acontecido. Uma das duas
+   leituras esta errada: ou o bundle minificado foi mal interpretado, ou o 1,55
+   agiu por um caminho que ninguem mapeou.
+
+   **RESPONDIDA em device no mesmo dia (2026-08-20), e a leitura do bundle estava
+   certa.** A medida nao precisou do controle: a telemetria amostra a distancia
+   da camera ate a origem a cada 500 ms, e logo depois de um `recenter()` a
+   camera ESTA na origem declarada — entao a primeira amostra apos cada
+   `arena_placed` le o `origin.y` que o engine de fato usou.
+
+   Quatro colocacoes, todas com `originY: 1.55` no painel:
+   **1,0049 · 0,9797 · 1,0134 · 1,0043**. Se a altura declarada valesse, seriam
+   ~1,55. Sao 1,00 — exatamente o `P.y = 1` do bundle.
+
+   **O que isso significa, e e maior que a RA-F3.** O piso NAO cai em zero por
+   causa do numero declarado; ele cai em zero porque o engine assume que o
+   celular esta a 1 m do chao no instante da colocacao. O 1,55 de 2026-08-19
+   nunca esteve agindo — a arena assentou porque o jogador, olhando para o chao
+   para colocar, segurava o celular perto de 1 m. **A RA-F2 continua funcionando;
+   a explicacao dela e que estava errada.**
+
+   **Consequencia:** o controle de altura sai da tela (decisao de 2026-08-20,
+   anotada na [JG-07](../specs-arena-180/JG-07-cartas-3d.md)). A normalizacao em
+   `src/ar/playerHeight.ts` fica, porque a guarda contra `origin.y` nao-finito
+   continua valendo.
+
+9. **O jogo nao reseta a partir da terceira partida seguida** (suspeita alta —
+   e o unico defeito que hoje impede uma sessao longa). Visto em device em
+   2026-08-20, com video e telemetria.
+
+   Depois da segunda partida terminar, **nenhum evento nascido no `GameFlow` ou
+   no `CombatEngine` voltou a ser registrado** — sem `enemy_awakened`, sem
+   `card_deployed`, sem `match_ended` — enquanto o `arena_placed`, que nasce no
+   AR Manager, registrou normalmente mais duas vezes. E o video mostra uma
+   terceira partida acontecendo inteira: relogio 2:58 -> 2:31, torre inimiga de
+   1000 para 123, HUD congelando como `match-over` congela, e o menu depois.
+
+   **A pista mais forte nao fecha sozinha:** o conjunto que emudeceu e
+   exatamente o que `GameFlow.dispose()` e `CombatEngine.dispose()` limpam com
+   `Observable.clear()`. So que os dois so sao chamados pelo
+   `scene.onDisposeObservable`, que tambem descartaria HUD, tela inicial e painel
+   de debug — e os tres continuaram desenhando.
+
+   **Ja descartado:** nao houve mensagem de erro na tela inicial (logo nao foi
+   `handleSessionFailed`) nem erro no console — as duas confirmadas pelo usuario.
+   O "Reposicionar" foi usado uma vez na terceira partida e explica a colocacao
+   extra na telemetria, **nao** o emudecimento.
+
+   **Teste:** instrumentar a contagem de observadores de
+   `onMatchOverObservable`/`onCardDeployedObservable` a cada troca de fase e
+   jogar tres partidas seguidas. Se a contagem cair para zero sem `dispose()`,
+   o alvo e quem chama `clear()`. Conserto declarado na
+   [JG-11](../specs-arena-180/JG-11-fim-album.md), que e a dona do replay.
+

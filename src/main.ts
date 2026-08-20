@@ -480,6 +480,13 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		startScreen.setArAvailable(isAvailable);
 	});
 
+	// A altura escolhida no menu vai para o AR Manager, que e o dono unico de
+	// `origin.y`: e ele que normaliza, persiste e declara ao engine. A tela
+	// inicial so oferece a escolha.
+	const playerHeightObserver = startScreen.onPlayerHeightChangedObservable.add((heightM) => {
+		arManager.setPlayerHeight(heightM);
+	});
+
 	const enemyTowerMesh = arena.towerDefinitions.find(
 		(towerDefinition) => towerDefinition.team === "enemy"
 	)?.mesh;
@@ -596,6 +603,7 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 
 	scene.onDisposeObservable.add(() => {
 		arManager.onAvailabilityChangedObservable.remove(availabilityObserver);
+		startScreen.onPlayerHeightChangedObservable.remove(playerHeightObserver);
 		combatEngine.onPlayerTowerDamagedObservable.remove(towerDamagedObserver);
 		combatEngine.onEnemyUnitDeployedObservable.remove(enemyUnitDeployedObserver);
 		scene.onBeforeRenderObservable.remove(gameFlowUpdateObserver);

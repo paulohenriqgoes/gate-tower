@@ -113,7 +113,38 @@ declare global {
     };
     addCameraPipelineModule: (module: XR8CameraPipelineModule) => void;
     removeCameraPipelineModule: (moduleName: string) => void;
+    /** Remove TODOS os modulos de uma vez. E o que o `detach` do behavior faz. */
+    clearCameraPipelineModules: () => void;
     stop: () => void;
+    /**
+     * Troca o `runConfig` de uma sessao VIVA. **Nao serve para reabrir uma
+     * sessao derrubada**, e essa distincao custou uma unidade inteira de
+     * planejamento.
+     *
+     * A RA-F5 foi escrita apostando que esta era a API que consertaria a
+     * segunda entrada em RA. Lido no bundle (`public/8thwall/xr.js`), ela e
+     * outra coisa:
+     *
+     *     reconfigureSession: cfg => {
+     *       if (!isInitialized) throw new Error("[XR8] Cannot reinitialize session at this time.")
+     *       if (isPaused)       throw new Error("[XR8] Cannot reinitialize session while paused.")
+     *       ...detach, para o session manager, Object.assign(runConfig, cfg), re-init...
+     *     }
+     *
+     * Ou seja: depois de `XR8.stop()` ela LANCA, porque `isInitialized` ja e
+     * falso. E mesmo no caminho feliz ela nao redispara `onStart` nem o
+     * `onAttach` de quem ja estava anexado — ela reaproveita a sessao em vez de
+     * refazer o ciclo. Serve para o que o `SessionReconfigureModule` do
+     * `xrextras` faz com ela: trocar camera frontal/traseira no meio da sessao.
+     *
+     * Fica declarada para que ninguem precise reabrir o bundle para redescobrir
+     * isso. O ciclo entra/sai deste projeto e `XR8.run()` (via o attach do
+     * `xrCameraBehavior`) e `XR8.stop()` (via o detach), e o que o fazia falhar
+     * na segunda vez esta em `src/ar/observerLeak.ts`.
+     *
+     * NAO esta na doc publica do 8th Wall.
+     */
+    reconfigureSession: (runConfig: Record<string, unknown>) => Promise<void>;
   }
 
   interface Window {

@@ -80,3 +80,48 @@ export function headingDegFromForward(x: number, z: number): number {
 
   return normalizeAngleDeg(Math.atan2(x, z) * RAD_TO_DEG);
 }
+
+/**
+ * O `facing` que fixa o azimute 0 do arco no +Z do mundo.
+ *
+ * E o quaternion identidade, e ele NAO e neutro por acaso: `facing` e a
+ * orientacao da origem declarada ao 8th Wall, e qualquer outro valor giraria o
+ * mundo inteiro debaixo de uma arena que nao tem rotacao para compensar. Fica
+ * aqui, e nao no AR Manager, porque e a mesma convencao que
+ * `headingDegFromForward` define — e as duas precisam concordar.
+ */
+export const ARENA_FACING_FORWARD = { w: 1, x: 0, y: 0, z: 0 } as const;
+
+/** Quaternion como o 8th Wall o troca: `w` primeiro na leitura, `xyz` no resto. */
+export interface FacingQuaternion {
+  w: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Heading do mundo para onde um `facing` aponta — ou seja, que azimute do arco
+ * a camera enquadra quando o engine a poe nessa orientacao.
+ *
+ * Existe para uma coisa so: provar que o `facing` que enviamos ao engine e o
+ * azimute que o jogo consome sao a MESMA convencao. Essa concordancia falha em
+ * silencio — um `facing` com o sinal trocado nao lanca erro nenhum, so faz o
+ * inimigo nascer no flanco errado, e ninguem descobre ate alguem jogar.
+ *
+ * A conta e a rotacao do vetor `+Z` pelo quaternion, com a componente Y
+ * descartada depois, pela mesma razao de `headingDegFromForward`: inclinar o
+ * celular nao muda para que flanco ele aponta.
+ */
+export function headingDegFromFacing(facing: FacingQuaternion): number {
+  const { w, x, y, z } = facing;
+
+  if (![w, x, y, z].every((component) => Number.isFinite(component))) {
+    return 0;
+  }
+
+  const forwardX = 2 * (x * z + w * y);
+  const forwardZ = 1 - 2 * (x * x + y * y);
+
+  return headingDegFromForward(forwardX, forwardZ);
+}

@@ -33,10 +33,12 @@ oficial do 8th Wall.** O projeto media o chao com `hitTest`; o engine espera que
 voce o **declare**. O exemplo oficial de world tracking nao chama `hitTest`
 nenhuma vez: ele poe conteudo em `y = 0` e declara a posicao inicial da camera
 com `XR8.XrController.updateCameraProjectionMatrix({ origin, facing })`. Se
-`origin.y` for a altura do jogador, o piso cai em `y = 0` de graca.
+`origin.y` for a altura em que o celular esta, o piso cai em `y = 0` de graca.
+*(Em 2026-08-20 esse "se" ganhou um limite medido: em escala absoluta o engine
+fixa `origin.y` em 1 m e ignora o valor declarado — ver os bloqueadores.)*
 
 Essa refundacao foi implementada e **confirmada em device** (`066a5d7`): a arena
-assentou no chao real com `origin.y = 1,55 m`, sem medir nada, e sustentou uma
+assentou no chao real sem medir nada, e sustentou uma
 partida completa, jogada e vencida, sem perder tracking uma vez sequer. As
 unidades de RA que faltam, e o estado de cada uma, estao no quadro.
 
@@ -44,37 +46,69 @@ A demo do mundo vivo foi **encerrada por mudanca de direcao**, nao por resposta:
 a pergunta dela nunca chegou a ser medida com alguem de fora, e o palco em que
 ela media saiu de escopo.
 
-### Bloqueadores conhecidos (2026-08-19, vistos em device)
+### Bloqueadores conhecidos (2026-08-20, vistos em device)
 
 Leia isto antes de mexer em qualquer coisa:
 
-1. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
-   antigo, ainda aberto). Em 2026-08-19 ele ganhou sintoma nomeado: depois de
-   vencer uma partida, "jogar novamente" leva de volta ao menu e a segunda
-   entrada em RA mostra **so o loader girando, sem coaching overlay e sem
-   arena**. O overlay funciona normalmente na PRIMEIRA entrada, o que isola o
-   defeito no ciclo de vida da sessao.
+1. **RESOLVIDO em 2026-08-20 — a segunda sessao de RA sobe sem recarregar a
+   pagina.** Confirmado em device (Android/Chrome): o painel de `?debug=1` leu
+   `s1 …recenter>detach>remove` no menu e depois
+   `s2 enter>start>attach>update`, com coaching overlay e arco fantasma no chao.
 
-   A hipotese registrada antes — "o projeto nunca chama `XR8.run()` nem
-   `XR8.stop()`" — esta **errada**: o `xrCameraBehavior` chama os dois. O
-   suspeito e o `XR8.clearCameraPipelineModules()` que o `detach` executa.
-   **Este e hoje o gargalo de toda validacao em device**, porque cada teste custa
-   um recarregamento de pagina — e por isso ele e a primeira unidade da fila.
-   Plano e estado em
+   **A causa nao era a que este arquivo dizia.** Era o `attach` do
+   `xrCameraBehavior`, que registra dois observers de render na cena a cada
+   entrada enquanto o `detach` dele nao remove nenhum: a enesima sessao dirigia o
+   pipeline do engine N vezes por frame, e o pipeline emudecia. Como o coaching
+   overlay so aparece por evento vindo do pipeline, "so o loader girando" e "sem
+   overlay" eram o mesmo defeito visto de dois lugares.
+
+   **Nao persiga estas duas pistas, as duas estao mortas:** "o projeto nunca
+   chama `XR8.run()`/`XR8.stop()`" (o behavior chama os dois) e "troque o ciclo
+   por `XR8.reconfigureSession()`" (ela lanca depois de `XR8.stop()`; nao reabre
+   sessao).
+
+   **Correcao escrita em 2026-08-20**, lendo o bundle: a saida que o projeto
+   vinha propondo — `XR8.reconfigureSession()` — **nao existe como conserto**.
+   Ela lanca depois de `XR8.stop()`, porque exige sessao inicializada; serve para
+   trocar `runConfig` numa sessao viva, nao para reabrir uma derrubada.
+
+   A causa lida no codigo e o `attach` do `xrCameraBehavior`, que registra dois
+   observers de render na cena a cada entrada enquanto o `detach` dele nao remove
+   nenhum: a enesima sessao dirige o pipeline do engine N vezes por frame. Isso
+   explica os dois sintomas de uma vez, porque o coaching overlay so aparece por
+   evento vindo do pipeline. **Corrigido no codigo, e ainda NAO testado em
+   device** — a instrumentacao de ciclo de vida (`?debug=1`, campos `lifecycle` e
+   `xr8Observers`) foi escrita para decidir isso no aparelho.
+
+   Duas hipoteses anteriores continuam **erradas** e nao devem ser perseguidas:
+   "o projeto nunca chama `XR8.run()`/`XR8.stop()`" (o behavior chama os dois) e
+   "o culpado e o `clearCameraPipelineModules()`" (ele e simetrico — o `enterAR`
+   seguinte re-adiciona os modulos).
+
+   **Este continua sendo o gargalo de toda validacao em device**, porque enquanto
+   nao for confirmado cada teste custa um recarregamento de pagina. Plano em
    [`RA-F5`](docs/specs-arena-180/RA-F5-segunda-sessao.md).
-2. **Ligar `scene.useRightHandedSystem` quebra a RA inteira.** O ramo destro do
+2. **A partir da terceira partida seguida, o jogo nao reseta e fica injogavel**
+   (novo, visto em device em 2026-08-20). O lado da RA continua fiado — a arena
+   recoloca, o tracking responde —, mas **nenhum evento nascido no `GameFlow` ou
+   no `CombatEngine` volta a ser registrado**, e a maquina de estado para de
+   acompanhar. Nao bloqueia trabalho de codigo, mas **bloqueia qualquer teste
+   longo em device**. O achado completo esta na hipotese 9 de
+   [`arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md); o conserto e
+   trabalho da JG-11, que e a dona do "jogar de novo".
+3. **Ligar `scene.useRightHandedSystem` quebra a RA inteira.** O ramo destro do
    modulo Babylon deste build produz quaternion **NaN**: a pose morre e a tela
    fica preta sobre o feed da camera. Confirmado em device em 2026-08-19. O
    comentario de `src/ar/arenaHeading.ts` que mandava ligar essa flag **ja saiu**
    (F2), mas o perigo continua: nao ligue.
-3. **A arena autorada nao cabe num quarto pequeno.** Ela tem 4,4 x 4,4 m (o
+4. **A arena autorada nao cabe num quarto pequeno.** Ela tem 4,4 x 4,4 m (o
    diametro do arco de 2,2 m de raio), com as torres a `z = +-2,0 m`. A sessao de
    2026-08-19 rodou num quarto de 2,60 x 2,90 m: a partida fechou, mas boa parte
    da arena ficou atravessando parede, e a torre de 1,20 m foi descrita como "um
    pouco grande". **Decisao de escala em aberto**, com o teste que a decide em
    [`decisoes.md`](docs/specs-arena-180/decisoes.md) — nao decida com uma sessao
    so, num comodo que nao cabe.
-4. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
+5. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
    aposentou a pergunta, porque a arena nasce no chao ao redor do jogador.
 
 **Fechados pela F2 (2026-08-19), com uma partida completa em device por cima
@@ -99,9 +133,11 @@ O historico completo esta em
 
 ### Entregue
 
-Compila, com **180 testes** de logica pura passando. A contagem caiu de 253 na
-F2, e a queda e o resultado esperado: o que morreu testava medicao de piso e
-suavizacao da pose do preview, dois pipelines que deixaram de existir. **O que
+Compila, com **204 testes** de logica pura passando. Ela foi de 253 (antes da F2)
+para 180 — queda esperada, porque o que morreu testava medicao de piso e
+suavizacao da pose do preview — e voltou a subir com a RA-F3/F4/F5, que trouxeram
+o diff de observers de render, a normalizacao da altura declarada e a
+concordancia entre o `facing` enviado ao engine e o azimute que o jogo consome. **O que
 foi confirmado em device e o que so compila esta separado na tabela "Estado
 atual" do diario** — consulte antes de assumir que algo funciona.
 
@@ -115,7 +151,7 @@ atual" do diario** — consulte antes de assumir que algo funciona.
 - **a arena vive na origem** (F2, 2026-08-19): `arenaRoot` fica em `(0,0,0)` com
   rotacao identidade para sempre, e o piso e o `y = 0` do mundo porque a camera de
   RA nasce na altura declarada do jogador. **Confirmado em device**: a arena
-  assentou no chao real com 1,55 m declarado, sem `hitTest` nenhum. Substituiu a
+  assentou no chao real sem `hitTest` nenhum. Substituiu a
   ancoragem egocentrica, que arrastava a arena pelo mundo
 - **a arena e sempre nivelada pela gravidade** (2026-08-19). Ela copiava a normal
   medida do piso, com clamp de 12 graus — herança da arena de mesa de 80 cm, onde
@@ -259,24 +295,39 @@ de jogo quando a spec da demo tirou paisagem de escopo.
   arco de 2,2 m de raio, os 12 graus valem 47 cm — e a normal medida tem mediana
   de 13 graus e picos de 48, ou seja e ruido. A inclinacao continua sendo medida
   e registrada na telemetria, nunca aplicada na cena.
-- **O piso e DECLARADO, nao medido.** Confirmado em device em 2026-08-19: a
-  arena assentou no chao real com 1,55 m declarado, sem medir nada.
-  `origin.y` da
-  `XR8.XrController.updateCameraProjectionMatrix` define onde a camera comeca na
-  cena; com ele igual a altura do jogador, o piso e `y = 0` por construcao. E o
-  que o exemplo oficial de world tracking do 8th Wall faz, e ele **nao chama
-  `hitTest` nenhuma vez**. Todo o pipeline de fit de plano (`placementGate`,
-  `floorEstimate`, `hitTestSampling`) **saiu do projeto**.
+- **O piso e DECLARADO, nao medido** — mas a explicacao de COMO isso funciona
+  estava errada, e o device de 2026-08-20 corrigiu. A arena assenta no chao real
+  sem medir nada, e o pipeline de fit de plano (`placementGate`, `floorEstimate`,
+  `hitTestSampling`) continua fora do projeto.
+
+  O que mudou: **a altura declarada nao chega ao engine**. Em `scale: "absolute"`
+  o 8th Wall sobrescreve `origin.y` para **1 m** — quatro colocacoes com 1,55
+  declarado deram distancia camera-origem de 1,0049 / 0,9797 / 1,0134 / 1,0043.
+  O piso cai em `y = 0` porque o engine assume o celular a 1 m do chao no instante
+  da colocacao, e nao por causa do numero que o projeto declarava. O 1,55 de
+  2026-08-19 nunca esteve agindo: a arena assentou porque quem coloca esta
+  olhando para o chao, com o celular perto de 1 m.
+
+  Consequencia pratica: **quem coloca a arena define o piso pela altura em que
+  segura o celular.** Detalhe e numeros na hipotese 8 de
+  [`arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md).
 - **`hitTest` sai do caminho critico.** O aprendizado sobre `FEATURE_POINT`
   (remove-lo deixava o sensor mudo) continua valido para quem for usar `hitTest`
   para consulta pontual de geometria, mas ele deixa de ser fundacao de
   ancoragem.
 - Antes de comecar, o jogador ve o **arco real** deitado no piso, centrado nele.
-  Ele nao gira mais junto com o celular: a arena esta na origem desde o frame
-  zero, e o toque so diz "agora" — **nao pode ser recusado, e nao escolhe
-  direcao**. Escolher para onde o arco olha volta com
-  [`RA-F4`](docs/specs-arena-180/RA-F4-recenter-como-colocacao.md), via
-  `recenter()`.
+  O toque **nao pode ser recusado**. Desde a RA-F4 ele tambem **escolhe a
+  direcao**: o gesto chama `XR8.XrController.recenter()`, e o azimute 0 do arco
+  passa a ser para onde o celular aponta no instante do toque. Por `DR-3` isso
+  entra como transicao de fase — a arena sai de cena, o coaching overlay volta, e
+  o mundo so e devolvido quando o tracking estiver `NORMAL` de novo.
+  **Implementado; nao testado em device.**
+- **O controle de altura declarada existe no codigo e VAI SAIR.** Ele foi
+  escrito na RA-F3 e o device de 2026-08-20 o derrubou no mesmo dia: o engine
+  ignora o numero. Somado a decisao de que altura do jogador nao deve ser campo
+  de tela, os dois `HeightStepper` saem junto com o HUD 2D, na JG-07. A
+  normalizacao em `src/ar/playerHeight.ts` fica, porque `origin` nao-finito
+  contamina o frame do engine de forma permanente e a guarda continua valendo.
 - **A arena vive na origem do mundo e nunca se move.** Em todo codigo oficial do
   8th Wall o conteudo fica em coordenadas autorais fixas, e quem se move e a
   origem da camera, via `recenter()`. Como o jogador e o vertice do arco, ele
@@ -292,9 +343,11 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 - **O `xrCameraBehavior` chama `XR8.run()` e `XR8.stop()` por voce** (lido no
   bundle em 2026-08-19). O `attach` termina em
   `XR8.run({ canvas, ownRunLoop: false, ... })`; o `detach` faz `XR8.stop()` +
-  `XR8.clearCameraPipelineModules()` — e e esse `clear` o suspeito da segunda
-  sessao nao subir. A afirmacao anterior aqui ("o projeto nunca chama `run`/`stop`")
-  estava **errada** e mandava quem investigasse para o lugar errado.
+  `XR8.clearCameraPipelineModules()`. Esse `clear` **nao era** o culpado da
+  segunda sessao nao subir (ele e simetrico: o `enterAR` seguinte re-adiciona os
+  modulos) — o culpado eram os observers de render que o `attach` registra e o
+  `detach` nao remove. Duas afirmacoes que ja estiveram aqui e estao **erradas**:
+  "o projeto nunca chama `run`/`stop`" e "o suspeito e o `clear`".
 - **Circular a arena funciona so em partes.** Confirmado em device
   (2026-08-12): passar para **tras** da arena faz a camera enquadrar area que o
   SLAM ainda nao mapeou, e o conteudo comeca a driftar. Esta em investigacao —
@@ -332,11 +385,12 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 - Arena ancorada em RA com estabilidade visual. **Ancorar funciona no chao**
   (device, 2026-08-14); em mesa, sem veredito.
 - Sem jitter perceptivel durante movimentos naturais do dispositivo.
-- Entrada e saida do modo RA sem perder posicionamento da arena. **Bloqueado**
-  pelo bug da segunda sessao de RA (bloqueador 1). Em 2026-08-19 o sintoma foi
-  visto por inteiro: a segunda entrada fica so no loader, sem overlay e sem
-  arena. *Note que "perder posicionamento" deixou de fazer sentido desde a F2 — a
-  arena esta sempre na origem; o que se perde e a sessao, nao a posicao.*
+- Entrada e saida do modo RA sem perder posicionamento da arena. **Destravado em
+  2026-08-20** (a segunda sessao sobe); o que ainda falta e repetir cinco vezes
+  seguidas. Ficou bloqueado ate 2026-08-19, quando o sintoma foi visto por
+  inteiro: a segunda entrada ficava so no loader, sem overlay e sem arena.
+  *Note que "perder posicionamento" deixou de fazer sentido desde a F2 — a arena
+  esta sempre na origem; o que se perde e a sessao, nao a posicao.*
 - **Deslize de no maximo ~2 cm com o celular circulando a mesa por 60 s** (o
   criterio do Beat 3 da spec da demo). **Ainda nao medido** depois da arena
   passar a ter 80 cm com escala fixa. O usuario relatou (2026-08-14, no chao)
