@@ -4,8 +4,12 @@
 > de piso por `hitTest`. A [spec 08](08-fundacao-ar.md) **remove** a medicao de
 > piso: o chao passa a ser declarado por `origin.y` em
 > `XR8.XrController.updateCameraProjectionMatrix`, como faz o codigo oficial do
-> 8th Wall. Esta spec nunca chegou a comecar. Fica no repo como historico da
-> abordagem descartada.
+> 8th Wall — e isso **ja foi implementado e confirmado em device** (`066a5d7`).
+> Esta spec nunca chegou a comecar. Fica no repo como historico da abordagem
+> descartada.
+>
+> A spec 08 tambem foi migrada: o trabalho vivo de RA esta em
+> [`docs/specs-arena-180/`](../specs-arena-180/README.md).
 
 **Status:** escrito em 2026-08-19, **nao executado**. Nenhuma etapa abaixo comecou.
 

@@ -2,9 +2,19 @@
 
 Diario da v3 do Tower Gate — a reformulacao que existe para responder **uma
 pergunta que a demo anterior nao podia responder**: *a RA da para ser mecanica, e
-nao cenografia?* Registra o que foi decidido, o que foi construido, o que cada
-teste em device mostrou e o que continua aberto. Ultima atualizacao:
-**2026-08-19**.
+nao cenografia?*
+
+Este arquivo guarda duas coisas, e so elas: o **resumo de cada sessao** (o que
+foi feito, o que aquilo provou, o que falhou) e o **progresso de validacao das
+hipoteses**. E a memoria do projeto sobre o que ja se sabe e como se soube.
+
+**Nao guarda plano nem estado de etapa.** O que fazer, com que contrato e em que
+pe esta cada unidade vive em
+[`docs/specs-arena-180/`](../specs-arena-180/README.md). Quando as duas coisas
+moravam aqui juntas, elas divergiram — o diario chegou a dizer "sem commit" para
+trabalho ja commitado.
+
+Ultima atualizacao: **2026-08-19**.
 
 ## Objetivo
 
@@ -34,7 +44,11 @@ Tres tensoes que puxam em direcoes opostas:
 
 ## Linha do tempo
 
-### (sem commit) — a fundacao de RA em device: a arena assenta, a partida fecha, a segunda sessao nao abre (2026-08-19)
+> Cada entrada registra o que a sessao **provou**, e vale como estava quando foi
+> escrita. Para saber em que pe uma etapa esta **hoje**, nao leia daqui: leia o
+> quadro em [`docs/specs-arena-180/README.md`](../specs-arena-180/README.md).
+
+### `066a5d7` — a fundacao de RA em device: a arena assenta, a partida fecha, a segunda sessao nao abre (2026-08-19)
 
 **Feito:** a F2 da [spec 08](../specs/08-fundacao-ar.md) inteira, mais a F7.a. A
 arena passou a ser autorada na origem: `arenaRoot` fica em `(0,0,0)` com rotacao
@@ -55,8 +69,8 @@ Sairam `placementGate.ts`, `floorEstimate.ts`, `hitTestSampling.ts` e
 3131 removidas; `EighthWallARManager.ts` foi de 1579 para 882 linhas. `npx tsc
 --noEmit` limpo, `npm run build` sem erro, e a contagem de teste caiu de 253 (o
 numero que o README registrava) para **180** — queda esperada, nao regressao: o
-que morreu testava medicao de piso e suavizacao da pose do preview. Nada
-commitado.
+que morreu testava medicao de piso e suavizacao da pose do preview. *Commitado
+depois, em `066a5d7`; a F7.a saiu em `9ba9e7a`.*
 
 **Provou:**
 
@@ -120,7 +134,7 @@ do jogo** — a mesma ressalva que o README ja carrega para os 31,3 s de
 convenceu alguem de fora.
 
 
-### (sem commit) — o chao nunca precisou ser medido (2026-08-19)
+### `9ba9e7a` — o chao nunca precisou ser medido (2026-08-19)
 
 **Feito:** um spike descartavel em `spike/origin-recenter/` (fora de `src/`, nao
 importado por nada), a extracao da superficie de API real do engine em
@@ -209,7 +223,7 @@ arena inteira e girar +-90 do centro, e giro de 360 esta fora do envelope de
 design. Isso virou a decisao D1 da spec 08, em forma geometrica e testavel: nada
 pode chamar a atencao do jogador para fora do arco.
 
-### (sem commit) — o arco parava de pular, e o chao nunca esteve sendo medido (2026-08-19)
+### `ef6c260` — o arco parava de pular, e o chao nunca esteve sendo medido (2026-08-19)
 
 Sessao inteira dedicada a uma queixa de device: *"posicionar o arco ja estava
 ruim, agora ficou bem pior, ela ancora meio em diagonal"*, refinada pelo usuario
@@ -284,7 +298,7 @@ Saiu junto o codigo morto que o modelo de colocacao por toque deixou
   SLAM nao bate com o chao no caso comum".** O que nao bate e o fit. Corrigido no
   arquivo.
 
-### (sem commit) — a hipotese 2 respondida, e uma virada de abordagem (2026-08-19)
+### `ef6c260` — a hipotese 2 respondida, e uma virada de abordagem (2026-08-19)
 
 **Provou.** O usuario ficou **parado** e deu um giro de 360 graus para olhar
 atras de si. Nesse intervalo a distancia camera->arena subiu de **1,09 m para
@@ -318,26 +332,24 @@ comecar.** O gesto de calibracao paga a divida que causou o drift medido acima. 
 o "pisca a tela ao passar do campo escaneado" converte o residuo de drift em
 regra de jogo legivel, o que a v3 ja quer.
 
-O plano executavel esta em
-[`docs/specs/07-calibracao-manual-do-piso.md`](../specs/07-calibracao-manual-do-piso.md).
-Foi **fatiado em duas ondas** por decisao do usuario: Onda 3 entrega so a altura
-manual (que e o que desbloqueia), Onda 4 traz raio ajustavel, varredura e
-fronteira. O motivo do corte: a pergunta da varredura ("mapear antes reduz o
-drift?") so e mensuravel depois que ancorar voltar a funcionar; juntas, um
-resultado ruim nao diria qual das duas falhou.
+A sessao virou isso num plano — a spec 07 — que o usuario **fatiou em duas
+partes**, entregando primeiro so a altura manual. O motivo do corte vale como
+metodo e sobrevive ao plano que o produziu: a pergunta da varredura ("mapear
+antes reduz o drift?") so e mensuravel depois que ancorar voltar a funcionar;
+juntas, um resultado ruim nao diria qual das duas falhou.
 
-**Nada da Onda 3 foi implementado.** Esta entrada registra um plano e dois
-resultados de device, nao uma entrega.
+**Nada disso chegou a ser implementado**, e a spec 07 ficou obsoleta uma sessao
+depois, quando se descobriu que o piso nunca precisou ser medido. Esta entrada
+registra dois resultados de device e uma direcao, nao uma entrega.
 
-### (sem commit) — spec v3, storyboard e plano de execucao (2026-08-17)
+### `34f3ddb` — spec v3, storyboard e plano de execucao (2026-08-17)
 
 **Feito:** chegaram ao repositorio, sem commit, `docs/guias/tower_gate_spec_v3.md`
 e `docs/guias/tower_gate_storyboard.html`. A sessao leu os dois, confrontou com
 `.github/copilot-instructions.md`, `README.md` e o codigo atual, e escreveu
-[`docs/guias/tower_gate_v3_plano_etapas.md`](../guias/tower_gate_v3_plano_etapas.md):
-11 etapas, cada uma com objetivo, arquivos-alvo, contrato, criterio de aceite,
-forma de validacao, fora de escopo, sub-agent e modelo, organizadas em 9 ondas de
-execucao.
+o plano de execucao da v3, quebrado em 11 etapas com contrato e criterio de
+aceite por etapa. Ele foi migrado depois para
+[`docs/specs-arena-180/`](../specs-arena-180/README.md).
 
 **Nenhum arquivo de `src/` foi tocado. Nenhum comando de build ou teste rodou.
 Nada foi a device.** Esta entrada registra um plano, nao um resultado — e o plano
@@ -377,7 +389,7 @@ nao por execucao.
    depois que a arena virou 80 cm, e agora nem se aplica ao jogo que sera
    construido: ele nao foi respondido, foi aposentado.
 
-**Nao resolveu:** nada foi executado. Nenhuma das 11 etapas comecou, nenhuma
+**Nao resolveu:** nada foi executado. Nenhuma etapa comecou, nenhuma
 decisao de design abaixo passou por device, e a tese central da v3 (atencao como
 recurso) continua sem uma unica evidencia a favor ou contra. Esta e a distincao
 que o diario existe para manter: o plano descreve o que deveria acontecer, e isso
@@ -385,64 +397,46 @@ nao e evidencia de que vai funcionar.
 
 ### Decisoes fechadas pelo plano (2026-08-17)
 
-A spec v3 §13 deixa pontas soltas. Oito precisavam de resposta para o plano ser
-executavel e foram fechadas **no documento de plano**, todas reversiveis, todas
-com o motivo registrado. Nenhuma foi validada em device; sao decisoes de projeto,
-nao resultados.
+A sessao fechou **oito pontas soltas** da spec v3 §13 que precisavam de resposta
+para o plano ser executavel — escala em metros, o gesto de colocacao, beber sem
+timer, hierarquia de audio, condicao de derrota, o Coelho como onda final, o arco
+parametrizavel e o fade das cartas.
 
-| # | Decisao | Motivo curto |
+Nenhuma foi validada em device: sao decisoes de projeto, nao resultados. A mais
+fragil e a do Coelho trocando de setor, que virou a **hipotese 3** abaixo.
+
+As oito, com o motivo de cada uma, vivem em
+[`docs/specs-arena-180/decisoes.md`](../specs-arena-180/decisoes.md) como
+`DJ-1`..`DJ-8`. A tabela que existia aqui era copia do documento de plano, e
+copia de spec e exatamente o que este diario deixou de carregar.
+
+## Hipoteses
+
+O progresso de validacao do experimento — o que ja foi respondido, o que foi
+refutado, e o que continua aposta. Cada uma carrega o **teste concreto** que a
+decide; hipotese sem teste e opiniao.
+
+| # | Hipotese | Situacao |
 |---|---|---|
-| D1 | Escala 1 unidade = 1 metro; `AR_ARENA_SCALE` deixa de existir | a v3 especifica tudo em metros, e as constantes que justificavam o fator estao sendo reescritas de qualquer jeito |
-| D2 | Colocacao = pressionar a carta, mirar, soltar (um gesto) | a spec pede "um gesto so"; dois toques sao duas viagens de enquadramento |
-| D3 | Beber o cha = tocar no caldeirao enquadrado, sem timer | a janela de vulnerabilidade **e** o ato de enquadrar; um timer por cima seria punicao dupla |
-| D4 | Audio: torradeira > alerta de flanco > impacto > tropa > ambiente | a torradeira e a unica informacao que o jogador nao tem como obter olhando |
-| D5 | Derrota = torre cair; estoque zerado nunca encerra | recomendacao da propria spec §13; o cogumelo roxo existe para isso |
-| D6 | Coelho = onda final, troca de setor a cada ~20 s | evita os dois extremos: fixo no central torna os laterais decoracao, circular obriga perseguicao |
-| D7 | `ARENA_ARC_DEG = 180`, parametrizavel | testar 120 graus vira troca de constante, sem tocar em logica |
-| D8 | Cartas com fade para 35% durante a mira; a pressionada nunca some | fecha "mirar longe vs. ler cartas" sem esconder qual carta esta na mao |
+| 1 | a tese central pode simplesmente nao ser divertida | **VIVA** — sem nenhuma evidencia, a favor ou contra |
+| 2 | girar no lugar derruba o tracking | **RESPONDIDA** (2026-08-19) — nao derruba dentro do arco: 0,075 m de mediana |
+| 3 | `DJ-6` (o Coelho trocando de setor) pode nao resolver nada | **VIVA** — so playtest responde |
+| 4 | a torre de 1,20 m pode intimidar crianca em festa | **VIVA** — nunca testada com crianca |
+| 5 | o cogumelo verde pode nao ter tuning viavel | **VIVA** — nao instrumentado |
+| 6 | a segunda sessao falha porque ninguem chama `run`/`stop` | **REFUTADA NA PREMISSA** (2026-08-19) — o behavior chama os dois |
+| 7 | a arena e grande demais para o comodo tipico | **VIVA** — uma medicao so, e num comodo que nao cabe |
 
-**D6 e a mais fragil** — e a decisao do plano com maior chance de cair no
-primeiro playtest, e esta marcada como provisoria no proprio documento.
-
-## Estado atual (2026-08-19)
-
-| | Situacao |
-|---|---|
-| Spec v3 e storyboard | **Escritos**, no repo, sem commit |
-| Plano de execucao em 11 etapas | **Escrito**; Etapas 1, 2 e 3 implementadas |
-| Tese central (atencao como recurso) | **Sem nenhuma evidencia** — nao existe prototipo que a exercite |
-| Arena polar de 180 graus (Etapa 1) | **Implementada**, logica pura com teste |
-| Escala de sala, torre 1,20 m (Etapa 2) | **Implementada**; nao avaliada em device por si so |
-| Ancoragem egocentrica (Etapa 3) | **SUPERADA pela F2.** Nao existe mais ancoragem: a arena e autorada na origem e nunca se move |
-| F2 da spec 08 (arena na origem) | **Implementada, nao commitada.** Compila, 180 testes, builda; **em device: uma partida completa jogada e vencida**. Criterio de aceite (cinco entradas) **nao cumprido** — a segunda entrada trava |
-| Piso declarado por `origin.y` | **FUNCIONA em device (2026-08-19)**: com 1,55 m declarado a arena assentou no chao real, sem medir nada |
-| Arco do preview tremendo/inclinando | **RESOLVIDO**, confirmado em device 2026-08-19 |
-| Medicao do piso | **REMOVIDA do codigo** (F2). `placementGate`, `floorEstimate`, `hitTestSampling` e `poseSmoothing` sairam com seus testes. A spec 07 esta obsoleta e nunca comecou |
-| Deriva girando no lugar | **MEDIDA com laco fechado (2026-08-19)**: mediana de **0,075 m** na varredura de flanco (+-90 graus, que e o envelope do jogo) e **0,78 m** no giro de 360, que o design nao exige. O numero antigo de 1,09 -> 2,9 m vinha de metrica que misturava deriva com deslocamento real |
-| Ordem de carregamento do `BABYLON` | **CONSERTADA** (F2). O `xr.js` saiu do `index.html` e e injetado por `src/ar/xr8Loader.ts` depois do shim. Rodou uma sessao completa em device |
-| `useRightHandedSystem` | **CAMINHO FECHADO**. O ramo destro deste build produz quaternion NaN. O projeto fica canhoto |
-| Azimute 0 | **CONSERTADO** (F2), em quatro lugares que precisavam concordar: heading do mundo, `ArenaArc.toArc/toLocal`, alvo da camera do modo tela e rotacao das barras do `ArenaGhost`. Confirmado em device: a torre certa nasce a frente |
-| `recenter()` | **CARACTERIZADO**: reseta so o yaw, preserva a gravidade, e **descarta o mapa** do SLAM |
-| Ondas convergindo ao jogador (Etapa 4) | **Nao iniciada** |
-| Alertas de flanco e audio (Etapa 5) | **Nao iniciados**; o projeto continua **sem modulo de audio** |
-| Colocacao com anel, cartas, caldeirao, album (6-11) | **Nao iniciadas** |
-| Segunda sessao de RA sem recarregar | **Quebra**, agora com sintoma nomeado (2026-08-19): so o loader gira, sem coaching overlay e sem arena. O overlay funciona na PRIMEIRA entrada, o que isola o defeito no ciclo de vida da sessao. Enderecada pela F5 |
-| Pegada da arena contra comodo real | **NAO CABE, e nunca tinha sido medido.** Arena autorada com 4,4 x 4,4 m contra um quarto de 2,60 x 2,90 m. A partida fechou assim mesmo. Decisao de escala em aberto — ver hipotese 7 |
-| Superficie de API do engine | **DOCUMENTADA** em `.claude/skills/babylonjs-game-dev/references/8thwall-api-surface.md`, 854 linhas com procedencia por simbolo |
-| Skills de RA | **DESATUALIZADAS no essencial**; as duas chamadas mortas (`imageTargets`, `recenterWithOrigin`) foram corrigidas pela F7.a. O ensino de fit de piso por `hitTest` continua la, e sai so na F7.b |
-
-## Hipoteses vivas
-
-Em ordem de suspeita, com o teste que decide cada uma. **A numeracao e estavel de
-proposito** — o README e a spec 08 citam "hipotese 2" e "hipotese 6" pelo numero,
+Ordenadas por suspeita, nao por ordem de descoberta. **A numeracao e estavel de
+proposito** — o README e as specs citam "hipotese 2" e "hipotese 6" pelo numero,
 entao itens novos entram no fim e dizem onde ficam na ordem de suspeita, em vez de
 renumerar tudo.
 
 1. **A tese central pode simplesmente nao ser divertida.** Girar para cobrir tres
-   flancos com um par de olhos pode ler como trabalho, nao como jogo — e nada no
-   plano prova o contrario antes da Onda 6.
-   **Teste:** as Etapas 1-7 jogaveis em device, com alguem que nao conhece o
-   jogo, medindo se a pessoa gira por curiosidade ou so quando a seta manda. A
+   flancos com um par de olhos pode ler como trabalho, nao como jogo — e nada
+   prova o contrario antes de alguem jogar.
+   **Teste:** o jogo minimamente jogavel em device (arena, ondas, alertas,
+   colocacao e cartas), com alguem que nao conhece o jogo, medindo se a pessoa
+   gira por curiosidade ou so quando a seta manda. A
    propria spec §12 nomeia esse corte: "passos 1-4 provam a tese; se a mecanica
    de atencao nao for divertida ali, o resto nao salva".
 
@@ -464,11 +458,12 @@ renumerar tudo.
    **Teste:** entrar, marcar, fazer so varredura de flanco por 3 minutos, e medir
    o laco fechado a cada minuto.
 
-3. **D6 (o Coelho trocando de setor) pode nao resolver nada.** Foi escolhida para
+3. **`DJ-6` (o Coelho trocando de setor) pode nao resolver nada.** Foi escolhida para
    evitar dois defeitos conhecidos, sem evidencia de que a terceira opcao nao tem
    um defeito proprio — perseguir um alvo que muda de setor pode ler como o pior
    dos dois mundos.
-   **Teste:** so playtest. E a primeira coisa a rever depois da Onda 6.
+   **Teste:** so playtest, e e a primeira coisa a rever depois que a tese
+   (hipotese 1) for testada.
 
 4. **A torre de 1,20 m pode intimidar crianca em festa** (spec §13). A escala foi
    escolhida para virar presenca; presenca perto demais e ameaca.
@@ -521,50 +516,3 @@ renumerar tudo.
    livre, sem mudar nada de codigo, e perguntar de novo sobre a torre. Se ali ela
    parecer certa, o problema e de comunicacao de requisito de espaco, nao de
    escala.
-
-## Proximos passos
-
-O plano de 11 etapas continua valendo para o **jogo**. A fundacao de RA saiu dele
-e virou a [spec 08](../specs/08-fundacao-ar.md), que **substitui a spec 07**.
-
-**1. Commitar a F2 e a F7.a.** Dois commits separados: a refatoracao de `src/` e
-a correcao da skill nao tem relacao uma com a outra.
-
-**2. F5 ANTES de F3 e F4 — mudanca de ordem contra a spec 08.** A spec poe a F5
-na Onda 5; o device de 2026-08-19 mostrou que ela e o gargalo de **toda**
-validacao seguinte. Sem segunda sessao nao da para cumprir o criterio de aceite
-da propria F2 (cinco entradas), e cada teste de F3 ou F4 custa um recarregamento
-de pagina inteiro. Trocar o ciclo de vida por `XR8.reconfigureSession({ runConfig })`
-e o passo que devolve iteracao rapida ao resto.
-
-Antes de trocar, instrumente: logar `onAttach`/`onDetach`/`onStart` do modulo de
-status e ver quais disparam na segunda entrada. E o que transforma a hipotese 6
-em causa provada, em vez de trocar a API e torcer.
-
-**3. F3 e F4, nesta ordem** (mesmo arquivo): altura do jogador como `origin.y`,
-depois `recenter()` como colocacao e reposicionamento. A F4 tambem devolve ao
-jogador a escolha de para onde o arco olha — hoje o prompt diz so "toque para
-entrar" porque essa escolha nao existe entre a F2 e a F4.
-
-**4. Decidir a escala** (hipotese 7), e decidir antes de qualquer playtest com
-gente de fora: ou a arena encolhe, ou o requisito de espaco vira parte de como o
-jogo se apresenta. Nao decida com uma sessao so — rode a mesma partida num
-espaco grande primeiro.
-
-**5. F6 e depois F7.b.** A adocao do `xrextras` e a reescrita das skills de RA,
-que depende da evidencia de device acumulada ate ali.
-
-**6. Retomar a Etapa 4 do plano da v3** (diretor de ondas) e seguir para a
-validacao da tese com alguem de fora — que continua sendo o corte que decide o
-resto do projeto.
-
-**Medicao que ficou pendente:** se a deriva acumula ao longo de 3 minutos de
-varredura de flanco (hipotese 2). Nao bloqueia nada acima.
-
-**Divida tecnica de lateralidade — QUITADA (2026-08-19).** O registro anterior
-apontava dois problemas: o comentario de `src/ar/arenaHeading.ts` mandando ligar
-`useRightHandedSystem` (e afirmando falsamente que `main.ts` ja ligava), e o zero
-do azimute em `-Z`. A F2 resolveu os dois — o comentario saiu e o zero virou
-`+Z`, em quatro lugares. O que **continua valendo como aviso permanente**: ligar
-`scene.useRightHandedSystem` neste build produz quaternion NaN e mata a pose. O
-caminho destro segue fechado.

@@ -19,11 +19,10 @@ paralelas rodam, cada agent com um conjunto **exclusivo** de arquivos gravaveis.
 | 2 | [06-integracao](06-integracao.md) | serial, um agent — e onde tudo se encontra |
 | 3 | HUD responsivo | condicional: so existe se o teste de device da onda 0 apontar portrait |
 
-**Fora dessa tabela, e vigente:** [08-fundacao-ar](08-fundacao-ar.md) — a
-refundacao da RA (arena na origem, piso declarado, `recenter` como colocacao) e
-a reescrita das skills de RA. Ela substitui a
-[07-calibracao-manual-do-piso](07-calibracao-manual-do-piso.md), que esta
-**obsoleta e nunca comecou**. As ondas da spec 08 estao dentro dela.
+**Estas specs descrevem o prototipo table-scale, que a v3 aposentou.** Elas
+ficam como historico do que foi construido. As specs 07 e 08 foram migradas e
+hoje sao stubs: o trabalho vivo de RA — e o **unico** quadro de estado da v3 —
+esta em [`docs/specs-arena-180/`](../specs-arena-180/README.md).
 
 Onda 1 so comeca depois que a onda 0 passar em `npx tsc --noEmit`.
 
@@ -65,8 +64,10 @@ Valem para qualquer codigo produzido a partir destes specs:
 
 ## Contexto minimo do projeto
 
-Jogo de cartas em lanes (estilo Clash Royale) em RA, Babylon.js + TypeScript +
+Jogo de cartas em RA, Babylon.js + TypeScript +
 Vite. A RA usa o engine 8th Wall (SLAM por camera, `@8thwall/engine-binary`),
 nao WebXR — funciona no Safari do iPhone. Mundo em metros, `scale: "absolute"`.
 O jogo tambem roda em modo "tela" (canvas 3D comum, sem camera), e **a logica de
-jogo tem que ser independente do modo de render**.
+jogo tem que ser independente do modo de render**. As lanes e a arena de mesa
+sairam de escopo na v3 — ver
+[`docs/specs-arena-180/`](../specs-arena-180/README.md).

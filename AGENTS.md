@@ -4,6 +4,7 @@
 
 1. **Leia `.github/copilot-instructions.md`** — contém as regras obrigatórias de arquitetura, tecnologias, padrões de código e convenções do projeto.
 2. **Leia `README.md`** — contém o objetivo do projeto, estado atual, roadmap e instruções de execução.
+3. **Para qualquer trabalho na v3 (arena de 180°), leia `docs/specs-arena-180/README.md`** — é a única fonte de verdade sobre o que já está pronto e o que falta. Não reconcilie estado a partir de outros documentos: se algum deles discordar do quadro, o quadro está certo.
 
 As diretrizes definidas nesses arquivos são **mandatórias** e devem ser seguidas em todas as interações.
 

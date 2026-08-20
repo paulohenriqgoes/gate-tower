@@ -19,11 +19,14 @@ e a RA e cenografia cara. A v3 transforma enquadramento em recurso escasso: ~60
 graus de campo de visao para cobrir um arco de 180, com dois tercos sempre cegos.
 
 Com isso morrem a arena de mesa, o caminho unico central e o HUD 2D de combate.
-O plano de execucao esta em
-[`docs/guias/tower_gate_v3_plano_etapas.md`](docs/guias/tower_gate_v3_plano_etapas.md)
-— 11 etapas em 9 ondas. **As Etapas 1, 2 e 3 estao implementadas e foram a
-device.** A investigacao vive em
-[`docs/experimentos/arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md).
+
+> **O que ja esta pronto e o que falta fica em
+> [`docs/specs-arena-180/README.md`](docs/specs-arena-180/README.md), e so la.**
+> Aquele quadro tem uma linha por unidade de trabalho, com o estado, a evidencia
+> que o sustenta e o comando que o verifica. Este README **nao** repete estado da
+> v3 — se algum outro documento discordar do quadro, o quadro esta certo.
+> A investigacao — o que cada tentativa **provou** — vive em
+> [`docs/experimentos/arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md).
 
 **A fundacao de RA foi refeita do zero em 2026-08-19, depois de ler o codigo
 oficial do 8th Wall.** O projeto media o chao com `hitTest`; o engine espera que
@@ -32,17 +35,10 @@ nenhuma vez: ele poe conteudo em `y = 0` e declara a posicao inicial da camera
 com `XR8.XrController.updateCameraProjectionMatrix({ origin, facing })`. Se
 `origin.y` for a altura do jogador, o piso cai em `y = 0` de graca.
 
-O plano executavel esta em
-[`docs/specs/08-fundacao-ar.md`](docs/specs/08-fundacao-ar.md). Ele **substitui a
-spec 07**, que tentava consertar a medicao de piso e ficou obsoleta sem nunca ter
-comecado.
-
-**A F2 e a F7.a estao implementadas (2026-08-19), ainda sem commit.** Em device
-(Android/Chrome) a fundacao nova sustentou **uma partida completa, jogada e
-vencida**: a arena assentou no chao real com `origin.y = 1,55 m`, sem medir nada,
-e o SLAM nao perdeu tracking uma vez sequer na sessao inteira. O criterio de
-aceite da F2 — cinco entradas em RA — **nao foi cumprido**, porque a segunda
-entrada trava (bloqueador 1 abaixo).
+Essa refundacao foi implementada e **confirmada em device** (`066a5d7`): a arena
+assentou no chao real com `origin.y = 1,55 m`, sem medir nada, e sustentou uma
+partida completa, jogada e vencida, sem perder tracking uma vez sequer. As
+unidades de RA que faltam, e o estado de cada uma, estao no quadro.
 
 A demo do mundo vivo foi **encerrada por mudanca de direcao**, nao por resposta:
 a pergunta dela nunca chegou a ser medida com alguem de fora, e o palco em que
@@ -62,9 +58,10 @@ Leia isto antes de mexer em qualquer coisa:
    A hipotese registrada antes — "o projeto nunca chama `XR8.run()` nem
    `XR8.stop()`" — esta **errada**: o `xrCameraBehavior` chama os dois. O
    suspeito e o `XR8.clearCameraPipelineModules()` que o `detach` executa.
-   Enderecado pela F5 da spec 08, com `XR8.reconfigureSession()`. **Este e hoje o
-   gargalo de toda validacao em device**, porque cada teste custa um
-   recarregamento de pagina.
+   **Este e hoje o gargalo de toda validacao em device**, porque cada teste custa
+   um recarregamento de pagina — e por isso ele e a primeira unidade da fila.
+   Plano e estado em
+   [`RA-F5`](docs/specs-arena-180/RA-F5-segunda-sessao.md).
 2. **Ligar `scene.useRightHandedSystem` quebra a RA inteira.** O ramo destro do
    modulo Babylon deste build produz quaternion **NaN**: a pose morre e a tela
    fica preta sobre o feed da camera. Confirmado em device em 2026-08-19. O
@@ -74,7 +71,9 @@ Leia isto antes de mexer em qualquer coisa:
    diametro do arco de 2,2 m de raio), com as torres a `z = +-2,0 m`. A sessao de
    2026-08-19 rodou num quarto de 2,60 x 2,90 m: a partida fechou, mas boa parte
    da arena ficou atravessando parede, e a torre de 1,20 m foi descrita como "um
-   pouco grande". Decisao de escala em aberto — ver a hipotese 7 do diario.
+   pouco grande". **Decisao de escala em aberto**, com o teste que a decide em
+   [`decisoes.md`](docs/specs-arena-180/decisoes.md) — nao decida com uma sessao
+   so, num comodo que nao cabe.
 4. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
    aposentou a pergunta, porque a arena nasce no chao ao redor do jogador.
 
@@ -260,8 +259,8 @@ de jogo quando a spec da demo tirou paisagem de escopo.
   arco de 2,2 m de raio, os 12 graus valem 47 cm — e a normal medida tem mediana
   de 13 graus e picos de 48, ou seja e ruido. A inclinacao continua sendo medida
   e registrada na telemetria, nunca aplicada na cena.
-- **O piso e DECLARADO, nao medido** (F2, implementada em 2026-08-19 e
-  **confirmada em device**: a arena assentou no chao real com 1,55 m declarado).
+- **O piso e DECLARADO, nao medido.** Confirmado em device em 2026-08-19: a
+  arena assentou no chao real com 1,55 m declarado, sem medir nada.
   `origin.y` da
   `XR8.XrController.updateCameraProjectionMatrix` define onde a camera comeca na
   cena; com ele igual a altura do jogador, o piso e `y = 0` por construcao. E o
@@ -275,7 +274,9 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 - Antes de comecar, o jogador ve o **arco real** deitado no piso, centrado nele.
   Ele nao gira mais junto com o celular: a arena esta na origem desde o frame
   zero, e o toque so diz "agora" — **nao pode ser recusado, e nao escolhe
-  direcao**. Escolher para onde o arco olha volta na F4, com `recenter()`.
+  direcao**. Escolher para onde o arco olha volta com
+  [`RA-F4`](docs/specs-arena-180/RA-F4-recenter-como-colocacao.md), via
+  `recenter()`.
 - **A arena vive na origem do mundo e nunca se move.** Em todo codigo oficial do
   8th Wall o conteudo fica em coordenadas autorais fixas, e quem se move e a
   origem da camera, via `recenter()`. Como o jogador e o vertice do arco, ele
@@ -311,10 +312,10 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 ## Roadmap de Fases
 
 > **Esta tabela descreve o prototipo table-scale, nao a v3.** Ela continua valendo
-> como estado do codigo que existe hoje. O roadmap vigente e o plano de 11 etapas
-> em [`docs/guias/tower_gate_v3_plano_etapas.md`](docs/guias/tower_gate_v3_plano_etapas.md),
-> e a Fase 03 (som) deixou de ser opcional la: na v3, ouvir o que nao se ve e
-> mecanica, nao charme.
+> como estado do codigo que existe hoje. O roadmap vigente e o quadro em
+> [`docs/specs-arena-180/README.md`](docs/specs-arena-180/README.md), e a Fase 03
+> (som) deixou de ser opcional la: na v3, ouvir o que nao se ve e mecanica, nao
+> charme — e o projeto continua **sem modulo de audio**.
 
 | Concluida | Fase | Tarefa | Objetivo |
 | --- | --- | --- | --- |
