@@ -28,6 +28,7 @@ import { HudLayer } from "./ui/HudLayer";
 import { OffscreenIndicator } from "./ui/OffscreenIndicator";
 import { StartScreen } from "./ui/StartScreen";
 import { EighthWallARManager } from "./ar/EighthWallARManager";
+import { loadXR8 } from "./ar/xr8Loader";
 import { createPlayerCamera, playerYawDeg } from "./camera/arenaFraming";
 import { FullscreenToggle } from "./ui/FullscreenToggle";
 import { onOrientationChange } from "./ui/screenOrientation";
@@ -118,10 +119,9 @@ interface TelemetryWiringOptions {
  * fora do `createScene` para deixar explicito ONDE cada evento da spec e
  * logado:
  *
- * - `arena_placed`: na ancoragem da arena (inicio do Beat 4), com tracking status,
- *   altura do device, altura do piso e inclinacao medida;
- * - `floor_fit_sample`: a cada ~1 s durante a sessao, amostra do fit do piso
- *   (inclinacao, altura, qualidade);
+ * - `arena_placed`: na confirmacao da arena (inicio do Beat 4), com o status de
+ *   tracking do instante — o unico dado do fechamento que sobreviveu a spec 08,
+ *   porque a arena deixou de ter posicao, direcao e piso medido a reportar;
  * - `enemy_awakened`: no toque que acorda a torre inimiga (fim do Beat 4);
  * - `camera_distance_sample`: a cada 500 ms a partir de `arena_placed`;
  * - `tracking_lost` / `tracking_recovered`: nas mudancas de `trackingStatus`;
@@ -162,35 +162,9 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 		telemetry.log({
 			type: "arena_placed",
 			trackingStatus: report.trackingStatus ?? null,
-			deviceHeightM: report.deviceHeightM,
-			floorY: report.anchor.floorY,
-			tiltDeg: report.tiltDeg,
 		});
 		isTrackingMonitorActive = true;
 		telemetry.startCameraSampling(measureCameraDistanceMeters);
-	});
-
-	// Recusas de ancoragem sao contadas desde o primeiro toque, e nao so depois
-	// de ancorar: o que se quer medir aqui e justamente quantas tentativas o
-	// jogador gasta ANTES de conseguir.
-	const placementRejectedObserver = arManager.onPlacementRejectedObservable.add((rejection) => {
-		telemetry.log({ ...rejection, type: "placement_rejected" });
-	});
-
-	const reanchoredObserver = arManager.onArenaReanchoredObservable.add(({ offsetM }) => {
-		telemetry.log({ offsetM, type: "arena_reanchored" });
-	});
-
-	// Throttle de 1 Hz para evitar ruido: a medicao roda a 5 Hz e uma partida
-	// de 3 min geraria ~900 eventos se nao houvesse limite.
-	let lastFloorFitSampleLoggedMs = 0;
-	const floorFitSampledObserver = arManager.onFloorFitSampledObservable.add((sample) => {
-		const nowMs = performance.now();
-		if (nowMs - lastFloorFitSampleLoggedMs < 1000) {
-			return;
-		}
-		lastFloorFitSampleLoggedMs = nowMs;
-		telemetry.log({ type: "floor_fit_sample", ...sample });
 	});
 
 	const enemyAwakenedObserver = gameFlow.onEnemyAwakenedObservable.add(() => {
@@ -237,9 +211,6 @@ function wireSessionTelemetry(options: TelemetryWiringOptions): () => void {
 
 	return () => {
 		arManager.onArenaClosedObservable.remove(arenaClosedObserver);
-		arManager.onArenaReanchoredObservable.remove(reanchoredObserver);
-		arManager.onFloorFitSampledObservable.remove(floorFitSampledObserver);
-		arManager.onPlacementRejectedObservable.remove(placementRejectedObserver);
 		arManager.onTrackingStatusChangedObservable.remove(trackingObserver);
 		gameFlow.onEnemyAwakenedObservable.remove(enemyAwakenedObserver);
 		combatEngine.onCardDeployedObservable.remove(cardDeployedObserver);
@@ -666,6 +637,16 @@ async function bootstrap(): Promise<void> {
 	if (!canvas) {
 		throw new Error("Canvas renderCanvas nao encontrado.");
 	}
+
+	// O engine do 8th Wall e carregado AQUI, e nao por uma tag no `index.html`.
+	// `XR8.Babylonjs` e construido eager no load do bundle e so cria os
+	// temporarios internos dela se `window.BABYLON` ja existir naquele instante
+	// — ou seja, o shim precisa vir antes do script, e so por JS da para
+	// garantir a ordem (spec 08, bug 1). Nao esperamos a promise: o menu abre
+	// com o botao de RA esmaecido e o AR Manager libera quando o engine chega.
+	void loadXR8().catch((error) => {
+		console.error("[main] Falha ao carregar o engine do 8th Wall.", error);
+	});
 
 	const engine = new Engine(canvas, true);
 	const { isArSessionActive, relayout, scene } = await createScene(engine, canvas);

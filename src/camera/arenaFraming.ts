@@ -7,10 +7,13 @@ import { DEVICE_FOV_DEG } from "../arena/ArenaArc";
 import { headingDegFromForward } from "../ar/arenaHeading";
 
 /**
- * Altura dos olhos do jogador simulado, em metros. E o mesmo intervalo que o
- * gate de RA aceita para o device (`MIN_DEVICE_HEIGHT_M`/`MAX_DEVICE_HEIGHT_M`,
- * em `src/ar/placementGate.ts`): o modo tela nao pode simular um jogador que a
- * RA recusaria.
+ * Altura dos olhos do jogador simulado, em metros.
+ *
+ * E a contraparte de tela do `DEFAULT_PLAYER_HEIGHT_M` do AR Manager — a altura
+ * que a RA DECLARA ao engine para o piso cair em `y = 0`. Os dois numeros
+ * respondem a mesma pergunta ("a que altura estao os olhos de quem joga?") e nao
+ * precisam ser iguais: aqui e um jogador simulado, la e uma pessoa real que a
+ * F3 vai deixar ajustar.
  */
 export const PLAYER_EYE_HEIGHT_M = 1.6;
 
@@ -63,9 +66,10 @@ export function createPlayerCamera(scene: Scene, canvas: HTMLCanvasElement): Uni
     scene
   );
 
-  // Azimute 0 do `ArenaArc` = -Z. O jogador comeca olhando para o centro do
-  // arco, que e onde a torre nasce.
-  camera.setTarget(new Vector3(0, PLAYER_EYE_HEIGHT_M, -1));
+  // Azimute 0 do `ArenaArc` = +Z (spec 08: numa cena canhota, que e a unica que
+  // este build do 8th Wall suporta, a frente da camera com `facing` identidade
+  // e o +Z). O jogador comeca olhando para o centro do arco.
+  camera.setTarget(new Vector3(0, PLAYER_EYE_HEIGHT_M, 1));
 
   // FOV HORIZONTAL fixo, e nao o vertical do Babylon: `framedSectors` mede
   // cobertura em azimute, que e horizontal. Com o padrao (vertical fixo) o
@@ -92,12 +96,11 @@ export function createPlayerCamera(scene: Scene, canvas: HTMLCanvasElement): Uni
 
 /**
  * Heading do jogador simulado, em graus, na convencao de `arenaHeading`
- * (0 = -Z, positivo para a direita).
+ * (0 = +Z, positivo para a direita).
  *
- * No modo tela a ancora e implicita e nao precisa ser negociada: a arena fica
- * na origem do mundo, sem rotacao, entao o azimute 0 do arco JA e o -Z do
- * mundo e o heading da camera ja e o yaw relativo. E por isso que aqui nao ha
- * subtracao de ancora nenhuma, ao contrario da RA.
+ * Aqui nao ha subtracao de ancora nenhuma porque a arena fica na origem do
+ * mundo, sem rotacao — e desde a spec 08 isso vale nos DOIS modos, nao so no de
+ * tela. A RA responde a mesma pergunta pelo mesmo caminho.
  */
 export function playerYawDeg(camera: HeadingSource): number {
   const forward = camera.getDirection(Vector3.Forward());

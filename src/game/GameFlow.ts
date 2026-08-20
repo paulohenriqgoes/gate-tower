@@ -5,7 +5,7 @@ import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Observable, type Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 
-import type { ArenaAnchor, ArenaAnchorReport, ArSessionController } from "../ar/ArSessionController";
+import type { ArenaClosedReport, ArSessionController } from "../ar/ArSessionController";
 import { type MatchOverPayload, resolveMatchResultByHpPct, type TeamId } from "../battle/BattleTypes";
 import { EnemyScriptRunner, type EnemyDeployment } from "../battle/EnemyScript";
 import type { MatchClock } from "../battle/MatchClock";
@@ -164,7 +164,7 @@ export class GameFlow {
   private lastWakeStage: WakeStage = "asleep";
 
   private readonly modeSelectedObserver: Observer<GameMode>;
-  private readonly arenaClosedObserver: Observer<ArenaAnchorReport>;
+  private readonly arenaClosedObserver: Observer<ArenaClosedReport>;
   private readonly sessionFailedObserver: Observer<string>;
   private readonly towerDestroyedObserver: Observer<TeamId>;
   private readonly matchExpiredObserver: Observer<void>;
@@ -185,7 +185,7 @@ export class GameFlow {
       this.handleModeSelected(mode);
     });
 
-    // Ancorar a arena JA entra no mundo vivo: nao ha mais confirmacao no meio
+    // Confirmar a arena JA entra no mundo vivo: nao ha mais confirmacao no meio
     // (o botao "Comecar" saiu junto com o painel de setup).
     this.arenaClosedObserver = options.arManager.onArenaClosedObservable.add(() => {
       this.handleArenaClosed();

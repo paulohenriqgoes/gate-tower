@@ -26,9 +26,14 @@ export interface ArenaPoint2D {
 }
 
 /**
- * Azimute em graus. 0 = a direcao para onde o celular apontava quando a arena
- * fechou. Positivo cresce para a DIREITA do jogador. Frente = -Z, direita = +X
- * (sistema destro, como o modulo Babylon do 8th Wall configura a cena).
+ * Azimute em graus. 0 = a direcao para onde o jogador aponta no fechamento.
+ * Positivo cresce para a DIREITA do jogador. Frente = +Z, direita = +X (cena
+ * CANHOTA, o default do Babylon e o unico caminho que este build do 8th Wall
+ * suporta — ver `src/ar/arenaHeading.ts`).
+ *
+ * Desde a spec 08 (F2) o `arenaRoot` fica na origem com rotacao identidade para
+ * sempre: este espaco local E o espaco do mundo, e o azimute 0 e literalmente o
+ * +Z do mundo — a direcao em que a camera de RA olha com `facing` identidade.
  */
 export interface ArcPoint {
   azimuthDeg: number;
@@ -142,7 +147,10 @@ export function sectorCenterDeg(
  */
 export function toArc(p: ArenaPoint2D): ArcPoint {
   const radiusM = Math.sqrt(p.x * p.x + p.z * p.z);
-  const azimuthDeg = radToDeg(Math.atan2(p.x, -p.z));
+  // `atan2(x, z)`, e nao `atan2(x, -z)`: o zero do azimute e o +Z. O sinal e o
+  // mesmo nas duas convencoes (direita da +90), so o zero e que muda — e o zero
+  // e justamente o que nao cancela em medida relativa.
+  const azimuthDeg = radToDeg(Math.atan2(p.x, p.z));
   return { azimuthDeg, radiusM };
 }
 
@@ -151,7 +159,7 @@ export function toLocal(p: ArcPoint): ArenaPoint2D {
   const rad = degToRad(p.azimuthDeg);
   return {
     x: p.radiusM * Math.sin(rad),
-    z: -p.radiusM * Math.cos(rad)
+    z: p.radiusM * Math.cos(rad)
   };
 }
 

@@ -30,15 +30,27 @@ function seededRng(seed: number): () => number {
 }
 
 describe("toArc / toLocal — round trip", () => {
-  it("frente exata: azimute 0 -> (0, -radius) -> azimute 0", () => {
+  it("frente exata: azimute 0 -> (0, +radius) -> azimute 0", () => {
+    // O +Z, e nao o -Z. Este e o zero do azimute desde a spec 08: numa cena
+    // canhota — a unica que este build do 8th Wall suporta — a frente da camera
+    // com `facing` identidade e o +Z. Um marcador de azimute 0 colocado em -Z
+    // nasce nas costas do jogador (medido em device, 2026-08-19).
     const p: ArcPoint = { azimuthDeg: 0, radiusM: 1.5 };
     const local = toLocal(p);
     expect(local.x).toBeCloseTo(0, 10);
-    expect(local.z).toBeCloseTo(-1.5, 10);
+    expect(local.z).toBeCloseTo(1.5, 10);
 
     const back = toArc(local);
     expect(back.azimuthDeg).toBeCloseTo(0, 10);
     expect(back.radiusM).toBeCloseTo(1.5, 10);
+  });
+
+  it("costas: azimute 180 -> (0, -radius)", () => {
+    // O par do teste acima. Provar so a frente deixa passar uma convencao
+    // espelhada; provar as costas fecha o zero pelos dois lados.
+    const local = toLocal({ azimuthDeg: 180, radiusM: 1.5 });
+    expect(local.x).toBeCloseTo(0, 10);
+    expect(local.z).toBeCloseTo(-1.5, 10);
   });
 
   it("direita exata: azimute 90 -> (radius, 0) -> azimute 90", () => {
@@ -65,11 +77,11 @@ describe("toArc / toLocal — round trip", () => {
 
   it("round-trip em varios pontos arbitrarios (ArenaPoint2D -> ArcPoint -> ArenaPoint2D)", () => {
     const points = [
-      { x: 0.3, z: -1.1 },
-      { x: -0.8, z: -2.0 },
-      { x: 1.9, z: -0.2 },
-      { x: -1.4, z: -1.4 },
-      { x: 0.05, z: -2.19 }
+      { x: 0.3, z: 1.1 },
+      { x: -0.8, z: 2.0 },
+      { x: 1.9, z: 0.2 },
+      { x: -1.4, z: 1.4 },
+      { x: 0.05, z: 2.19 }
     ];
 
     for (const point of points) {

@@ -2,7 +2,6 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { describe, expect, it } from "vitest";
 
 import { PLAYER_EYE_HEIGHT_M, playerYawDeg, type HeadingSource } from "./arenaFraming";
-import { MAX_DEVICE_HEIGHT_M, MIN_DEVICE_HEIGHT_M } from "../ar/placementGate";
 import { sectorOf } from "../arena/ArenaArc";
 
 /**
@@ -15,8 +14,17 @@ function lookingAt(x: number, z: number): HeadingSource {
 }
 
 describe("playerYawDeg — a convencao de angulo do modo tela", () => {
-  it("chama de 0 a direcao -Z, que e o azimute 0 do arco", () => {
-    expect(playerYawDeg(lookingAt(0, -1))).toBe(0);
+  it("chama de 0 a direcao +Z, que e o azimute 0 do arco", () => {
+    expect(playerYawDeg(lookingAt(0, 1))).toBe(0);
+  });
+
+  it("poe a direcao -Z nas COSTAS do jogador, e nao na frente", () => {
+    // O par deste teste com o de cima e o conserto do bug 3 da spec 08. O zero
+    // do azimute estava no -Z, convencao de cena DESTRA, enquanto o runtime e
+    // canhoto — e como o yaw so era usado em subtracoes, o erro de 180 graus
+    // cancelava e ninguem via. Provar o ZERO, e nao so o sinal, e o que impede
+    // ele de voltar.
+    expect(Math.abs(playerYawDeg(lookingAt(0, -1)))).toBe(180);
   });
 
   it("da yaw POSITIVO quando o jogador vira para a direita dele (+X)", () => {
@@ -31,12 +39,12 @@ describe("playerYawDeg — a convencao de angulo do modo tela", () => {
   it("concorda com `sectorOf` sobre qual flanco o jogador esta encarando", () => {
     expect(sectorOf(playerYawDeg(lookingAt(1, 0)))).toBe("right");
     expect(sectorOf(playerYawDeg(lookingAt(-1, 0)))).toBe("left");
-    expect(sectorOf(playerYawDeg(lookingAt(0, -1)))).toBe("center");
+    expect(sectorOf(playerYawDeg(lookingAt(0, 1)))).toBe("center");
   });
 
   it("ignora a inclinacao: olhar para o chao nao muda de flanco", () => {
     const lookingDownAndRight: HeadingSource = {
-      getDirection: () => new Vector3(0.5, -0.85, -0.1),
+      getDirection: () => new Vector3(0.5, -0.85, 0.1),
     };
 
     // A componente Y e descartada, entao o que sobra e um olhar bem para a
@@ -53,10 +61,12 @@ describe("playerYawDeg — a convencao de angulo do modo tela", () => {
 });
 
 describe("PLAYER_EYE_HEIGHT_M", () => {
-  it("cabe na faixa de altura que o gate de RA aceita", () => {
-    // O modo tela nao pode simular um jogador que a RA recusaria — se esta
-    // altura sair da faixa, o modo tela vira um jogo diferente do de device.
-    expect(PLAYER_EYE_HEIGHT_M).toBeGreaterThanOrEqual(MIN_DEVICE_HEIGHT_M);
-    expect(PLAYER_EYE_HEIGHT_M).toBeLessThanOrEqual(MAX_DEVICE_HEIGHT_M);
+  it("cabe na faixa de altura que a RA vai oferecer ao jogador", () => {
+    // O gate de altura de device morreu com a medicao de piso (spec 08), mas a
+    // pergunta que este teste faz continua valendo: o modo tela nao pode
+    // simular um jogador impossivel em RA. A faixa agora e a do controle de
+    // altura declarada (F3): 1,30 a 2,05 m.
+    expect(PLAYER_EYE_HEIGHT_M).toBeGreaterThanOrEqual(1.3);
+    expect(PLAYER_EYE_HEIGHT_M).toBeLessThanOrEqual(2.05);
   });
 });

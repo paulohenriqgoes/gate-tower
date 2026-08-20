@@ -2,8 +2,6 @@ import type { Behavior } from "@babylonjs/core/Behaviors/behavior";
 import type { Camera } from "@babylonjs/core/Cameras/camera";
 
 declare global {
-  type XR8HitTestType = "FEATURE_POINT" | "ESTIMATED_SURFACE" | "DETECTED_SURFACE";
-
   type XR8TrackingStatus =
     | "INITIALIZING"
     | "LIMITED"
@@ -14,13 +12,6 @@ declare global {
   // O engine reporta mais motivos do que os que consumimos; o `string & {}`
   // preserva o autocomplete dos conhecidos sem rejeitar os demais.
   type XR8TrackingReason = "INITIALIZING" | "UNDEFINED" | (string & {});
-
-  interface XR8HitTestResult {
-    type: XR8HitTestType;
-    position: { x: number; y: number; z: number };
-    rotation: { x: number; y: number; z: number; w: number };
-    distance: number;
-  }
 
   /**
    * Campos que o engine entrega nos callbacks do pipeline module. A tipagem e
@@ -93,8 +84,29 @@ declare global {
         enableLighting?: boolean;
         scale?: "responsive" | "absolute";
       }) => void;
-      hitTest: (x: number, y: number, includedTypes: XR8HitTestType[]) => XR8HitTestResult[];
       recenter: () => void;
+      /**
+       * Declara onde a camera COMECA na cena, e com isso onde fica o piso.
+       *
+       * E a primitiva de grounding do engine, e o exemplo oficial de world
+       * tracking (`threejs-world-effects-example`) nao usa nenhuma outra: com
+       * `origin.y` na altura do jogador, o chao real cai exatamente em `y = 0`
+       * no frame zero, sem medir nada. Foi confirmado em device (2026-08-19):
+       * melhor calibracao com `delta 0.00` a 1,55 m declarado.
+       *
+       * NAO esta na doc publica do 8th Wall e existe no bundle. `cam` aceita as
+       * intrinsics (nunca usadas aqui) e `updateRecenterPoint` decide se o ponto
+       * de `recenter()` acompanha a nova origem — tambem ausente da doc.
+       *
+       * NUNCA envie valor nao-finito: `origin` com NaN contamina o frame do
+       * engine de forma permanente, sem caminho de volta sem reiniciar a sessao.
+       */
+      updateCameraProjectionMatrix: (params: {
+        cam?: Record<string, number>;
+        facing?: { w: number; x: number; y: number; z: number };
+        origin?: { x: number; y: number; z: number };
+        updateRecenterPoint?: boolean;
+      }) => void;
     };
     XrDevice: {
       isDeviceBrowserCompatible: (config?: Record<string, unknown>) => boolean;

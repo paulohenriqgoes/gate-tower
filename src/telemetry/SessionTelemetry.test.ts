@@ -20,7 +20,7 @@ describe("SessionTelemetry", () => {
       const clock = createFakeClock(1000);
       const telemetry = new SessionTelemetry({ now: clock.now });
 
-      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL", deviceHeightM: 1.5, floorY: 0, tiltDeg: 0 });
+      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL" });
 
       clock.tick(250);
       telemetry.log({ type: "enemy_awakened" });
@@ -44,7 +44,7 @@ describe("SessionTelemetry", () => {
       const clock = createFakeClock();
       const telemetry = new SessionTelemetry({ now: clock.now });
 
-      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL", deviceHeightM: 1.5, floorY: 0, tiltDeg: 0 });
+      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL" });
       clock.tick(12_500);
       telemetry.log({ type: "enemy_awakened" });
 
@@ -62,7 +62,7 @@ describe("SessionTelemetry", () => {
     it("devolve null quando falta enemy_awakened", () => {
       const telemetry = new SessionTelemetry({ now: createFakeClock().now });
 
-      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL", deviceHeightM: 1.5, floorY: 0, tiltDeg: 0 });
+      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL" });
 
       expect(telemetry.getBeat4DurationMs()).toBeNull();
     });
@@ -176,7 +176,7 @@ describe("SessionTelemetry", () => {
       const clock = createFakeClock();
       const telemetry = new SessionTelemetry({ now: clock.now });
 
-      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL", deviceHeightM: 1.5, floorY: 0, tiltDeg: 0 });
+      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL" });
       clock.tick(8000);
       telemetry.log({ type: "enemy_awakened" });
 
@@ -193,7 +193,7 @@ describe("SessionTelemetry", () => {
       expect(parsed.events).toHaveLength(2);
       expect(parsed.events[0]).toEqual({
         atMs: 0,
-        event: { type: "arena_placed", trackingStatus: "NORMAL", deviceHeightM: 1.5, floorY: 0, tiltDeg: 0 },
+        event: { type: "arena_placed", trackingStatus: "NORMAL" },
       });
       expect(parsed.events[1]).toEqual({ atMs: 8000, event: { type: "enemy_awakened" } });
     });
@@ -202,7 +202,7 @@ describe("SessionTelemetry", () => {
       const telemetry = new SessionTelemetry();
       const downloadSpy = vi.spyOn(telemetry, "downloadJson");
 
-      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL", deviceHeightM: 1.5, floorY: 0, tiltDeg: 0 });
+      telemetry.log({ type: "arena_placed", trackingStatus: "NORMAL" });
       telemetry.exportJson();
 
       expect(downloadSpy).not.toHaveBeenCalled();

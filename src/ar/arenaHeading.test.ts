@@ -1,68 +1,82 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  arenaLocalToWorldOffset,
-  arenaRootYawRad,
-  forwardFromHeadingDeg,
-  headingDegFromForward,
-  normalizeAngleDeg,
-  relativeYawDeg,
-} from "./arenaHeading";
-import { sectorOf, toLocal } from "../arena/ArenaArc";
+import { headingDegFromForward, normalizeAngleDeg } from "./arenaHeading";
+import { sectorOf, toArc, toLocal } from "../arena/ArenaArc";
 
-/** Headings de teste cobrindo os quatro quadrantes e as fronteiras. */
-const HEADINGS = [0, 17, 45, 90, 133, 180, -45, -90, -179];
+/**
+ * Este arquivo prova DUAS coisas separadas sobre o azimute, e a separacao e o
+ * ponto.
+ *
+ * O SINAL — direita do jogador da angulo positivo — sempre esteve certo, e
+ * continuaria certo mesmo com a convencao invertida: `atan2(x, -z)` e
+ * `atan2(x, z)` concordam sobre qual lado e a direita.
+ *
+ * O ZERO nao. Ate a spec 08 ele ficava no -Z (convencao de cena DESTRA), e o
+ * runtime e canhoto: a frente da camera com `facing` identidade e o +Z, e um
+ * marcador de azimute 0 colocado em -Z nasce ATRAS do jogador (confirmado em
+ * device, 2026-08-19).
+ *
+ * O erro sobreviveu tanto tempo porque o yaw so era consumido em SUBTRACOES
+ * (`heading - headingDaAncora`), e ali o offset de 180 graus cancela. O que nao
+ * cancelava era a geometria local do arco. Um teste que so verifica o sinal
+ * passa nas duas convencoes e nao protege nada — por isso cada bloco abaixo diz
+ * qual das duas propriedades esta provando.
+ */
+const AZIMUTHS = [-180, -135, -90, -45, -12, 0, 30, 60, 90, 135, 179];
 
 describe("normalizeAngleDeg", () => {
-  it("mantem o intervalo (-180, +180]", () => {
-    for (const deg of [-720, -181, -180, -179, 0, 179, 180, 181, 540, 1234.5]) {
-      const normalized = normalizeAngleDeg(deg);
-
-      expect(normalized).toBeGreaterThan(-180);
-      expect(normalized).toBeLessThanOrEqual(180);
+  it("mantem angulos ja dentro de (-180, 180]", () => {
+    for (const deg of AZIMUTHS) {
+      expect(normalizeAngleDeg(deg)).toBeCloseTo(deg === -180 ? 180 : deg);
     }
   });
 
-  it("fecha +180 no lado positivo e -180 tambem", () => {
-    // A ponta do intervalo e fechada em cima: os dois representam a mesma
-    // direcao, e escolher um lado evita que o painel de debug pisque entre
-    // -180 e +180 com o jogador parado de costas.
-    expect(normalizeAngleDeg(180)).toBe(180);
-    expect(normalizeAngleDeg(-180)).toBe(180);
+  it("dobra angulos fora da faixa", () => {
+    expect(normalizeAngleDeg(190)).toBeCloseTo(-170);
+    expect(normalizeAngleDeg(-190)).toBeCloseTo(170);
+    expect(normalizeAngleDeg(540)).toBeCloseTo(180);
   });
 
-  it("preserva o angulo modulo 360", () => {
-    for (const deg of HEADINGS) {
-      expect(normalizeAngleDeg(deg + 360)).toBeCloseTo(normalizeAngleDeg(deg));
-      expect(normalizeAngleDeg(deg - 360)).toBeCloseTo(normalizeAngleDeg(deg));
-    }
+  it("nunca devolve -0 nem NaN", () => {
+    expect(Object.is(normalizeAngleDeg(-0), 0)).toBe(true);
+    expect(normalizeAngleDeg(Number.NaN)).toBe(0);
+    expect(normalizeAngleDeg(Number.POSITIVE_INFINITY)).toBe(0);
   });
 });
 
-describe("headingDegFromForward", () => {
-  it("le -Z do mundo como heading 0", () => {
-    expect(headingDegFromForward(0, -1)).toBe(0);
+describe("headingDegFromForward — o ZERO", () => {
+  it("chama de 0 a direcao +Z", () => {
+    expect(headingDegFromForward(0, 1)).toBe(0);
   });
 
-  it("cresce para a DIREITA do jogador (+X quando ele olha para -Z)", () => {
-    // Numa cena destra a direita de `frente` e `cross(frente, cima)`; com
-    // frente = (0,0,-1) e cima = (0,1,0) isso da +X. Se este teste inverter,
-    // todo spawn "fora do quadro" nasce do lado errado.
+  it("poe o -Z nas COSTAS do jogador, a 180 graus", () => {
+    // O teste que teria pego o bug 3 da spec 08. Sem ele, `atan2(x, -z)` passa
+    // por todos os outros testes deste arquivo.
+    expect(Math.abs(headingDegFromForward(0, -1))).toBe(180);
+  });
+
+  it("concorda com o zero do `ArenaArc`: azimute 0 cai no +Z local", () => {
+    // Amarra as duas convencoes uma na outra. Elas TEM que ser a mesma, porque
+    // desde a F2 o espaco local da arena E o espaco do mundo — `arenaRoot` fica
+    // na origem, sem rotacao, para sempre.
+    const local = toLocal({ azimuthDeg: 0, radiusM: 2.2 });
+
+    expect(local.x).toBeCloseTo(0);
+    expect(local.z).toBeCloseTo(2.2);
+    expect(headingDegFromForward(local.x, local.z)).toBeCloseTo(0);
+  });
+});
+
+describe("headingDegFromForward — o SINAL", () => {
+  it("da heading POSITIVO para a direita do jogador (+X)", () => {
+    // Um sinal trocado aqui nao quebra nada visivelmente: so faz o inimigo
+    // nascer no flanco que o jogador esta encarando, tres modulos adiante.
     expect(headingDegFromForward(1, 0)).toBeCloseTo(90);
     expect(headingDegFromForward(-1, 0)).toBeCloseTo(-90);
-    expect(headingDegFromForward(0, 1)).toBeCloseTo(180);
   });
 
-  it("ignora o modulo do vetor", () => {
-    expect(headingDegFromForward(3, -3)).toBeCloseTo(headingDegFromForward(0.1, -0.1));
-  });
-
-  it("e o inverso de forwardFromHeadingDeg", () => {
-    for (const heading of HEADINGS) {
-      const { x, z } = forwardFromHeadingDeg(heading);
-
-      expect(headingDegFromForward(x, z)).toBeCloseTo(heading);
-    }
+  it("nao depende do comprimento do vetor", () => {
+    expect(headingDegFromForward(3, 3)).toBeCloseTo(headingDegFromForward(0.1, 0.1));
   });
 
   it("devolve 0 (e nao NaN) para direcao horizontal degenerada", () => {
@@ -70,90 +84,38 @@ describe("headingDegFromForward", () => {
   });
 });
 
-describe("relativeYawDeg", () => {
-  it("e zero quando a camera nao girou desde o fechamento", () => {
-    for (const heading of HEADINGS) {
-      expect(relativeYawDeg(heading, heading)).toBe(0);
+describe("heading do mundo e azimute da arena sao o MESMO numero", () => {
+  /**
+   * A consequencia direta da fundacao de RA: sem `arenaRoot` transladado ou
+   * rotacionado, nao existe conversao entre "para onde o jogador olha" e "que
+   * azimute do arco e esse". A versao anterior tinha `relativeYawDeg`,
+   * `arenaRootYawRad` e `arenaLocalToWorldOffset` para fazer essa ponte — as
+   * tres sumiram porque a ponte nao liga mais dois lugares diferentes.
+   */
+  it("um ponto do arco tem heading igual ao proprio azimute", () => {
+    for (const azimuthDeg of AZIMUTHS) {
+      const local = toLocal({ azimuthDeg, radiusM: 2.2 });
+
+      // `normalizeAngleDeg` fecha a faixa em (-180, +180], entao -180 volta
+      // como +180; `toArc` devolve o `atan2` cru. E a mesma direcao — comparar
+      // sem cuidar do wrap so faria o teste reclamar de aritmetica de angulo.
+      const expected = azimuthDeg === -180 ? 180 : azimuthDeg;
+
+      expect(headingDegFromForward(local.x, local.z)).toBeCloseTo(expected);
+      expect(normalizeAngleDeg(toArc(local).azimuthDeg)).toBeCloseTo(expected);
     }
   });
 
-  it("e POSITIVO quando o jogador gira para a direita", () => {
-    // Fechou olhando para -Z; girou 40 graus para a direita (rumo a +X).
-    expect(relativeYawDeg(40, 0)).toBeCloseTo(40);
-    expect(relativeYawDeg(-40, 0)).toBeCloseTo(-40);
+  it("olhar para a direita seleciona o setor da direita", () => {
+    expect(sectorOf(headingDegFromForward(1, 0))).toBe("right");
+    expect(sectorOf(headingDegFromForward(-1, 0))).toBe("left");
+    expect(sectorOf(headingDegFromForward(0, 1))).toBe("center");
   });
 
-  it("atravessa a costura de 180 sem saltar 360", () => {
-    // Fechou olhando para +Z (heading 180) e girou um pouco para a direita.
-    expect(relativeYawDeg(-170, 180)).toBeCloseTo(10);
-    // ... e um pouco para a esquerda.
-    expect(relativeYawDeg(170, 180)).toBeCloseTo(-10);
-  });
-});
-
-describe("arenaRootYawRad", () => {
-  it("faz o -Z LOCAL do root apontar para o heading do fechamento", () => {
-    for (const heading of HEADINGS) {
-      // O root leva o -Z local (0, 0, -1) para o mundo.
-      const world = arenaLocalToWorldOffset(heading, 0, -1);
-      const expected = forwardFromHeadingDeg(heading);
-
-      expect(world.x).toBeCloseTo(expected.x);
-      expect(world.z).toBeCloseTo(expected.z);
-    }
-  });
-
-  it("e o NEGATIVO do heading em radianos", () => {
-    expect(arenaRootYawRad(90)).toBeCloseTo(-Math.PI / 2);
-    expect(arenaRootYawRad(-90)).toBeCloseTo(Math.PI / 2);
-  });
-});
-
-describe("azimute da arena x heading do mundo", () => {
-  it("um azimute da arena vira o heading do fechamento SOMADO a ele", () => {
-    // Este e o invariante que amarra `ArenaArc` a este arquivo: mandar uma
-    // tropa para o azimute `a` com a arena fechada no heading `h` tem que
-    // coloca-la na direcao de mundo `h + a`.
-    for (const heading of HEADINGS) {
-      for (const azimuth of [-90, -60, -30, 0, 30, 60, 90]) {
-        const local = toLocal({ azimuthDeg: azimuth, radiusM: 2.2 });
-        const world = arenaLocalToWorldOffset(heading, local.x, local.z);
-
-        expect(headingDegFromForward(world.x, world.z)).toBeCloseTo(
-          normalizeAngleDeg(heading + azimuth)
-        );
-      }
-    }
-  });
-
-  it("o setor da DIREITA fica mesmo a direita do jogador", () => {
-    // Fechou olhando para -Z. O setor `right` cobre [30, 90].
-    expect(sectorOf(60)).toBe("right");
-
-    const local = toLocal({ azimuthDeg: 60, radiusM: 2 });
-    const world = arenaLocalToWorldOffset(0, local.x, local.z);
-
-    // Jogador olhando para -Z: a direita dele e +X.
-    expect(world.x).toBeGreaterThan(0);
-  });
-
-  it("o setor da ESQUERDA fica mesmo a esquerda do jogador", () => {
-    expect(sectorOf(-60)).toBe("left");
-
-    const local = toLocal({ azimuthDeg: -60, radiusM: 2 });
-    const world = arenaLocalToWorldOffset(0, local.x, local.z);
-
-    expect(world.x).toBeLessThan(0);
-  });
-
-  it("o setor CENTRAL fica a frente, seja qual for o heading", () => {
-    for (const heading of HEADINGS) {
-      const local = toLocal({ azimuthDeg: 0, radiusM: 2 });
-      const world = arenaLocalToWorldOffset(heading, local.x, local.z);
-      const forward = forwardFromHeadingDeg(heading);
-
-      // Produto escalar positivo = esta na frente de quem fechou a arena.
-      expect(world.x * forward.x + world.z * forward.z).toBeGreaterThan(0);
-    }
+  it("olhar para tras nao seleciona setor nenhum", () => {
+    // D1 da spec 08: nada induz o jogador a girar para fora do arco. O arco tem
+    // 180 graus, entao as costas dele sao terra de ninguem — e precisam ser
+    // reportadas como `null`, e nao como o setor mais proximo.
+    expect(sectorOf(headingDegFromForward(0, -1))).toBeNull();
   });
 });

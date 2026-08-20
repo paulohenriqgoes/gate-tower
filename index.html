@@ -18,7 +18,14 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Tower Gate" />
-    <script src="/8thwall/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
+    <!--
+      O xr.js NAO e carregado aqui, e isso nao e esquecimento. `XR8.Babylonjs` e
+      construido EAGER no load do engine (`Babylonjs: mQ()`), e a fabrica so cria
+      os temporarios internos dela se `window.BABYLON` ja existir NAQUELE
+      instante. Com a tag aqui, `async`, o engine chega antes do shim e aqueles
+      temporarios ficam `undefined` para sempre. Quem injeta a tag, depois de
+      instalar o shim, e `src/ar/xr8Loader.ts`.
+    -->
     <!--
       Coaching overlay de escala absoluta (MIT). Guia o jogador a mover o
       celular para frente e para tras ate o SLAM convergir — sem isso da para

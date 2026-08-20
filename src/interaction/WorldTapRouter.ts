@@ -26,10 +26,9 @@ export type WorldTapHandler = (
  * qualquer coisa que nao seja a torre inimiga: nada acontece, sem mensagem e
  * sem tutorial).
  *
- * O handler recebe o resultado bruto do picking. Quem precisa das coordenadas
- * de tela (o AR Manager, que dispara hitTests do 8th Wall em aneis ao redor do
- * toque) continua lendo `scene.pointerX/pointerY` por conta propria — sao
- * validas dentro do callback.
+ * O handler recebe o resultado bruto do picking. O AR Manager ignora os dois
+ * argumentos: desde a spec 08 o toque de RA nao carrega informacao de posicao
+ * nenhuma — a arena ja esta na origem, e o dedo so diz "agora".
  */
 export class WorldTapRouter {
   private readonly scene: Scene;

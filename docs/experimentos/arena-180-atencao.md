@@ -34,6 +34,92 @@ Tres tensoes que puxam em direcoes opostas:
 
 ## Linha do tempo
 
+### (sem commit) — a fundacao de RA em device: a arena assenta, a partida fecha, a segunda sessao nao abre (2026-08-19)
+
+**Feito:** a F2 da [spec 08](../specs/08-fundacao-ar.md) inteira, mais a F7.a. A
+arena passou a ser autorada na origem: `arenaRoot` fica em `(0,0,0)` com rotacao
+identidade e nada mais escreve nesses campos. O piso deixou de ser medido e
+passou a ser declarado — a camera de RA nasce em `(0, 1.55, 0)` e o manager chama
+`XR8.XrController.updateCameraProjectionMatrix({ origin, facing })` no `onStart`
+do pipeline. O `xr.js` saiu do `index.html` e virou injecao por JS em
+`src/ar/xr8Loader.ts`, depois do shim de `window.BABYLON`.
+
+O zero do azimute virou `atan2(x, z)` — e nao so em `arenaHeading.ts`. Ele estava
+errado em **quatro** lugares que precisavam concordar: o heading do mundo, o
+`toArc`/`toLocal` do `ArenaArc`, o alvo da camera do modo tela e a rotacao das
+barras do `ArenaGhost`. Consertar so o primeiro teria deixado a geometria do arco
+espelhada contra o heading.
+
+Sairam `placementGate.ts`, `floorEstimate.ts`, `hitTestSampling.ts` e
+`poseSmoothing.ts` com seus testes. Balanco: 27 arquivos, 522 linhas adicionadas e
+3131 removidas; `EighthWallARManager.ts` foi de 1579 para 882 linhas. `npx tsc
+--noEmit` limpo, `npm run build` sem erro, e a contagem de teste caiu de 253 (o
+numero que o README registrava) para **180** — queda esperada, nao regressao: o
+que morreu testava medicao de piso e suavizacao da pose do preview. Nada
+commitado.
+
+**Provou:**
+
+*O piso declarado funciona, e esta e a primeira confirmacao em device da
+fundacao.* Com `origin.y = 1,55 m` a arena assentou no chao real, sem `hitTest`,
+sem fit de plano e sem gate de colocacao. A pergunta que a spec 07 tentava
+responder por dois caminhos nunca precisou ser feita.
+
+*A fundacao aguenta uma partida inteira.* A telemetria exportada
+(`tower-gate-sessao-1787184130010.json`) registra a sessao completa:
+`arena_placed` com `trackingStatus: NORMAL` aos 33,1 s, `enemy_awakened` aos
+97,8 s, tres cartas invocadas, e `match_ended` com `result: win` aos 128,7 s, 100
+x 0. Distancia minima da camera ate a arena: 1,25 m. E **nenhum** `tracking_lost`
+ou `tracking_recovered` na sessao inteira — o SLAM entrou em `NORMAL` e ficou.
+
+*O JSON prova que a partida rodou sobre o codigo da F2, e nao sobre o anterior.*
+O `arena_placed` carrega so `trackingStatus`; `deviceHeightM`, `floorY` e
+`tiltDeg` deixaram de existir junto com a medicao que os produzia.
+
+*O zero do azimute esta consertado.* O usuario relatou ver a torre inimiga a
+frente ao entrar. Antes da F2 a raiz da arena era girada por `-heading`, e com o
+heading 180 graus errado o giro resultante punha a torre do JOGADOR na frente;
+com a raiz em identidade e o zero em `+Z`, a frente virou a frente literal.
+
+*O defeito da segunda sessao nao e do coaching overlay nem da nova ordem de
+carregamento.* O overlay apareceu e sumiu ao calibrar na PRIMEIRA entrada. Isso
+isola o problema no ciclo de vida da sessao — que e exatamente onde a F5 mexe.
+
+*A arena nao cabe no comodo em que foi jogada, e a partida fechou mesmo assim.*
+O quarto tem 2,60 x 2,90 m; a arena e autorada com 4,4 x 4,4 m
+(`ARENA_WIDTH_METERS`/`ARENA_LENGTH_METERS`, `src/arena/ArenaSystem.ts:28-29`),
+que e exatamente o diametro do arco de 2,2 m de raio, com as torres a
+`z = +-2,0 m`. Ou seja: a arena e ~1,7x a largura e ~1,5x o comprimento do
+comodo, e boa parte dela ficou atravessando parede. E o primeiro dado que o
+projeto tem sobre a arena autorada contra um comodo real medido.
+
+**Nao resolveu:** *a segunda sessao de RA*, que agora tem sintoma nomeado. Depois
+de vencer, "jogar novamente" percorre `match-over -> menu -> escolher RA`, e
+`setPhase("menu")` chama `arManager.exitAR()` (`src/game/GameFlow.ts:597-600`).
+Na segunda entrada **so o loader gira: sem coaching overlay e sem arena**. O
+sintoma se explica pelo codigo — `src/ar/EighthWallARManager.ts:316` mantem o
+loader visivel enquanto `latestTrackingStatus === null`, e numa segunda sessao o
+`onUpdate` do pipeline nunca chega, entao o loader gira para sempre. Isso
+descreve o SINTOMA, nao a causa; a causa continua sendo a hipotese do
+`clearCameraPipelineModules()` executado no detach do behavior (hipotese 6
+abaixo), que a F5 endereca.
+
+Com isso o **criterio de aceite da F2 nao pode ser cumprido**: ele pede cinco
+entradas em RA e a segunda ja trava.
+
+**Resultado em device:** Android/Chrome, 2026-08-19, quarto de 2,60 x 2,90 m. Uma
+partida completa jogada e vencida; segunda entrada travada no loader. A torre de
+1,20 m foi descrita pelo jogador como "um pouco grande" para o comodo, com a
+proposta de reduzir uns 20% ou permitir ajuste por pinca — proposta, nao
+medicao; ver a hipotese 7.
+
+**Cuidado ao ler esta etapa:** o Beat 4 de 64,6 s esta acima do limiar de 30 s
+que a demo define como "leitura do mundo validada", mas **quem testou foi o autor
+do jogo** — a mesma ressalva que o README ja carrega para os 31,3 s de
+2026-08-14. O numero mede que o fluxo funciona ponta a ponta, nao que o mundo
+convenceu alguem de fora.
+
+
 ### (sem commit) — o chao nunca precisou ser medido (2026-08-19)
 
 **Feito:** um spike descartavel em `spike/origin-recenter/` (fora de `src/`, nao
@@ -327,24 +413,30 @@ primeiro playtest, e esta marcada como provisoria no proprio documento.
 | Tese central (atencao como recurso) | **Sem nenhuma evidencia** — nao existe prototipo que a exercite |
 | Arena polar de 180 graus (Etapa 1) | **Implementada**, logica pura com teste |
 | Escala de sala, torre 1,20 m (Etapa 2) | **Implementada**; nao avaliada em device por si so |
-| Ancoragem egocentrica (Etapa 3) | **Implementada e em device** — ancora, mas ver as duas linhas abaixo |
+| Ancoragem egocentrica (Etapa 3) | **SUPERADA pela F2.** Nao existe mais ancoragem: a arena e autorada na origem e nunca se move |
+| F2 da spec 08 (arena na origem) | **Implementada, nao commitada.** Compila, 180 testes, builda; **em device: uma partida completa jogada e vencida**. Criterio de aceite (cinco entradas) **nao cumprido** — a segunda entrada trava |
+| Piso declarado por `origin.y` | **FUNCIONA em device (2026-08-19)**: com 1,55 m declarado a arena assentou no chao real, sem medir nada |
 | Arco do preview tremendo/inclinando | **RESOLVIDO**, confirmado em device 2026-08-19 |
-| Medicao do piso | **APOSENTADA**. O chao passa a ser declarado por `origin.y`, nao medido. `placementGate`, `floorEstimate` e `hitTestSampling` saem na F2 da [spec 08](../specs/08-fundacao-ar.md). A spec 07 esta obsoleta e nunca comecou |
+| Medicao do piso | **REMOVIDA do codigo** (F2). `placementGate`, `floorEstimate`, `hitTestSampling` e `poseSmoothing` sairam com seus testes. A spec 07 esta obsoleta e nunca comecou |
 | Deriva girando no lugar | **MEDIDA com laco fechado (2026-08-19)**: mediana de **0,075 m** na varredura de flanco (+-90 graus, que e o envelope do jogo) e **0,78 m** no giro de 360, que o design nao exige. O numero antigo de 1,09 -> 2,9 m vinha de metrica que misturava deriva com deslocamento real |
-| Ordem de carregamento do `BABYLON` | **QUEBRADA em producao**. `window.BABYLON` tem de existir antes do `xr.js` executar; hoje o shim entra em `enterAR()`. Conserto na F2 |
+| Ordem de carregamento do `BABYLON` | **CONSERTADA** (F2). O `xr.js` saiu do `index.html` e e injetado por `src/ar/xr8Loader.ts` depois do shim. Rodou uma sessao completa em device |
 | `useRightHandedSystem` | **CAMINHO FECHADO**. O ramo destro deste build produz quaternion NaN. O projeto fica canhoto |
-| Azimute 0 | **INVERTIDO 180 graus**, nao espelhado. `atan2(x, -z)` deve virar `atan2(x, z)`. Conserto na F2 |
+| Azimute 0 | **CONSERTADO** (F2), em quatro lugares que precisavam concordar: heading do mundo, `ArenaArc.toArc/toLocal`, alvo da camera do modo tela e rotacao das barras do `ArenaGhost`. Confirmado em device: a torre certa nasce a frente |
 | `recenter()` | **CARACTERIZADO**: reseta so o yaw, preserva a gravidade, e **descarta o mapa** do SLAM |
 | Ondas convergindo ao jogador (Etapa 4) | **Nao iniciada** |
 | Alertas de flanco e audio (Etapa 5) | **Nao iniciados**; o projeto continua **sem modulo de audio** |
 | Colocacao com anel, cartas, caldeirao, album (6-11) | **Nao iniciadas** |
-| Segunda sessao de RA sem recarregar | **Quebra** — herdado. A hipotese antiga (o projeto nunca chama `XR8.run()`/`stop()`) esta **errada**: o `xrCameraBehavior` chama os dois. Endereçada pela F5 da spec 08, com `XR8.reconfigureSession()` |
+| Segunda sessao de RA sem recarregar | **Quebra**, agora com sintoma nomeado (2026-08-19): so o loader gira, sem coaching overlay e sem arena. O overlay funciona na PRIMEIRA entrada, o que isola o defeito no ciclo de vida da sessao. Enderecada pela F5 |
+| Pegada da arena contra comodo real | **NAO CABE, e nunca tinha sido medido.** Arena autorada com 4,4 x 4,4 m contra um quarto de 2,60 x 2,90 m. A partida fechou assim mesmo. Decisao de escala em aberto — ver hipotese 7 |
 | Superficie de API do engine | **DOCUMENTADA** em `.claude/skills/babylonjs-game-dev/references/8thwall-api-surface.md`, 854 linhas com procedencia por simbolo |
-| Skills de RA | **DESATUALIZADAS**. Ensinam fit de piso por `hitTest` e duas chamadas mortas. Reescrita na F7 da spec 08 |
+| Skills de RA | **DESATUALIZADAS no essencial**; as duas chamadas mortas (`imageTargets`, `recenterWithOrigin`) foram corrigidas pela F7.a. O ensino de fit de piso por `hitTest` continua la, e sai so na F7.b |
 
 ## Hipoteses vivas
 
-Em ordem de suspeita, com o teste que decide cada uma.
+Em ordem de suspeita, com o teste que decide cada uma. **A numeracao e estavel de
+proposito** — o README e a spec 08 citam "hipotese 2" e "hipotese 6" pelo numero,
+entao itens novos entram no fim e dizem onde ficam na ordem de suspeita, em vez de
+renumerar tudo.
 
 1. **A tese central pode simplesmente nao ser divertida.** Girar para cobrir tres
    flancos com um par de olhos pode ler como trabalho, nao como jogo — e nada no
@@ -400,55 +492,79 @@ Em ordem de suspeita, com o teste que decide cada uma.
    `XR8.reconfigureSession({ runConfig })`, que existe no bundle e e o que o
    `xrextras` usa. Enderecada pela F5 da [spec 08](../specs/08-fundacao-ar.md).
 
+   **Evidencia nova (2026-08-19, device):** o sintoma foi observado por inteiro —
+   na segunda entrada so o loader gira, **sem coaching overlay e sem arena** —, e
+   o overlay funciona normalmente na primeira. Isso e consistente com o suspeito
+   (os modulos do app, o de status e o do overlay, sao limpos no detach e o que
+   os re-adiciona nao volta a rodar), mas **nao prova o mecanismo**: nenhum log de
+   `XR8.run`/`stop`/`clearCameraPipelineModules` foi capturado no aparelho. Para
+   provar, instrumente o `onAttach`/`onDetach`/`onStart` do modulo de status e
+   olhe quais deles disparam na segunda entrada.
+
+7. **A arena autorada pode ser grande demais para o comodo tipico** (suspeita
+   alta hoje — atras so da hipotese 1). Medido em device em 2026-08-19: arena de
+   4,4 x 4,4 m com torres a `z = +-2,0 m` num quarto de 2,60 x 2,90 m. A partida
+   fechou, e o jogador descreveu o arco como "ate correto" mas a torre de 1,20 m
+   como "um pouco grande", propondo reduzir uns 20% ou permitir ajuste por pinca.
+
+   Essa proposta **contradiz uma decisao escrita do projeto**: a escala em RA e
+   fixa em 1 porque cada ator ja nasce com o tamanho fisico da spec
+   (`src/arena/metrics.ts`), e o comentario de `applyArenaScale` argumenta que um
+   controle de escala "so deixaria o jogador desmentir esse tamanho". As duas
+   coisas nao podem valer ao mesmo tempo: ou a escala fisica e o ponto (e o
+   comodo pequeno e uma limitacao a comunicar), ou ela e negociavel (e a decisao
+   cai).
+
+   **O que ainda nao foi medido:** um comodo que CABE. Uma unica sessao num
+   quarto de 2,6 m nao separa "a arena e grande demais" de "este comodo e pequeno
+   demais". **Teste:** rodar a mesma partida num espaco de 5 x 5 m ou ao ar
+   livre, sem mudar nada de codigo, e perguntar de novo sobre a torre. Se ali ela
+   parecer certa, o problema e de comunicacao de requisito de espaco, nao de
+   escala.
+
 ## Proximos passos
 
 O plano de 11 etapas continua valendo para o **jogo**. A fundacao de RA saiu dele
-e virou a [spec 08](../specs/08-fundacao-ar.md), que **substitui a spec 07** — a
-spec 07 tentava consertar a medicao de piso, e a 08 remove a medicao de piso.
+e virou a [spec 08](../specs/08-fundacao-ar.md), que **substitui a spec 07**.
 
-**1. F2 da spec 08 — a arena vive na origem.** E a inversao arquitetural: arena
-autorada em `(0,0,0)`, piso declarado por `origin.y`, ordem de carregamento do
-`BABYLON` consertada, azimute corrigido para `atan2(x, z)`, e remocao de
-`placementGate.ts`, `floorEstimate.ts` e `hitTestSampling.ts`. Serial, sozinha
-na onda — refatora `EighthWallARManager.ts` inteiro.
+**1. Commitar a F2 e a F7.a.** Dois commits separados: a refatoracao de `src/` e
+a correcao da skill nao tem relacao uma com a outra.
 
-**2. Device: validar F2.** Entrar em RA cinco vezes e ver a arena no chao nas
-cinco, sem recusa possivel. E conferir que o marcador de azimute 0 nasce **a
-frente**, nao atras.
+**2. F5 ANTES de F3 e F4 — mudanca de ordem contra a spec 08.** A spec poe a F5
+na Onda 5; o device de 2026-08-19 mostrou que ela e o gargalo de **toda**
+validacao seguinte. Sem segunda sessao nao da para cumprir o criterio de aceite
+da propria F2 (cinco entradas), e cada teste de F3 ou F4 custa um recarregamento
+de pagina inteiro. Trocar o ciclo de vida por `XR8.reconfigureSession({ runConfig })`
+e o passo que devolve iteracao rapida ao resto.
+
+Antes de trocar, instrumente: logar `onAttach`/`onDetach`/`onStart` do modulo de
+status e ver quais disparam na segunda entrada. E o que transforma a hipotese 6
+em causa provada, em vez de trocar a API e torcer.
 
 **3. F3 e F4, nesta ordem** (mesmo arquivo): altura do jogador como `origin.y`,
-depois `recenter()` como colocacao e reposicionamento.
+depois `recenter()` como colocacao e reposicionamento. A F4 tambem devolve ao
+jogador a escolha de para onde o arco olha — hoje o prompt diz so "toque para
+entrar" porque essa escolha nao existe entre a F2 e a F4.
 
-**4. F5 e F6 em paralelo** (arquivos disjuntos): segunda sessao via
-`reconfigureSession`, e adocao do que o `xrextras` ja resolve.
+**4. Decidir a escala** (hipotese 7), e decidir antes de qualquer playtest com
+gente de fora: ou a arena encolhe, ou o requisito de espaco vira parte de como o
+jogo se apresenta. Nao decida com uma sessao so — rode a mesma partida num
+espaco grande primeiro.
 
-**5. F7 — reescrever as skills de RA.** Depende da evidencia de device das
-anteriores. E objetivo declarado do projeto, nao trabalho acessorio.
+**5. F6 e depois F7.b.** A adocao do `xrextras` e a reescrita das skills de RA,
+que depende da evidencia de device acumulada ate ali.
 
-**6. Depois disso, retomar a Etapa 4 do plano da v3** (diretor de ondas) e seguir
-para a validacao da tese com alguem de fora, que continua sendo o corte que
-decide o resto do projeto.
+**6. Retomar a Etapa 4 do plano da v3** (diretor de ondas) e seguir para a
+validacao da tese com alguem de fora — que continua sendo o corte que decide o
+resto do projeto.
 
 **Medicao que ficou pendente:** se a deriva acumula ao longo de 3 minutos de
-varredura de flanco (hipotese 2). Ela nao bloqueia a F2.
+varredura de flanco (hipotese 2). Nao bloqueia nada acima.
 
-**Divida tecnica de lateralidade — REVOGADA EM PARTE (2026-08-19).** O registro
-anterior estava certo no fato e errado na consequencia. Certo: `scene.useRightHandedSystem`
-nao e ligado em lugar nenhum, apesar de `src/ar/arenaHeading.ts:26` afirmar que
-`src/main.ts` liga. **Errado:** a conclusao de que "azimute positivo = direita do
-jogador" seria na verdade a esquerda.
-
-Medido em device: com o marcador em `+X` a **direita** do jogador e o de `-X` a
-esquerda, o sinal esta **correto** na cena canhota. O que esta errado e o **zero**:
-`headingDegFromForward` usa `Math.atan2(x, -z)` (frente = `-Z`, convencao destra),
-mas a frente da camera com `facing` identidade no runtime canhoto e `+Z`. O
-marcador de azimute 0 colocado em `-Z` nasce **atras** do jogador e so aparece
-com `yaw` perto de 180 graus.
-
-O conserto e `Math.atan2(x, z)`. E como `relativeYawDeg` e uma subtracao de dois
-headings, o offset de 180 graus **cancela** para medidas relativas — por isso
-`framedSectors` pode estar acertando hoje por acidente. O que nao cancela e a
-orientacao da geometria local do arco.
-
-E o caminho "so ligar `useRightHandedSystem`" esta **fechado**: ele produz
-quaternion NaN neste build do engine. Ver o bug 2 da entrada de 2026-08-19.
+**Divida tecnica de lateralidade — QUITADA (2026-08-19).** O registro anterior
+apontava dois problemas: o comentario de `src/ar/arenaHeading.ts` mandando ligar
+`useRightHandedSystem` (e afirmando falsamente que `main.ts` ja ligava), e o zero
+do azimute em `-Z`. A F2 resolveu os dois — o comentario saiu e o zero virou
+`+Z`, em quatro lugares. O que **continua valendo como aviso permanente**: ligar
+`scene.useRightHandedSystem` neste build produz quaternion NaN e mata a pose. O
+caminho destro segue fechado.

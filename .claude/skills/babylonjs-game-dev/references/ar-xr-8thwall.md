@@ -145,9 +145,18 @@ Para experiências ancoradas a uma imagem específica (embalagem de produto, pô
 
 ```ts
 XR8.XrController.configure({
-  imageTargets: ["meu-alvo-1", "meu-alvo-2"],
+  imageTargetData: ["meu-alvo-1", "meu-alvo-2"],
 });
 ```
+
+**Nota sobre `imageTargets` (deprecated):** o bundle legado aceitava um parâmetro `imageTargets`, mas ele era descartado com aviso em tempo de execução. O branch atual no código do engine é:
+
+```js
+void 0 !== A.imageTargets && console.warn(
+  "[XR] imageTargets is deprecated, please use imageTargetData instead.")
+```
+
+Use sempre `imageTargetData` nos novos projetos. (A documentação oficial do 8th Wall ainda mistura os dois nomes na mesma página — não confie nela como fonte canônica.)
 
 Cada alvo precisa ser processado previamente (upload da imagem de referência) — sem isso, o SLAM de world tracking geral ainda funciona, mas o reconhecimento específico daquela imagem não. Assim como no world tracking por toque, o objeto que você quer "grudar" na imagem deve ser reposicionado a cada frame com a pose reportada pelo evento correspondente do `XrController`, não fixado uma única vez.
 
@@ -219,7 +228,9 @@ Chega um ponto em que o tracking está no limite do que o SLAM entrega, e o que 
 
 ### Limite honesto para setar expectativa
 
-World tracking do binário distribuído **não tem anchor persistente por objeto** — só `recenter()`/`recenterWithOrigin`. Então saltos de relocalização (item 1) são **mitigados**, nunca 100% eliminados. Se a estabilidade for inegociável (ex.: jogo de mesa), avalie ancorar num **Image Target** (playmat impresso): aí há anchor real e o conteúdo trava no marcador físico.
+World tracking do binário distribuído **não tem anchor persistente por objeto** — só `recenter()`. Então saltos de relocalização (item 1) são **mitigados**, nunca 100% eliminados. Se a estabilidade for inegociável (ex.: jogo de mesa), avalie ancorar num **Image Target** (playmat impresso): aí há anchor real e o conteúdo trava no marcador físico.
+
+**Nota sobre `recenterWithOrigin`:** você pode encontrar esse nome em tutoriais de A-Frame — é um evento de cena da integração A-Frame com o 8th Wall, sem relação com o caminho Babylon. No pipeline Babylon/XrController, o único método disponível é `recenter()`.
 
 ## Orientação de tela (landscape/portrait), fullscreen e AR
 

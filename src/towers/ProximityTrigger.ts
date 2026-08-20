@@ -27,9 +27,10 @@ export interface ProximityTriggerConfig {
    * transicao "pra dentro" acontece no limiar puro, a transicao "pra fora"
    * so acima de limiar + hysteresisUnits. E o que evita que o tremor natural
    * da mao segurando o celular em cima do limiar faca o estado piscar frame
-   * a frame — mesmo principio de banda morta do gate de posicionamento
-   * (`src/ar/placementGate.ts`), so que aqui a entrada e uma distancia
-   * continua, nao uma contagem de falhas.
+   * a frame. Mesmo principio de banda morta do gate de posicionamento de RA,
+   * que a spec 08 removeu junto com a medicao de piso — so que aqui a entrada e
+   * uma distancia continua, nao uma contagem de falhas, e o gatilho continua
+   * valendo.
    */
   hysteresisUnits: number;
   /** Quanto tempo CONTINUO abaixo de leapDistanceUnits ate o salto disparar. */
@@ -142,7 +143,7 @@ export class ProximityTrigger {
     // Leitura ausente CONGELA a maquina — nao avanca nem zera nada.
     //
     // E a licao mais cara deste projeto, aplicada aqui de proposito: silencio
-    // de sensor nao e evidencia (ver `src/ar/placementGate.ts` e o diario
+    // de sensor nao e evidencia (ver o diario
     // `docs/experimentos/demo-mundo-vivo.md`). A distancia vem de uma pose de
     // camera que o SLAM pode deixar de produzir a qualquer momento; se o
     // acumulador continuasse somando durante o buraco, uma perda de tracking

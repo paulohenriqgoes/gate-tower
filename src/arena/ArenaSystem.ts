@@ -122,6 +122,16 @@ export class ArenaSystem {
   }
 
   public buildInitialArena(): ArenaBuildResult {
+    // A raiz da arena nasce na ORIGEM, sem rotacao, e fica assim para sempre —
+    // inclusive em RA. Este e o invariante da fundacao de RA (spec 08, F2): o
+    // conteudo e autorado em coordenadas fixas e quem se move e a origem da
+    // CAMERA, via `recenter()`. O jogador e o vertice do arco, logo o jogador E
+    // a origem, e o `y = 0` daqui e o chao real por declaracao.
+    //
+    // Nada no projeto pode escrever em `arenaRoot.position` ou
+    // `arenaRoot.rotationQuaternion`. Um `arenaRoot` que anda foi exatamente o
+    // que fez a arena escorregar debaixo do jogador a cada relocalizacao do
+    // SLAM.
     const arenaRoot = new TransformNode("arena-root", this.scene);
 
     // Todos os tiles (o "grid" xadrez) ficam sob este no para poder ser

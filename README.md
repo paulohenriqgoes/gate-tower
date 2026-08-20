@@ -33,9 +33,16 @@ com `XR8.XrController.updateCameraProjectionMatrix({ origin, facing })`. Se
 `origin.y` for a altura do jogador, o piso cai em `y = 0` de graca.
 
 O plano executavel esta em
-[`docs/specs/08-fundacao-ar.md`](docs/specs/08-fundacao-ar.md) e **nao comecou**.
-Ele **substitui a spec 07**, que tentava consertar a medicao de piso e ficou
-obsoleta sem nunca ter comecado.
+[`docs/specs/08-fundacao-ar.md`](docs/specs/08-fundacao-ar.md). Ele **substitui a
+spec 07**, que tentava consertar a medicao de piso e ficou obsoleta sem nunca ter
+comecado.
+
+**A F2 e a F7.a estao implementadas (2026-08-19), ainda sem commit.** Em device
+(Android/Chrome) a fundacao nova sustentou **uma partida completa, jogada e
+vencida**: a arena assentou no chao real com `origin.y = 1,55 m`, sem medir nada,
+e o SLAM nao perdeu tracking uma vez sequer na sessao inteira. O criterio de
+aceite da F2 — cinco entradas em RA — **nao foi cumprido**, porque a segunda
+entrada trava (bloqueador 1 abaixo).
 
 A demo do mundo vivo foi **encerrada por mudanca de direcao**, nao por resposta:
 a pergunta dela nunca chegou a ser medida com alguem de fora, e o palco em que
@@ -45,31 +52,37 @@ ela media saiu de escopo.
 
 Leia isto antes de mexer em qualquer coisa:
 
-1. **`window.BABYLON` e instalado tarde demais.** O bundle constroi
-   `XR8.Babylonjs` no carregamento do `xr.js` e so cria os temporarios internos
-   dele `if (window.BABYLON)`. O projeto instala o shim dentro de `enterAR()`,
-   depois do script `async` — entao esses temporarios ficam `undefined` para
-   sempre. Hoje isso e invisivel porque a cena e canhota e o caminho canhoto nao
-   os usa, mas e uma bomba armada. Conserto na F2 da
-   [spec 08](docs/specs/08-fundacao-ar.md).
+1. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
+   antigo, ainda aberto). Em 2026-08-19 ele ganhou sintoma nomeado: depois de
+   vencer uma partida, "jogar novamente" leva de volta ao menu e a segunda
+   entrada em RA mostra **so o loader girando, sem coaching overlay e sem
+   arena**. O overlay funciona normalmente na PRIMEIRA entrada, o que isola o
+   defeito no ciclo de vida da sessao.
+
+   A hipotese registrada antes — "o projeto nunca chama `XR8.run()` nem
+   `XR8.stop()`" — esta **errada**: o `xrCameraBehavior` chama os dois. O
+   suspeito e o `XR8.clearCameraPipelineModules()` que o `detach` executa.
+   Enderecado pela F5 da spec 08, com `XR8.reconfigureSession()`. **Este e hoje o
+   gargalo de toda validacao em device**, porque cada teste custa um
+   recarregamento de pagina.
 2. **Ligar `scene.useRightHandedSystem` quebra a RA inteira.** O ramo destro do
    modulo Babylon deste build produz quaternion **NaN**: a pose morre e a tela
-   fica preta sobre o feed da camera. Confirmado em device em 2026-08-19.
-   **`src/ar/arenaHeading.ts:26` manda ligar essa flag e afirma que `main.ts` ja
-   liga — as duas coisas sao falsas.** Nao siga esse comentario; ele sai na F2.
-3. **O azimute 0 esta 180 graus invertido.** `headingDegFromForward` usa
-   `atan2(x, -z)` (frente = `-Z`, convencao destra), mas a frente do runtime
-   canhoto e `+Z`. O sinal esta certo; o zero nao. Como `relativeYawDeg` e uma
-   subtracao, o erro **cancela** em medidas relativas — por isso a selecao de
-   setor pode estar acertando por acidente. Conserto na F2.
-4. **Nao da para entrar numa segunda sessao de RA sem recarregar a pagina** (bug
-   antigo, **nao tocado ate hoje**). A hipotese registrada antes — "o projeto
-   nunca chama `XR8.run()` nem `XR8.stop()`" — esta **errada**: o
-   `xrCameraBehavior` chama os dois. O suspeito e o
-   `XR8.clearCameraPipelineModules()` que o `detach` executa. Endereçado pela F5
-   da spec 08, com `XR8.reconfigureSession()`.
-5. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
+   fica preta sobre o feed da camera. Confirmado em device em 2026-08-19. O
+   comentario de `src/ar/arenaHeading.ts` que mandava ligar essa flag **ja saiu**
+   (F2), mas o perigo continua: nao ligue.
+3. **A arena autorada nao cabe num quarto pequeno.** Ela tem 4,4 x 4,4 m (o
+   diametro do arco de 2,2 m de raio), com as torres a `z = +-2,0 m`. A sessao de
+   2026-08-19 rodou num quarto de 2,60 x 2,90 m: a partida fechou, mas boa parte
+   da arena ficou atravessando parede, e a torre de 1,20 m foi descrita como "um
+   pouco grande". Decisao de escala em aberto — ver a hipotese 7 do diario.
+4. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
    aposentou a pergunta, porque a arena nasce no chao ao redor do jogador.
+
+**Fechados pela F2 (2026-08-19), com uma partida completa em device por cima
+deles:** a ordem de carregamento do `window.BABYLON` (o `xr.js` saiu do
+`index.html` e e injetado depois do shim por `src/ar/xr8Loader.ts`), o azimute 0
+invertido em 180 graus (`atan2(x, z)`, corrigido em quatro lugares que precisavam
+concordar), e a medicao de piso por `hitTest`, que saiu inteira do projeto.
 
 **Deixou de ser bloqueador:** o deslize ao girar. Medido com laco fechado
 (marcar, girar, voltar fisicamente ao ponto e ler o residuo) em 2026-08-19: a
@@ -87,9 +100,11 @@ O historico completo esta em
 
 ### Entregue
 
-Compila, com **253 testes** de logica pura passando. **O que foi confirmado em
-device e o que so compila esta separado na tabela "Estado atual" do diario** —
-consulte antes de assumir que algo funciona.
+Compila, com **180 testes** de logica pura passando. A contagem caiu de 253 na
+F2, e a queda e o resultado esperado: o que morreu testava medicao de piso e
+suavizacao da pose do preview, dois pipelines que deixaram de existir. **O que
+foi confirmado em device e o que so compila esta separado na tabela "Estado
+atual" do diario** — consulte antes de assumir que algo funciona.
 
 **Da v3 (Etapas 1 a 3, mais a estabilizacao de 2026-08-19):**
 
@@ -98,20 +113,21 @@ consulte antes de assumir que algo funciona.
   parametrizavel (decisao D7)
 - **escala de sala**: 1 unidade Babylon = 1 metro nos dois modos
   (`src/arena/metrics.ts`); `AR_ARENA_SCALE` deixou de existir
-- **ancoragem egocentrica**: a arena nasce no jogador, com o azimute 0 na direcao
-  do celular no fechamento. **Ancora em device**, mas ver o bloqueador 1
+- **a arena vive na origem** (F2, 2026-08-19): `arenaRoot` fica em `(0,0,0)` com
+  rotacao identidade para sempre, e o piso e o `y = 0` do mundo porque a camera de
+  RA nasce na altura declarada do jogador. **Confirmado em device**: a arena
+  assentou no chao real com 1,55 m declarado, sem `hitTest` nenhum. Substituiu a
+  ancoragem egocentrica, que arrastava a arena pelo mundo
 - **a arena e sempre nivelada pela gravidade** (2026-08-19). Ela copiava a normal
   medida do piso, com clamp de 12 graus — herança da arena de mesa de 80 cm, onde
   isso valia 8 cm. Num arco de 2,2 m de raio valia **47 cm**, e a medicao tem
   mediana de 13 graus de inclinacao e picos de 48: e ruido, nao geometria. A
   inclinacao continua sendo **medida** e vai para a telemetria, para a decisao
   poder ser derrubada por dado
-- **a pose do arco e filtrada** (`src/ar/poseSmoothing.ts`, `src/ar/floorEstimate.ts`):
-  suavizacao exponencial independente de frame rate com snap em salto de
-  relocalizacao. **Confirmado em device: o arco parou de pular**
-- **telemetria da ancoragem**: `arena_placed` carrega `trackingStatus`,
-  `deviceHeightM`, `floorY` e `tiltDeg`; o evento `floor_fit_sample` registra a
-  qualidade da medicao de piso
+- **telemetria da confirmacao**: `arena_placed` carrega `trackingStatus`. Ele ja
+  carregou `deviceHeightM`, `floorY` e `tiltDeg`; as tres sairam com a medicao de
+  piso que as produzia, junto com o evento `floor_fit_sample`. Reportar um numero
+  que ninguem mede seria pior do que nao reportar
 
 **Do prototipo table-scale (a v3 aposenta o modelo de jogo; a base de RA fica):**
 
@@ -135,14 +151,17 @@ consulte antes de assumir que algo funciona.
   exigir aproximacao para ser lida
 
 - **colocacao da arena por contorno fantasma** (`src/ar/ArenaGhost.ts`): o
-  contorno real de 0,53 m x 0,80 m aparece deitado na superficie e muda de cor
-  conforme da para ancorar ali, antes do toque. O toque so confirma. **Confirmado
-  em device no chao (2026-08-14): zero recusas, ancorou no primeiro toque**
-- **o gate de colocacao recusa por prova contraria, nao por falta de prova**
-  (`src/ar/placementGate.ts`): sonda de hitTest sem leitura nao reprova nada;
-  so reprovam duas ou mais sondas que batam em superficie real fora do plano
-  (a borda da mesa). A politica anterior, que exigia confirmacao positiva,
-  produziu 79 recusas e zero ancoragens em dois testes de device
+  contorno real de 0,53 m x 0,80 m aparecia deitado na superficie e mudava de cor
+  conforme dava para ancorar ali. **Confirmado em device no chao (2026-08-14):
+  zero recusas, ancorou no primeiro toque.** *A F2 tirou o veredito do contorno:
+  ele continua existindo, na origem, so para mostrar a extensao do arco.*
+- **o gate de colocacao recusava por prova contraria, nao por falta de prova**
+  (era `src/ar/placementGate.ts`, **removido na F2**): sonda de hitTest sem
+  leitura nao reprovava nada; so reprovavam duas ou mais sondas que batessem em
+  superficie real fora do plano (a borda da mesa). A politica anterior, que
+  exigia confirmacao positiva, produziu 79 recusas e zero ancoragens em dois
+  testes de device. **O aprendizado sobrevive ao codigo:** silencio de sensor nao
+  e evidencia
 - **partida completa de ponta a ponta rodando em device** (2026-08-14): ancorar,
   explorar, acordar o inimigo e chegar ao fim da partida
 - arena de mesa metrica: 16 x 24 unidades autorais que em RA valem **0,53 m x 0,80 m**, com escala **fixa** (sem slider)
@@ -228,10 +247,10 @@ de jogo quando a spec da demo tirou paisagem de escopo.
 
 - O modo RA usa o engine 8th Wall (`@8thwall/engine-binary`), que roda em qualquer navegador mobile (iOS Safari incluido) — WebXR nao e mais utilizado.
 - Os artefatos do engine sao copiados de `node_modules` para `public/8thwall/` automaticamente no `npm install` (script `postinstall`).
-- **A arena nasce no jogador, nao num ponto tocado do chao.** A origem e o
-  celular projetado no piso e o azimute 0 e a direcao em que ele aponta no
-  fechamento; o toque so diz "agora". Mundo em metros, escala absoluta,
-  `arenaRoot.scaling` sempre 1.
+- **A arena e autorada na origem e nunca se move.** `arenaRoot` fica em
+  `(0,0,0)` com rotacao identidade para sempre; o jogador e o vertice do arco,
+  logo o jogador **e** a origem. O azimute 0 e o `+Z` do mundo. Mundo em metros,
+  escala absoluta, `arenaRoot.scaling` sempre 1.
 - **A cena e CANHOTA, e tem de continuar assim.** O ramo destro do modulo Babylon
   deste build do engine produz quaternion NaN — pose morta, tela preta. O
   comentario em `src/ar/arenaHeading.ts` que manda ligar `useRightHandedSystem`
@@ -241,20 +260,22 @@ de jogo quando a spec da demo tirou paisagem de escopo.
   arco de 2,2 m de raio, os 12 graus valem 47 cm — e a normal medida tem mediana
   de 13 graus e picos de 48, ou seja e ruido. A inclinacao continua sendo medida
   e registrada na telemetria, nunca aplicada na cena.
-- **O piso e DECLARADO, nao medido** (decisao de 2026-08-19; implementacao na F2
-  da [spec 08](docs/specs/08-fundacao-ar.md)). `origin.y` da
+- **O piso e DECLARADO, nao medido** (F2, implementada em 2026-08-19 e
+  **confirmada em device**: a arena assentou no chao real com 1,55 m declarado).
+  `origin.y` da
   `XR8.XrController.updateCameraProjectionMatrix` define onde a camera comeca na
   cena; com ele igual a altura do jogador, o piso e `y = 0` por construcao. E o
   que o exemplo oficial de world tracking do 8th Wall faz, e ele **nao chama
   `hitTest` nenhuma vez**. Todo o pipeline de fit de plano (`placementGate`,
-  `floorEstimate`, `hitTestSampling`) sai do projeto.
+  `floorEstimate`, `hitTestSampling`) **saiu do projeto**.
 - **`hitTest` sai do caminho critico.** O aprendizado sobre `FEATURE_POINT`
   (remove-lo deixava o sensor mudo) continua valido para quem for usar `hitTest`
   para consulta pontual de geometria, mas ele deixa de ser fundacao de
   ancoragem.
-- Antes de ancorar, o jogador ve o **arco real** deitado no piso estimado,
-  centrado nele e girando junto. **O toque so confirma o que o contorno mostra**:
-  ele nao mede nada por conta propria.
+- Antes de comecar, o jogador ve o **arco real** deitado no piso, centrado nele.
+  Ele nao gira mais junto com o celular: a arena esta na origem desde o frame
+  zero, e o toque so diz "agora" — **nao pode ser recusado, e nao escolhe
+  direcao**. Escolher para onde o arco olha volta na F4, com `recenter()`.
 - **A arena vive na origem do mundo e nunca se move.** Em todo codigo oficial do
   8th Wall o conteudo fica em coordenadas autorais fixas, e quem se move e a
   origem da camera, via `recenter()`. Como o jogador e o vertice do arco, ele
@@ -311,7 +332,10 @@ de jogo quando a spec da demo tirou paisagem de escopo.
   (device, 2026-08-14); em mesa, sem veredito.
 - Sem jitter perceptivel durante movimentos naturais do dispositivo.
 - Entrada e saida do modo RA sem perder posicionamento da arena. **Bloqueado**
-  pelo bug da segunda sessao de RA (bloqueador 1).
+  pelo bug da segunda sessao de RA (bloqueador 1). Em 2026-08-19 o sintoma foi
+  visto por inteiro: a segunda entrada fica so no loader, sem overlay e sem
+  arena. *Note que "perder posicionamento" deixou de fazer sentido desde a F2 — a
+  arena esta sempre na origem; o que se perde e a sessao, nao a posicao.*
 - **Deslize de no maximo ~2 cm com o celular circulando a mesa por 60 s** (o
   criterio do Beat 3 da spec da demo). **Ainda nao medido** depois da arena
   passar a ter 80 cm com escala fixa. O usuario relatou (2026-08-14, no chao)

@@ -1,5 +1,4 @@
 import { Color3 } from "@babylonjs/core/Maths/math.color";
-import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
@@ -15,7 +14,14 @@ import {
   type SectorId,
 } from "../arena/ArenaArc";
 import { applyMatteFinish } from "../fx/materials";
-import type { PlacementPreviewState } from "./placementGate";
+
+/**
+ * O contorno tem DOIS estados, e nao os cinco do gate de colocacao que morreu
+ * na spec 08 (F2): ou o SLAM ainda esta convergindo a escala absoluta, ou ele
+ * chegou em NORMAL. Nao ha mais veredito a dar — a confirmacao nao pode ser
+ * recusada, entao nao existe cor de recusa.
+ */
+export type ArenaGhostState = "calibrating" | "ready";
 
 // Espessura radial e altura das barras. A altura e minuscula de proposito: o
 // contorno tem que ler como TINTA no chao, nao como uma cerca — qualquer volume
@@ -42,11 +48,9 @@ const SECTOR_TICK_LENGTH_M = 0.22;
 // luz do ambiente real, imprevisivel, e o contorno precisa ficar legivel mesmo
 // contra uma cena mal iluminada.
 const COLOR_READY = "#22c55e";
-const COLOR_READY_DEGRADED = "#f59e0b";
-const COLOR_REFUSED = "#ef4444";
 const COLOR_NEUTRAL = "#e2e8f0";
 
-// Pulsacao sutil do estado neutro (`searching`): alpha oscila devagar entre
+// Pulsacao sutil do estado neutro (`calibrating`): alpha oscila devagar entre
 // esses dois extremos. "Sutil" e literal — nada perto de piscar, so o
 // suficiente pra sinalizar "ainda procurando" sem distrair.
 const PULSE_ALPHA_MIN = 0.35;
@@ -56,24 +60,25 @@ const PULSE_PERIOD_SECONDS = 2.4;
 const DEG_TO_RAD = Math.PI / 180;
 
 /**
- * O "fantasma" da arena em RA: o ARCO que vai fechar em volta do jogador,
- * desenhado no piso estimado antes da ancoragem.
+ * O "fantasma" da arena em RA: o ARCO em volta do jogador, desenhado no piso
+ * antes de o mundo vivo comecar.
  *
- * Ele mudou de assunto na v3. Antes era um retangulo de 0,53 m x 0,80 m
- * deitado na superficie APONTADA, e a pergunta que respondia era "cabe uma
- * arena de mesa ali?". Agora a arena nasce no proprio jogador (Etapa 3), entao
- * nao ha lugar apontado nenhum: o contorno fica centrado em quem segura o
- * celular e gira junto com ele, mostrando que o azimute 0 do arco sera a
- * direcao em que o celular estiver no instante do fechamento.
+ * Ele ja foi tres coisas. Um retangulo de 0,53 m x 0,80 m deitado na superficie
+ * APONTADA ("cabe uma arena de mesa ali?"); depois um arco que seguia a pose do
+ * device e mostrava onde a arena ia CAIR. A spec 08 tirou as duas perguntas de
+ * cena: a arena e autorada na origem, o piso e o `y = 0` do mundo por
+ * declaracao, e o azimute 0 e o +Z. Nao ha lugar a escolher nem medicao a
+ * exibir.
  *
- * Que o contorno acompanhe a rotacao do jogador nao e efeito colateral, e a
- * informacao principal: quem gira antes de confirmar esta ESCOLHENDO para onde
- * o arco vai olhar, e precisa ver isso acontecendo.
+ * Sobra o papel que ainda vale: mostrar a EXTENSAO da arena — onde o arco
+ * comeca, onde termina, onde um flanco vira o outro — antes de o mundo vivo
+ * aparecer. Por isso ele nao tem mais pose: fica na origem, com rotacao
+ * identidade, exatamente como o `arenaRoot`.
  *
  * Toda a geometria e criada UMA vez no construtor e fundida num mesh so
  * (`Mesh.MergeMeshes`): 30+ barras separadas seriam 30+ draw calls num celular
- * que ja esta rodando SLAM e feed de camera. `setState`/`setPose` so trocam uma
- * referencia de material ou uma transform — nenhuma alocacao por frame.
+ * que ja esta rodando SLAM e feed de camera. `setState` so troca uma referencia
+ * de material — nenhuma alocacao por frame.
  */
 export class ArenaGhost {
   private readonly scene: Scene;
@@ -81,11 +86,9 @@ export class ArenaGhost {
   private readonly outline: Mesh;
 
   private readonly materialReady: StandardMaterial;
-  private readonly materialReadyDegraded: StandardMaterial;
-  private readonly materialRefused: StandardMaterial;
   private readonly materialNeutral: StandardMaterial;
 
-  private currentState: PlacementPreviewState = "waiting-tracking";
+  private currentState: ArenaGhostState = "calibrating";
   private isExternallyVisible = true;
 
   private pulseElapsedSeconds = 0;
@@ -96,26 +99,21 @@ export class ArenaGhost {
     this.root = new TransformNode("arena-ghost-root", scene);
 
     this.materialReady = this.createStateMaterial("arena-ghost-material-ready", COLOR_READY);
-    this.materialReadyDegraded = this.createStateMaterial(
-      "arena-ghost-material-ready-degraded",
-      COLOR_READY_DEGRADED
-    );
-    this.materialRefused = this.createStateMaterial("arena-ghost-material-refused", COLOR_REFUSED);
     this.materialNeutral = this.createStateMaterial("arena-ghost-material-neutral", COLOR_NEUTRAL);
 
     this.outline = this.buildOutline();
 
-    // Comeca invisivel: "waiting-tracking" e o estado inicial e so tem sentido
-    // sem o fantasma — chamar hitTest antes do SLAM estar NORMAL estoura o
-    // WASM, entao nao ha posicao valida pra mostrar mesmo.
+    // O contorno nasce na ORIGEM, sem rotacao, e nunca mais se move. Mesma
+    // invariante do `arenaRoot` (spec 08, F2): o que a RA move e a origem da
+    // camera, nunca o conteudo.
     this.applyMaterialForCurrentState();
     this.updateVisibility();
 
     this.stopPulse = this.registerPulse();
   }
 
-  /** Troca a aparencia do fantasma para o estado de preview atual. Sem alocacao. */
-  public setState(state: PlacementPreviewState): void {
+  /** Troca a aparencia do fantasma para o estado atual. Sem alocacao. */
+  public setState(state: ArenaGhostState): void {
     if (state === this.currentState) {
       return;
     }
@@ -123,28 +121,6 @@ export class ArenaGhost {
     this.currentState = state;
     this.applyMaterialForCurrentState();
     this.updateVisibility();
-  }
-
-  /**
-   * Posiciona e orienta o contorno no mundo.
-   *
-   * `position` e a ORIGEM DO ARCO — o jogador projetado no piso estimado, e nao
-   * um ponto apontado na tela. A rotacao vem pronta de quem chama e precisa ser
-   * a MESMA que o fechamento vai aplicar no `arenaRoot` — se o contorno mostrar
-   * uma pose e o fechamento aplicar outra, o toque deixa de confirmar o que
-   * esta na tela, que e a regra que sustenta o gate inteiro.
-   *
-   * Ate a Etapa 3 essa rotacao incluia o alinhamento a normal medida do piso, e
-   * este comentario defendia isso dizendo que a world-up do SLAM "nao bate com
-   * o chao no caso comum". A sessao de device desmentiu: o que nao batia era o
-   * FIT — 3 hitTests rasos estimam normal muito pior do que o IMU estima a
-   * gravidade, e num arco de 2,2 m de raio o erro do fit virava 47 cm de
-   * inclinacao. Hoje a rotacao e so o yaw. Ver `buildAnchorRotation` em
-   * `EighthWallARManager.ts`.
-   */
-  public setPose(position: Vector3, rotation: Quaternion): void {
-    this.root.rotationQuaternion = rotation;
-    this.root.position.copyFrom(position);
   }
 
   /** Visibilidade externa (ex.: esconder o fantasma inteiro apos fechar a arena). */
@@ -164,8 +140,6 @@ export class ArenaGhost {
     this.outline.dispose();
 
     this.materialReady.dispose();
-    this.materialReadyDegraded.dispose();
-    this.materialRefused.dispose();
     this.materialNeutral.dispose();
 
     this.root.dispose();
@@ -297,10 +271,11 @@ export class ArenaGhost {
    * Uma barra deitada no piso, no ponto polar (azimute, raio).
    *
    * `widthM` e a dimensao TANGENCIAL e `depthM` a RADIAL, e isso e garantido
-   * pela rotacao: girar a barra por `-azimute` faz o -Z local dela apontar para
-   * fora (a mesma convencao de `arenaHeading.arenaRootYawRad`, um nivel abaixo
-   * — la e o mundo, aqui e o espaco local da arena). Sem essa rotacao as barras
-   * ficariam todas paralelas ao eixo X e o "arco" viraria uma escada.
+   * pela rotacao: girar a barra por `+azimute` faz o +Z local dela apontar para
+   * fora. O SINAL virou junto com o zero do azimute (spec 08, bug 3): numa cena
+   * canhota `RotationY(t)` leva o +Z local para `(sin t, cos t)`, que e
+   * exatamente a direcao do azimute `t`. Sem essa rotacao as barras ficariam
+   * todas paralelas ao eixo X e o "arco" viraria uma escada.
    */
   private buildBar(
     name: string,
@@ -317,7 +292,7 @@ export class ArenaGhost {
 
     const { x, z } = toLocal({ azimuthDeg, radiusM });
     bar.position.set(x, BAR_HEIGHT_M / 2, z);
-    bar.rotation.y = -azimuthDeg * DEG_TO_RAD;
+    bar.rotation.y = azimuthDeg * DEG_TO_RAD;
 
     return bar;
   }
@@ -328,32 +303,21 @@ export class ArenaGhost {
   }
 
   /**
-   * Uma cor por VEREDITO, nao uma por estado: verde fecha, ambar fecha com
-   * ressalva, vermelho tem uma recusa concreta que o jogador consegue desfazer
-   * (ficar de pe, segurar o celular na frente do corpo), branco pulsando e
-   * "ainda medindo".
+   * Uma cor por estado. Nao ha mais cor de recusa porque nao ha mais recusa: o
+   * branco pulsando diz "o SLAM ainda esta convergindo a escala" e o verde diz
+   * "pode tocar". As duas sao informativas, nenhuma e um veredito sobre o lugar.
    */
-  private materialForState(state: PlacementPreviewState): StandardMaterial {
-    switch (state) {
-      case "ready":
-        return this.materialReady;
-      case "ready-degraded":
-        return this.materialReadyDegraded;
-      case "bad-height":
-        return this.materialRefused;
-      case "searching":
-        return this.materialNeutral;
-      case "waiting-tracking":
-        // Invisivel de qualquer forma (ver `updateVisibility`) — a referencia
-        // aqui nao importa, mas materialNeutral evita deixar `material` nulo.
-        return this.materialNeutral;
-    }
+  private materialForState(state: ArenaGhostState): StandardMaterial {
+    return state === "ready" ? this.materialReady : this.materialNeutral;
   }
 
-  /** Visibilidade combinada = nao esta em waiting-tracking E ninguem de fora pediu pra esconder. */
+  /**
+   * Quem esconde o contorno agora e so quem chama `setVisible` — o estado nao
+   * esconde mais nada. Enquanto o SLAM calibra o contorno CONTINUA visivel: ele
+   * nao depende de medicao nenhuma para saber onde esta.
+   */
   private updateVisibility(): void {
-    const shouldBeVisible = this.isExternallyVisible && this.currentState !== "waiting-tracking";
-    this.root.setEnabled(shouldBeVisible);
+    this.root.setEnabled(this.isExternallyVisible);
   }
 
   /**
@@ -368,7 +332,7 @@ export class ArenaGhost {
       // So vale a pena calcular quando o material neutro esta de fato em uso —
       // nos outros estados o pulso nao aparece em tela, entao pular o trabalho
       // e gratis.
-      if (this.currentState !== "searching") {
+      if (this.currentState !== "calibrating") {
         return;
       }
 

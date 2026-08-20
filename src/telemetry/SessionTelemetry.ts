@@ -16,47 +16,24 @@
  */
 
 export type TelemetryEvent =
+  /**
+   * Arena confirmada pelo jogador — o inicio do Beat 4.
+   *
+   * Ele encolheu na spec 08. Carregava `deviceHeightM`, `floorY` e `tiltDeg`
+   * porque a arena era POSICIONADA sobre um piso medido, e essas tres grandezas
+   * eram o unico jeito de julgar depois se uma ancoragem ruim tinha sido culpa
+   * do tracking, da postura do jogador ou do fit de plano. A arena passou a ser
+   * AUTORADA na origem, com o piso declarado: as tres deixaram de existir, e
+   * inventa-las aqui seria reportar dado que ninguem mediu.
+   *
+   * O status de tracking fica porque continua sendo verdade e continua sendo
+   * irrecuperavel depois do fato.
+   */
   | {
       type: "arena_placed";
-      /** Status de tracking do SLAM no instante do fechamento. Discrimina se o tracking estava degradado. */
+      /** Status de tracking do SLAM no instante da confirmacao. */
       trackingStatus: string | null;
-      /** Altura do device sobre o piso medido, em metros. Discrimina se estava agachado ou se o fit pegou a mesa. */
-      deviceHeightM: number | null;
-      /** Altura do piso medido, em coordenada de mundo. Diagnostico da superficie encontrada pelo fit. */
-      floorY: number | null;
-      /** Inclinacao MEDIDA do fit do piso, em graus. Diagnostico de quao plana a superficie estava. */
-      tiltDeg: number | null;
     }
-  /**
-   * Toque que nao fechou a arena, com o motivo vindo do gate
-   * (`searching`, `bad-height`, `waiting-tracking`) e a altura de device
-   * medida. Existe porque "colocar a arena exige insistencia" era so relato:
-   * sem contar as recusas e o motivo delas, nao da para saber se o conserto
-   * funcionou.
-   */
-  | {
-      type: "placement_rejected";
-      reason: string;
-      deviceHeightM: number | null;
-    }
-  /**
-   * Arena devolvida ao jogador depois de uma relocalizacao do SLAM, com quanto
-   * ela tinha se afastado em metros.
-   *
-   * E o evento que mede a correcao: a sessao de 2026-08-18 registrou saltos de
-   * 0,53 m, 1,44 m e 2,53 m em recuperacoes sucessivas, mas so deu para
-   * descobrir isso cruzando `tracking_recovered` com a serie de
-   * `camera_distance_sample` na mao. Com este evento o numero vem direto, e da
-   * para saber se a reancoragem esta segurando ou se os saltos continuam
-   * crescendo.
-   */
-  | { type: "arena_reanchored"; offsetM: number }
-  /**
-   * Amostra do fit do piso, registrada a ~1 Hz durante a sessao de jogo. Permite
-   * diagnosticar flutuacoes da medicao de piso e deslize da arena em tempo real:
-   * tiltDeg variando e floorY derivando caracterizam instabilidade da superficie.
-   */
-  | { type: "floor_fit_sample"; tiltDeg: number | null; floorY: number | null; inliers: number; spreadM: number | null }
   | { type: "enemy_awakened" }
   /**
    * Estagio do gatilho de proximidade da torre inimiga (dorme -> espia ->
