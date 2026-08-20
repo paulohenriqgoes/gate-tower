@@ -1,6 +1,6 @@
 ---
 name: encerrar-sessao
-description: Encerramento de sessao deste projeto (Tower Gate) — transforma o que foi feito na sessao em registro duravel. Atualiza o diario de experimento em docs/experimentos/, o Estado Atual e o Roadmap do README.md, e revisa as skills e memorias existentes procurando o que a sessao contradisse ou revelou de lacuna. Use SEMPRE que o usuario disser "encerrar sessao", "fechar o dia", "terminamos por hoje", "atualiza as docs", "documenta o que fizemos", "registra o progresso", "atualiza o README com o andamento", "revisa as skills" ou pedir para consolidar aprendizados antes de parar. Use tambem antes de um commit de documentacao que pretenda resumir a sessao. NAO use para escrever spec de implementacao (isso e planejamento-por-etapas), para commitar codigo, nem para gerar changelog — diario nao e changelog.
+description: Encerramento de sessao deste projeto (Tower Gate) — transforma o que foi feito na sessao em registro duravel. Atualiza o quadro de estado das etapas (docs/specs-arena-180/ na v3), o diario de experimento em docs/experimentos/, o README.md, e revisa as skills e memorias existentes procurando o que a sessao contradisse ou revelou de lacuna. Use SEMPRE que o usuario disser "encerrar sessao", "fechar o dia", "terminamos por hoje", "atualiza as docs", "documenta o que fizemos", "registra o progresso", "atualiza o README com o andamento", "revisa as skills" ou pedir para consolidar aprendizados antes de parar. Use tambem antes de um commit de documentacao que pretenda resumir a sessao. NAO use para escrever spec de implementacao (isso e planejamento-por-etapas), para commitar codigo, nem para gerar changelog — diario nao e changelog.
 ---
 
 # Encerrar Sessao — Tower Gate
@@ -89,20 +89,38 @@ Escolha o destino: **anexar** ao diario do tema vigente, ou **abrir um diario
 novo** quando o assunto nao pertence a nenhum existente. Um diario por tema,
 nunca por sessao. O indice fica em `docs/experimentos/README.md`.
 
-Escreva a entrada na linha do tempo e atualize, no mesmo passo, *Estado atual*,
-*Hipoteses vivas* e *Proximos passos* — um diario cuja entrada nova contradiz a
-tabela de estado logo abaixo e pior que nenhum diario. Atualize tambem a data e
-a linha do indice.
+Escreva a entrada na linha do tempo e atualize, no mesmo passo, a **tabela de
+situacao das Hipoteses** — uma entrada nova que responde ou refuta uma hipotese e
+deixa a tabela dizendo o contrario e pior que nenhum diario. Atualize tambem a
+data e a linha do indice.
 
-### Fase 3 — README
+**O diario nao recebe plano nem estado de etapa.** Se voce esta prestes a
+escrever "proximos passos" ou uma tabela de "o que esta pronto", pare: o destino
+e a Fase 3. Quando as duas coisas moraram no mesmo arquivo, elas divergiram.
 
-Atualize `README.md`:
+### Fase 3 — Quadro de estado, depois README
 
-- **Estado Atual** — o foco vigente e a lista de entregas concluidas;
-- **Roadmap de Fases** — a tabela; marque `[x]` so quando o criterio de conclusao
-  da fase foi de fato satisfeito, `[~]` para parcial (dizendo o que falta), e
-  mexa em secoes de comportamento (RA, orientacao, tela cheia) apenas quando o
-  comportamento mudou de verdade.
+Nesta ordem, e a ordem importa: o quadro e a fonte de verdade, e o README so
+aponta para ele.
+
+**(a) O quadro de estado.** Para a v3, e
+[`docs/specs-arena-180/README.md`](../../../docs/specs-arena-180/README.md).
+Para cada unidade que a sessao tocou:
+
+- mude o `Estado` (`ABERTA` · `PARCIAL` · `IMPLEMENTADA` · `EM DEVICE` ·
+  `VALIDADA` · `SUPERADA`), a evidencia, e o comando que a verifica;
+- **a regra 1 governa esta coluna.** Nada vira `VALIDADA` sem device, e a
+  evidencia nomeia **quem testou** — autor testando o proprio jogo nao vale como
+  leitura da metrica, e o projeto ja registra esse erro duas vezes;
+- se uma unidade fechou (`VALIDADA` ou `SUPERADA`), **apague o arquivo de spec
+  dela** e deixe so a linha do quadro, apontando para o commit e para a entrada
+  do diario. Spec fechada some; o historico e trabalho do diario.
+
+Uma linha de estado sem comando de verificacao e opiniao, nao estado.
+
+**(b) O `README.md`, sem repetir o quadro.** Mexa nele so quando o **comportamento
+do projeto** mudou — secoes de RA, orientacao, tela cheia, bloqueadores — ou
+quando o foco vigente mudou. Ele nao carrega mais o estado etapa a etapa.
 
 A regra 1 vale aqui com forca dobrada: o README e o primeiro arquivo que um agent
 novo le, e um "funciona" errado nele contamina todas as sessoes seguintes.
@@ -130,8 +148,8 @@ Entregue, no chat:
 
 1. a lista dos arquivos alterados, com uma linha do que mudou em cada;
 2. as propostas da Fase 4 que continuam pendentes de decisao;
-3. o que ficou **aberto** para a proxima sessao — o mesmo conteudo de "Proximos
-   passos" do diario, para o usuario nao precisar abrir o arquivo;
+3. o que ficou **aberto** para a proxima sessao — a proxima onda do quadro de
+   estado, para o usuario nao precisar abrir o arquivo;
 4. a mensagem de commit sugerida, no formato do repo (`DOC:` para atualizacao de
    documentacao), em portugues do Brasil.
 
