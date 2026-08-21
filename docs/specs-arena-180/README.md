@@ -56,10 +56,10 @@ diz qual em cada caso.
 
 | Unidade | Nome | Estado | Evidencia / o que falta |
 | --- | --- | --- | --- |
-| RA-F2 | a arena vive na origem; o piso e declarado | `EM DEVICE` | `066a5d7`. Partida completa jogada e **vencida** em device 2026-08-19 (Android/Chrome, testada pelo autor), telemetria `tower-gate-sessao-1787184130010.json`: `arena_placed` NORMAL aos 33,1 s, `match_ended` win aos 128,7 s, zero `tracking_lost`. **Falta** o criterio de cinco entradas em RA. A segunda parou de travar em 2026-08-20 (RA-F5), entao o criterio virou cumprivel — mas o defeito da terceira partida (hipotese 9 do diario) atrapalha sessao longa |
+| RA-F2 | a arena vive na origem; o piso e declarado | `VALIDADA` | `066a5d7`. Partida completa jogada e **vencida** em device 2026-08-19 (Android/Chrome, testada pelo autor), telemetria `tower-gate-sessao-1787184130010.json`: `arena_placed` NORMAL aos 33,1 s, `match_ended` win aos 128,7 s, zero `tracking_lost`. O criterio de cinco entradas seguidas **deixou de ser exigido aqui** por `DR-4` (decisao do dono do projeto, 2026-08-20): ele virou refino de depois do game-flow |
 | RA-F3 | a altura do jogador e `origin.y` | `SUPERADA` | Pelo **device de 2026-08-20** mais decisao do dono do projeto. O engine **ignora** a altura declarada: em `scale: "absolute"` ele fixa `origin.y` em 1 m, e as quatro colocacoes com 1,55 declarado deram distancia camera-origem de 1,0049 / 0,9797 / 1,0134 / 1,0043. O controle mexia num numero descartado, e alem disso nao deve ser campo de tela. **Pendente**: remover os dois `HeightStepper`, anotado na JG-07. `src/ar/playerHeight.ts` fica como guarda de valor nao-finito |
 | RA-F4 | `recenter()` e a colocacao | `EM DEVICE` | `confirmArenaHere()` chama `recenter()` e entra como transicao de fase. Rodou em device 2026-08-20 e **confirmou a `DR-3`**: `arena_placed` 54,4 s -> `tracking_lost LIMITED` 54,6 s, e de novo 252,1 s -> 252,5 s. **Dois defeitos abertos**: (1) o portao da transicao fecha no `NORMAL` velho do frame seguinte ao `recenter()`, e a arena aparece antes de o SLAM cair (painel mostra `arena: confirmada` com `trackingStatus: LIMITED`); (2) com a partida em andamento o gesto recoloca a arena e `handleArenaClosed` ignora, porque a fase nao e `ar-setup` — ver JG-11 |
-| RA-F5 | segunda sessao (a `reconfigureSession` saiu do titulo) | `EM DEVICE` | **Funciona.** Device 2026-08-20 (Android/Chrome, testado pelo autor): `lifecycle` leu `s1 …recenter>detach>remove` no menu e depois `s2 enter>start>attach>update` com coaching overlay e arco fantasma, sem recarregar a pagina. `xr8Observers: 2` nas duas sessoes. A premissa da spec tinha caido antes — `reconfigureSession` lanca depois de `XR8.stop()`; a causa era o vazamento de observers de render do `attach` do `xrCameraBehavior`. **Falta para `VALIDADA`**: o criterio pede **cinco** entradas seguidas com arena no chao nas cinco; foram vistas **duas** |
+| RA-F5 | segunda sessao (a `reconfigureSession` saiu do titulo) | `VALIDADA` | Device 2026-08-20 (Android/Chrome, testado pelo autor): `lifecycle` leu `s1 …recenter>detach>remove` no menu e depois `s2 enter>start>attach>update` com coaching overlay e arco fantasma, sem recarregar a pagina, com arena no chao nas duas. `xr8Observers: 2` nas duas sessoes. A premissa da spec tinha caido antes — `reconfigureSession` lanca depois de `XR8.stop()`; a causa era o vazamento de observers de render do `attach` do `xrCameraBehavior`. O criterio original pedia **cinco** entradas; `DR-4` (2026-08-20) o reduziu as **duas** ja vistas e mandou as outras tres para o refino de depois do game-flow |
 | RA-F6 | adotar o que o `xrextras` ja resolve | `ABERTA` | — |
 | RA-F7.a | dois erros ativos na skill de RA | `VALIDADA` | `9ba9e7a`. Criterio e `grep` no arquivo da skill, e ele passa — `imageTargets` e `recenterWithOrigin` sairam |
 | RA-F7.b | reescrever as skills a partir da API | `ABERTA` | `ar-xr-8thwall.md` ainda ensina fit de piso por `hitTest`, que a RA-F2 removeu do projeto |
@@ -69,16 +69,16 @@ diz qual em cada caso.
 | Unidade | Nome | Estado | Evidencia / o que falta |
 | --- | --- | --- | --- |
 | JG-01 | `ArenaArc`: o modelo polar puro | `VALIDADA` | `96c364e`. O criterio de aceite e a suite (`ArenaArc.test.ts`), e ela passa. Sem import de `@babylonjs/*` |
-| JG-02 | escala de sala: 1 unidade = 1 metro | `IMPLEMENTADA` | `96c364e`. `AR_ARENA_SCALE` nao existe mais; `src/arena/metrics.ts` e a fonte de tamanho. **Falta o device**: o fade de proximidade a menos de 0,6 m nunca foi visto em RA |
+| JG-02 | escala de sala: 1 unidade = 1 metro | `IMPLEMENTADA` | `96c364e`. `AR_ARENA_SCALE` nao existe mais; `src/arena/metrics.ts` e a fonte de tamanho. **Falta o device**: o fade de proximidade a menos de 0,6 m nunca foi visto em RA — e agora tem um caso novo para olhar, porque a torre do jogador passou a viver a 0,9 m do jogador (JG-04) |
 | JG-03 | ancoragem egocentrica | `SUPERADA` | Por **RA-F2**. Nao existe mais ancoragem: a arena e autorada na origem e nunca se move, entao nao ha posicao para ancorar. `ArenaAnchor`, `closeArenaAtPlayer` e o gate de colocacao sairam do projeto |
-| JG-04 | diretor de ondas e convergencia ao jogador | `PARCIAL` | `src/battle/WaveDirector.ts` e o teste dele **existem e estao orfaos** — nenhum arquivo os importa. **Falta**: fiar no `CombatEngine`, reescreve-lo para alvo-unico-jogador com navegacao radial, e remover `EnemyScript` e `DeploymentZone`, que continuam sendo o caminho vivo |
-| JG-05 | alertas de flanco e audio espacial | `ABERTA` | `FlankAlert`, `visibilityRaycast` e `SpatialCues` nao existem. O projeto continua **sem modulo de audio** |
+| JG-04 | diretor de ondas e convergencia ao jogador | `IMPLEMENTADA` | `WaveDirector` fiado no `GameFlow` com o `WAVE_PLAN` novo; `CombatEngine` reescrito para alvo unico (so a torre do jogador), colocacao validada pelo modelo polar, `getSectorThreats()` e `onEnemyDefeatedObservable`; `EnemyScript` e `DeploymentZone` removidos. Navegacao **radial** de verdade (`src/battle/radialApproach.ts`): o inimigo mantem o azimute ate o anel de fechamento, entao a seta de flanco nao mente no meio do trajeto. Convergencia, dano na torre, abate e coleira da tropa estao provados em `NullEngine` (`src/combat/CombatEngine.test.ts`). **Falta**: rodar no modo tela e ver a partida inteira (`npm run dev`) — ninguem jogou isto ainda |
+| JG-05 | alertas de flanco e audio espacial | `ABERTA` | `FlankAlert`, `visibilityRaycast` e `SpatialCues` nao existem. O projeto continua **sem modulo de audio**. O insumo ja esta pronto: `combatEngine.getSectorThreats()` entrega os tres setores com contagem e distancia do mais proximo (JG-04) |
 | JG-06 | colocacao direta no chao | `ABERTA` | `PlacementRing` nao existe |
 | JG-07 | cartas presas ao jogador; o HUD 2D morre | `ABERTA` | `HandCards3D` nao existe; `CardDeckHud.ts` continua vivo. **Ganhou escopo em 2026-08-20**: remover os dois `HeightStepper` junto com o HUD 2D (a RA-F3 caiu por device + decisao) |
 | JG-08 | caldeirao fermentador | `ABERTA` | Nao existe `src/world/` |
-| JG-09 | economia de cartas: derrotado vira carta | `ABERTA` | `CardAlbum` e `CardStock` nao existem |
+| JG-09 | economia de cartas: derrotado vira carta | `ABERTA` | `CardAlbum` e `CardStock` nao existem. O gatilho ja existe: `combatEngine.onEnemyDefeatedObservable` dispara com o `cardId` de cada criatura abatida (JG-04), e o `GameFlow` ja conta os abatidos no payload de fim de partida |
 | JG-10 | a intro: o gatilho e enquadrar | `ABERTA` | `FramingTrigger` e `FloorCrack` nao existem; `ProximityTrigger` continua sendo o gatilho. `GamePhase` tem 5 fases e esta etapa pede 7 |
-| JG-11 | fim de partida e album | `ABERTA` | `AlbumScreen` nao existe. O ciclo de vida da sessao de RA migrou para RA-F5, mas em 2026-08-20 ela **ganhou o bug do replay**: da terceira partida seguida em diante o lado do jogo emudece e a maquina de estado nao acompanha (hipotese 9 do diario). E o unico defeito que hoje impede teste longo em device |
+| JG-11 | fim de partida e album | `ABERTA` | `AlbumScreen` nao existe. O ciclo de vida da sessao de RA migrou para RA-F5, mas em 2026-08-20 ela **ganhou o bug do replay**: da terceira partida seguida em diante o lado do jogo emudece e a maquina de estado nao acompanha (hipotese 9 do diario). E o unico defeito que hoje impede teste longo em device. A JG-04 mudou o payload de fim de partida: saiu o `enemyHpPct` (nao ha torre inimiga), entrou `enemiesDefeated` — que e o que o album vai mostrar |
 
 ### Verificar com
 
@@ -86,7 +86,7 @@ Todo estado acima e falsificavel. Rode este bloco inteiro da raiz do repositorio
 e confira contra a coluna `Estado` — se divergir, o quadro e que esta errado.
 
 ```bash
-# a suite nao se move enquanto so documentacao muda: 204 testes, 18 arquivos
+# a suite nao se move enquanto so documentacao muda: 201 testes, 19 arquivos
 npx tsc --noEmit && npm run test
 
 # RA-F2 e RA-F7.a commitadas
@@ -99,7 +99,7 @@ grep -rn "XrController.recenter()" src/
 # JG-07. Enquanto este grep achar algo, a pendencia continua aberta:
 grep -rln "HeightStepper" src/
 
-# RA-F5 IMPLEMENTADA: a correcao e a remocao dos observers vazados,
+# RA-F5 VALIDADA: a correcao e a remocao dos observers vazados,
 # e o modulo que a explica existe
 ls src/ar/observerLeak.ts && grep -n "releaseBehaviorRenderObservers" src/ar/EighthWallARManager.ts
 
@@ -119,9 +119,19 @@ grep -rn "AR_ARENA_SCALE" src/
 # JG-03 SUPERADA: nao ha mais medicao de piso nem gate
 ls src/ar/placementGate.ts src/ar/floorEstimate.ts src/ar/hitTestSampling.ts 2>&1
 
-# JG-04 PARCIAL: o WaveDirector esta orfao, e o caminho antigo esta vivo
-grep -rn "WaveDirector" src --include="*.ts" | grep -v src/battle/WaveDirector
-grep -rn "EnemyScript\|DeploymentZone" src --include="*.ts" | grep -v "src/battle/EnemyScript\|src/combat/DeploymentZone"
+# JG-04 IMPLEMENTADA: o diretor esta fiado e o caminho antigo morreu.
+# (O grep e por IMPORT, nao pelo nome: os dois modulos ainda sao CITADOS em
+# comentario, no lugar exato onde um leitor perguntaria por eles.)
+grep -rn "new WaveDirector" src/game/
+ls src/battle/EnemyScript.ts src/combat/DeploymentZone.ts 2>&1
+grep -rn "from \".*EnemyScript\"\|from \".*DeploymentZone\"" src/
+
+# JG-04: o inimigo converge RADIALMENTE (nao em linha reta ate a torre) —
+# sem isto ele troca de setor no caminho e a seta de flanco mente
+ls src/battle/radialApproach.ts && grep -n "setNavigation(\"radial\")" src/combat/CombatEngine.ts
+
+# JG-04: a fiacao do combate roda headless (invariante 3)
+npx vitest run src/combat/CombatEngine.test.ts
 
 # JG-05 a JG-11 ABERTA: nenhum dos modulos previstos existe
 ls src/ui/FlankAlert.ts src/fx/visibilityRaycast.ts src/audio/ src/interaction/PlacementRing.ts \
@@ -148,9 +158,17 @@ um destes nao e trade-off; e regressao.
 2. **Arquitetura modular obrigatoria:** AR Manager, Arena System, Unit Factory,
    Combat Engine, HUD. Modulo novo entra debaixo de um destes ou se justifica
    como modulo nomeado (`world/`, `audio/`).
-3. **Logica pura testavel fora do engine.** A suite roda sem Babylon. Toda regra
-   nova de arena, onda, economia e fermentacao nasce em arquivo puro com
-   `.test.ts` ao lado.
+3. **Logica pura testavel fora do engine, e fiacao testavel em `NullEngine`.**
+   Toda regra nova de arena, onda, economia e fermentacao nasce em arquivo puro
+   com `.test.ts` ao lado — isso nao mudou. O que mudou em **2026-08-20**: a
+   regra antiga dizia "a suite roda sem Babylon", e isso deixava sem rede o erro
+   mais caro do projeto, que e o de **fiacao** (alvo do time errado, observavel
+   que nao dispara, unidade que para de andar). Agora vale tambem escrever teste
+   headless com `NullEngine`, via `src/testing/nullEngineScene.ts`. Foi assim
+   que a JG-04 descobriu que o inimigo trocava de setor no meio do trajeto: o
+   modelo polar estava certo, quem chamava e que estava errado. Teste puro
+   continua sendo o primeiro lugar; `NullEngine` e para o que so existe quando as
+   pecas estao ligadas.
 4. **Nada de shadow map.** Grounding e blob de contato (`src/fx/contactShadow.ts`)
    — a razao vale ainda mais com objetos de 1,20 m.
 5. **`DynamicTexture.update()`, nunca `update(false)`.** O `false` sobrevive em
@@ -203,20 +221,24 @@ A ordem esta **fixada**, e nao e para ser re-decidida a cada sessao. Se a ordem
 mudar, mude aqui e escreva o motivo.
 
 ```
-Onda A (serial + device):  RA-F5    — FEITA em codigo; 2a sessao confirmada em
-                                    device 2026-08-20. Falta so o criterio de
-                                    cinco entradas
+Onda A (serial + device):  RA-F5    — FECHADA. 2a sessao confirmada em device
+                                    2026-08-20
 Onda B (serial):           RA-F3 -> RA-F4    — RA-F3 SUPERADA pelo device (o
                                     engine ignora a altura declarada); RA-F4
                                     em device, com dois defeitos abertos
-Onda C (device):           fechar o criterio de cinco entradas (RA-F2 e RA-F5)
-                                    e conferir o flanco de spawn da RA-F4
-Onda D (serial):           JG-04    — fiar o WaveDirector, reescrever o CombatEngine
+Onda C (device, encolhida): conferir o flanco de spawn da RA-F4. NAO bloqueia
+                                    nada: o criterio de cinco entradas saiu
+                                    daqui por `DR-4`
+Onda D (serial):           JG-04    — FEITA em codigo (WaveDirector fiado,
+                                    CombatEngine reescrito). Falta jogar no
+                                    modo tela
 Onda E (paralelo):         JG-05 . JG-06
 Onda F (serial):           JG-07
 Onda G (device, CORTE):    validacao da tese, com alguem que nao conhece o jogo
 Onda H (paralelo):         JG-08 . JG-09
 Onda I (serial):           JG-10 -> JG-11
+Onda J (device, REFINO):   cinco entradas seguidas em RA — de graca, jogando o
+                                    "jogar de novo" que a JG-11 entrega
 ```
 
 **Por que RA-F5 vinha primeiro, e o que mudou:** o device de 2026-08-19 mostrou
@@ -224,6 +246,12 @@ que ela era o gargalo de *toda* validacao seguinte. Em 2026-08-20 ela passou —
 segunda sessao sobe sem recarregar a pagina —, e com isso **o teste em device
 deixou de custar um reload por tentativa**. Foi o que permitiu, na mesma sessao,
 medir a altura declarada e derrubar a RA-F3.
+
+**Por que a Onda C encolheu, e para onde foi o que saiu dela:** `DR-4`. As cinco
+entradas seguidas nao respondem pergunta nova — as duas ja vistas provaram que a
+sessao reabre — e cada tentativa custa uma sessao de device, que e serial. O
+"jogar de novo" da JG-11 exercita a re-entrada de graca, entao o criterio virou a
+**Onda J** e nao segura mais nenhuma unidade em `EM DEVICE`.
 
 **O defeito que ficou no lugar dela:** a partir da terceira partida seguida o
 lado do jogo emudece (hipotese 9 do diario). Ele nao bloqueia as ondas de codigo,

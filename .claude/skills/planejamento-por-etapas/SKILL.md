@@ -90,4 +90,5 @@ Se nada puder rodar em paralelo, diga isso e o motivo. Um plano totalmente seria
 - [ ] Existe o bloco de ondas, com paralelismo justificado.
 - [ ] Nenhuma onda paralela tem duas tarefas escrevendo no mesmo arquivo.
 - [ ] Etapas que tocam RA/Babylon acionam `babylonjs-game-dev`.
+- [ ] Etapa que liga mais de um módulo diz **como a fiação será testada**: teste puro cobre a regra, `NullEngine` cobre a ligação (ver `babylonjs-game-dev/references/testing-nullengine.md`), device cobre percepção. "Valida no device" sozinho, para algo que roda headless, é planejamento caro.
 - [ ] O plano respeita a arquitetura modular obrigatória do `.github/copilot-instructions.md`.

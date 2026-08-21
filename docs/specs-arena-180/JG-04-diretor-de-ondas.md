@@ -4,33 +4,37 @@
 passa a ser ondas que nascem na borda do arco, **sempre fora do que o jogador
 esta enquadrando**, e convergem para ele.
 
-## Ponto de partida
+## O que a implementacao fixou (2026-08-20)
 
-**Metade desta unidade ja existe, e ninguem sabia.** `src/battle/WaveDirector.ts`
-e `src/battle/WaveDirector.test.ts` estao escritos, testados e **orfaos** —
-`grep -rn "WaveDirector" src --include="*.ts"` fora do proprio arquivo sai vazio.
-Eles entraram junto com a JG-01 (`96c364e`) e nunca foram fiados.
+Cinco coisas que a spec nao dizia e o codigo teve de decidir. Estao aqui porque
+sao reversiveis e cada uma tem motivo — nao porque descrevem estado (estado mora
+no [quadro](README.md)).
 
-A API pronta e exatamente a do contrato abaixo, consumindo `ArenaArc`:
+1. **A torre do jogador foi para o vertice do arco**, em `PLAYER_TOWER_RADIUS_M`
+   (= `MIN_PLACE_RADIUS_M`, 0,9 m) no azimute 0. Sem isso "convergir
+   radialmente para a torre do jogador" nao existe: a torre estava a 2 m ATRAS
+   do jogador, e o inimigo teria de atravessar o corpo dele. Nao e zero porque
+   uma torre de 1,20 m na origem poe a camera de RA (fixada em 1 m de altura
+   pelo engine) dentro do chapeu.
+2. **So a torre do jogador entra no combate.** A torre inimiga continua na cena
+   como cenario do Beat 5 e foi para **fora** do arco (z = 2,6 m), senao metade
+   dos nascimentos do setor central sairia de dentro dela. Ela some na JG-10.
+3. **Vitoria = sobreviver aos 3 minutos.** Nao ha mais desempate por HP (nao ha
+   segunda torre), e o empate saiu do `MatchResult`. Derrota continua sendo a
+   torre cair (`DJ-5`). Enquanto o Coelho nao entra como onda final (`DJ-6`,
+   JG-11), este e o unico caminho de vitoria.
+4. **Navegacao radial e de duas fases** (`src/battle/radialApproach.ts`): o
+   inimigo mantem o azimute ate o anel de fechamento e so entao fecha na torre.
+   A primeira versao ia em linha reta ate a torre — e um inimigo nascido em
+   `left` a 2,19 m aparecia contado em `center` poucos segundos depois. A seta
+   de flanco da JG-05 teria mentido em todo trajeto.
+5. **A tropa do jogador tem coleira** (`TROOP_LEASH_RADIUS_M`, 0,8 m do ponto de
+   colocacao) e volta para a ancora sem alvo. Sem isso, qualquer colocacao vira
+   a mesma colocacao alguns segundos depois, e "onde colocar" — que e o que o
+   giro do celular paga — deixa de ser decisao.
 
-```ts
-export class WaveDirector {
-  constructor(opts: { waves: WaveSpec[]; getCameraYawDeg: () => number; rng?: () => number });
-  update(elapsedMs: number): SpawnOrder[];
-  reset(): void;
-}
-```
-
-**O caminho antigo continua vivo**, e e ele que precisa morrer:
-
-- `src/battle/EnemyScript.ts` — usado em `main.ts:11` e
-  `GameFlow.ts:10,136,180,483` (`EnemyScriptRunner`);
-- `src/combat/DeploymentZone.ts` — usado em `main.ts:16,402` e
-  `CombatEngine.ts:14,67,119`.
-
-O insumo de "para onde o jogador olha" ja existe e ja esta correto:
-`EighthWallARManager.getCameraYawDeg()` (`:164`), que devolve o heading direto
-porque a arena esta na origem sem rotacao.
+Os numeros de 1, 4 e 5 sao tuning: vivem em `src/arena/metrics.ts` e
+`src/arena/ArenaArc.ts`, e so mudam por playtest.
 
 ## Arquivos-alvo
 
@@ -61,14 +65,32 @@ sobrevive como esta ate a JG-06 troca-lo pelo anel.
 
 Nenhum inimigo nasce em setor enquadrado enquanto houver setor livre; nenhum
 nasce dentro de `MIN_PLACE_RADIUS_M`; inimigos convergem radialmente para a torre
-do jogador e a danificam; `getSectorThreats()` devolve a contagem correta por
-setor; `grep -rn "EnemyScript\|DeploymentZone" src/` sai vazio.
+do jogador — **sem trocar de setor no caminho** — e a danificam;
+`getSectorThreats()` devolve a contagem correta por setor; `EnemyScript` e
+`DeploymentZone` nao existem mais como arquivo nem como import (os dois nomes
+sobrevivem em comentario, no lugar onde um leitor perguntaria por eles — o
+`grep` de aceite e por import, ver o bloco "Verificar com" do quadro).
 
 ## Como validar
 
 `npm test` e `npm run dev` no **modo tela**. O modo tela e a validacao barata
-aqui, porque comportamento de onda nao depende de RA — e com a RA-F5 ainda
-recente, poupar entradas em device tem valor.
+aqui, porque comportamento de onda nao depende de RA.
+
+O que a suite ja prova **sem Babylon**: o plano de ondas real rodando os 3
+minutos inteiros com o jogador girando, sem nascer ninguem em setor enquadrado
+nem fora do anel legal (`wavePlan.test.ts`); a contagem por setor
+(`sectorThreats.test.ts`); e o trajeto radial nao trocando de setor
+(`radialApproach.test.ts`).
+
+O que a suite prova **em `NullEngine`**, headless (`CombatEngine.test.ts`): o
+inimigo nasce na borda, atravessa o arco sem sair do flanco, chega na torre, a
+danifica e e abatido virando carta; a colocacao recusa dentro do raio minimo e
+atras do jogador sem gastar cogumelo; a tropa engaja e nao passa da coleira; e
+`reset()` limpa o campo. Foi este teste que pegou a troca de setor no trajeto.
+
+O que **so jogando** se ve, e que falta: a partida inteira lida como jogo — se a
+tropa com coleira segura um flanco, se 0,8 m de coleira e pouco ou muito, e se a
+torre a 0,9 m do rosto atrapalha em vez de ocluir.
 
 ## Fora de escopo
 
@@ -81,6 +103,12 @@ depois das ondas comuns validadas); colocacao de tropa do jogador (JG-06).
 | --- | --- | --- | --- |
 | Fiar o `WaveDirector` e reescrever o `CombatEngine` para alvo-unico-jogador com navegacao radial | `general-purpose` | `opus` — modulo central que cruza Arena/Unit/Combat; erro aqui contamina todas as unidades seguintes | — |
 | Remover `EnemyScript` e `DeploymentZone` com seus testes | `general-purpose` | `haiku` — mecanico, com os call sites ja listados acima | — (depois da tarefa acima) |
+
+**Como foi de fato (2026-08-20): execucao direta, sem sub-agent.** A remocao dos
+dois modulos nao era separavel da reescrita — quem tira a `DeploymentZone` tem de
+escrever, no mesmo movimento, a validacao polar que entra no lugar dela. Um
+sub-agent frio para a segunda tarefa redescobriria o contrato inteiro para
+apagar dois arquivos.
 
 ## Depende de
 

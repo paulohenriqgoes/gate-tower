@@ -6,9 +6,10 @@ import { Observable, type Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 
 import type { ArenaClosedReport, ArSessionController } from "../ar/ArSessionController";
-import { type MatchOverPayload, resolveMatchResultByHpPct, type TeamId } from "../battle/BattleTypes";
-import { EnemyScriptRunner, type EnemyDeployment } from "../battle/EnemyScript";
+import { type MatchOverPayload, type TeamId } from "../battle/BattleTypes";
 import type { MatchClock } from "../battle/MatchClock";
+import { WaveDirector, type SpawnOrder } from "../battle/WaveDirector";
+import { WAVE_PLAN } from "../battle/wavePlan";
 import type { CardDeckSystem } from "../cards/CardDeckSystem";
 import type { CombatEngine } from "../combat/CombatEngine";
 import { dissolveArena } from "../fx/arenaDissolve";
@@ -69,6 +70,14 @@ export interface GameFlowOptions {
    * residente — refazer aqui seria uma segunda inversao de matriz por frame.
    */
   getCameraArenaLocalPosition: () => Vector3 | null;
+  /**
+   * Para onde o jogador esta apontando o celular, em graus contra o azimute 0
+   * do arco. Vem de fora (`main.ts`) porque so la se sabe qual e o modo de
+   * render — o diretor de ondas nunca pode ler a camera do Babylon por conta
+   * propria (invariante 1 do quadro). E o que faz o inimigo nascer no flanco
+   * que o jogador NAO esta vendo.
+   */
+  getCameraYawDeg: () => number;
   hudLayer: HudLayer;
   /**
    * Relogio de partida (Etapa 7). Injetado (nao criado aqui) porque o
@@ -78,9 +87,9 @@ export interface GameFlowOptions {
   matchClock: MatchClock;
   /**
    * Carta que a torre inimiga revela ao acordar. E a PRIMEIRA carta do
-   * `ENEMY_SCRIPT` (ver `src/battle/EnemyScript.ts`) — a spec pede que a
-   * torre revele "uma das cartas que a IA vai usar", e a demo usa a que vai
-   * aparecer primeiro.
+   * `WAVE_PLAN` (ver `src/battle/wavePlan.ts`) — a spec pede que a torre
+   * revele "uma das cartas que a IA vai usar", e o jogo usa a que vai aparecer
+   * primeiro.
    */
   revealedEnemyCardId: string;
   /**
@@ -130,10 +139,12 @@ export class GameFlow {
   public readonly onMatchOverObservable = new Observable<MatchOverPayload>();
 
   private readonly options: GameFlowOptions;
-  // Dono do script fixo do inimigo (Etapa 7). Construido aqui (nao injetado)
-  // porque nao tem nenhuma dependencia de Babylon nem de outro modulo — so
-  // precisa do callback que liga `EnemyDeployment` ao `CombatEngine`.
-  private readonly enemyScriptRunner: EnemyScriptRunner;
+  // Diretor de ondas (JG-04). Construido aqui, e nao injetado, pelo mesmo
+  // motivo do `EnemyScriptRunner` que ele substituiu: e logica pura, sem
+  // Babylon, e o unico acoplamento dele com o resto e o yaw da camera, que
+  // chega pelas opcoes. Ele decide QUANDO e ONDE cada inimigo nasce; o
+  // `CombatEngine` so materializa.
+  private readonly waveDirector: WaveDirector;
 
   private phase: GamePhase = "menu";
   // Modo escolhido na tela inicial. So existe a partir da primeira escolha;
@@ -153,6 +164,9 @@ export class GameFlow {
   // arena presa pela metade se a cena for descartada no meio do Beat 7.
   private matchOverHoldTimeoutHandle: number | null = null;
   private cancelArenaDissolve: (() => void) | null = null;
+  // Criaturas abatidas na partida corrente. Zerado a cada entrada em `playing`
+  // e lido uma vez, no `endMatch` — e a recompensa da partida (spec v3 §8).
+  private enemiesDefeated = 0;
 
   // Posicao da boca da caverna no espaco do `arenaRoot`, calculada uma vez.
   // O `body` da torre nao tem rotacao nem escala propria (ele E o no que o
@@ -167,6 +181,7 @@ export class GameFlow {
   private readonly arenaClosedObserver: Observer<ArenaClosedReport>;
   private readonly sessionFailedObserver: Observer<string>;
   private readonly towerDestroyedObserver: Observer<TeamId>;
+  private readonly enemyDefeatedObserver: Observer<{ cardId: string }>;
   private readonly matchExpiredObserver: Observer<void>;
   private readonly finalMinuteObserver: Observer<void>;
 
@@ -177,8 +192,9 @@ export class GameFlow {
       options.enemyTower.caveMouth.position
     );
 
-    this.enemyScriptRunner = new EnemyScriptRunner({
-      onDeploy: (deployment) => this.handleEnemyDeployment(deployment),
+    this.waveDirector = new WaveDirector({
+      getCameraYawDeg: options.getCameraYawDeg,
+      waves: WAVE_PLAN,
     });
 
     this.modeSelectedObserver = options.startScreen.onModeSelectedObservable.add((mode) => {
@@ -195,12 +211,18 @@ export class GameFlow {
       this.handleSessionFailed(message);
     });
 
-    // Condicao de vitoria/derrota imediata: a torre de QUALQUER time morreu.
+    // Derrota imediata: a torre do jogador caiu (`DJ-5`).
     this.towerDestroyedObserver = options.combatEngine.onTowerDestroyedObservable.add((destroyedTeam) => {
       this.handleTowerDestroyed(destroyedTeam);
     });
 
-    // Tempo esgotado: desempate por percentual de HP (ver `resolveMatchResultByHpPct`).
+    // Contagem de abatidos da partida. A carta que cada um vira e trabalho da
+    // JG-09; aqui so o numero, que fecha o payload de fim de partida.
+    this.enemyDefeatedObserver = options.combatEngine.onEnemyDefeatedObservable.add(() => {
+      this.enemiesDefeated += 1;
+    });
+
+    // Tempo esgotado com a torre em pe: vitoria (ver `handleMatchTimeExpired`).
     this.matchExpiredObserver = options.matchClock.onExpiredObservable.add(() => {
       this.handleMatchTimeExpired();
     });
@@ -254,15 +276,21 @@ export class GameFlow {
     const { combatEngine, hudLayer, matchClock } = this.options;
 
     matchClock.tick();
-    this.enemyScriptRunner.update(matchClock.getElapsedMs());
+
+    // O diretor le a camera A CADA sorteio de setor, por dentro — por isso ele
+    // e chamado aqui, no frame, e nao num timer: se o jogador virar o celular
+    // entre dois inimigos da mesma onda, o segundo ja respeita a nova direcao.
+    for (const order of this.waveDirector.update(matchClock.getElapsedMs())) {
+      this.handleWaveSpawn(order);
+    }
 
     hudLayer.setMatchTimer(matchClock.getRemainingMs());
 
+    // So o HP da torre do jogador: a torre inimiga deixou de ser participante
+    // do combate na JG-04 (ela sobrevive como cenario da intro ate a JG-10),
+    // entao nao ha segunda barra para preencher.
     const playerHealth = combatEngine.getTowerHealth("player");
     hudLayer.setTowerHealth("player", playerHealth.current, playerHealth.max);
-
-    const enemyHealth = combatEngine.getTowerHealth("enemy");
-    hudLayer.setTowerHealth("enemy", enemyHealth.current, enemyHealth.max);
   }
 
   public dispose(): void {
@@ -291,6 +319,7 @@ export class GameFlow {
     this.options.arManager.onArenaClosedObservable.remove(this.arenaClosedObserver);
     this.options.arManager.onSessionFailedObservable.remove(this.sessionFailedObserver);
     this.options.combatEngine.onTowerDestroyedObservable.remove(this.towerDestroyedObserver);
+    this.options.combatEngine.onEnemyDefeatedObservable.remove(this.enemyDefeatedObserver);
     this.options.matchClock.onExpiredObservable.remove(this.matchExpiredObserver);
     this.options.matchClock.onFinalMinuteObservable.remove(this.finalMinuteObserver);
     this.onPhaseChangedObservable.clear();
@@ -480,34 +509,36 @@ export class GameFlow {
     this.setPhase("menu");
   }
 
-  /** Ponte entre `EnemyScriptRunner` (puro) e `CombatEngine` (Babylon). */
-  private handleEnemyDeployment(deployment: EnemyDeployment): void {
+  /** Ponte entre o `WaveDirector` (puro, polar) e o `CombatEngine` (Babylon). */
+  private handleWaveSpawn(order: SpawnOrder): void {
     if (this.phase !== "playing") {
       return;
     }
 
-    this.options.combatEngine.deployEnemyUnit(deployment.cardId, new Vector3(deployment.x, 0, deployment.z));
+    this.options.combatEngine.deployEnemyAtArcPoint(order.cardId, order.point);
   }
 
-  /** Torre destruida encerra na hora: quem perdeu a torre perde a partida. */
-  private handleTowerDestroyed(destroyedTeam: TeamId): void {
+  /** Torre destruida encerra na hora. So existe a do jogador, entao e derrota (`DJ-5`). */
+  private handleTowerDestroyed(_destroyedTeam: TeamId): void {
     if (this.phase !== "playing") {
       return;
     }
 
-    this.endMatch(destroyedTeam === "enemy" ? "win" : "loss");
+    this.endMatch("loss");
   }
 
-  /** Tempo esgotado: desempate por percentual de HP da torre. */
+  /**
+   * Tempo esgotado com a torre em pe: vitoria. Nao ha mais desempate por HP —
+   * a torre inimiga saiu do combate na JG-04, e sobreviver aos 3 minutos passou
+   * a ser a condicao de vitoria inteira. Enquanto o Coelho nao entra como onda
+   * final (`DJ-6`, JG-11), este e o unico caminho de vitoria do jogo.
+   */
   private handleMatchTimeExpired(): void {
     if (this.phase !== "playing") {
       return;
     }
 
-    const playerHpPct = this.options.combatEngine.getTowerHealthPct("player");
-    const enemyHpPct = this.options.combatEngine.getTowerHealthPct("enemy");
-
-    this.endMatch(resolveMatchResultByHpPct(playerHpPct, enemyHpPct));
+    this.endMatch("win");
   }
 
   private endMatch(result: MatchOverPayload["result"]): void {
@@ -516,13 +547,16 @@ export class GameFlow {
     }
 
     const playerHpPct = this.options.combatEngine.getTowerHealthPct("player");
-    const enemyHpPct = this.options.combatEngine.getTowerHealthPct("enemy");
 
     this.setPhase("match-over");
     // Telemetria PRIMEIRO, antes do HUD sumir ou da arena comecar a se
     // desfazer: e a UNICA leitura do resultado, ja que a spec proibe
     // qualquer tela de vitoria/derrota (ver `match_ended` em `main.ts`).
-    this.onMatchOverObservable.notifyObservers({ result, playerHpPct, enemyHpPct });
+    this.onMatchOverObservable.notifyObservers({
+      enemiesDefeated: this.enemiesDefeated,
+      playerHpPct,
+      result,
+    });
 
     // Beat 7: HUD fica congelado por um instante curto, DEPOIS a arena
     // comeca a se desfazer. Sem essa espera a dissolucao comecaria no MESMO
@@ -673,7 +707,12 @@ export class GameFlow {
         // `start()` rearma do zero porque `match-over` ja chamou `stop()`, e
         // `finishMatchOver` ja resetou combate e cogumelos antes do menu.
         this.options.matchClock.start();
-        this.enemyScriptRunner.reset();
+        // Ondas do zero e placar de abatidos do zero. Uma segunda partida no
+        // mesmo carregamento passa por aqui de novo, e sem o reset o diretor
+        // ficaria com todas as ondas ja marcadas como disparadas — a partida
+        // rodaria 3 minutos sem nascer um inimigo.
+        this.waveDirector.reset();
+        this.enemiesDefeated = 0;
         break;
       }
 

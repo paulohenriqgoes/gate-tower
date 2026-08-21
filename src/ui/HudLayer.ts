@@ -219,6 +219,20 @@ export class HudLayer {
   }
 
   /**
+   * Esconde/mostra a barra de HP de um lado do topo.
+   *
+   * Existe por causa da JG-04: a torre inimiga saiu do combate (o inimigo vem
+   * em ondas, nao de uma torre que o jogador derruba), e uma barra que nunca
+   * mais e atualizada continuaria desenhando "1000 de vida" para uma torre que
+   * nao participa da partida. Quem desliga e quem monta a cena, uma vez — nao
+   * e estado de fase.
+   */
+  public setTowerHealthVisible(team: TowerTeam, isVisible: boolean): void {
+    const controls = team === "player" ? this.playerHealth : this.enemyHealth;
+    controls.container.isVisible = isVisible;
+  }
+
+  /**
    * Reaplica as margens do HUD considerando o recorte da tela (notch). A
    * leitura dos insets mexe no DOM, entao o resultado fica em cache — isso
    * roda a cada `resize`.

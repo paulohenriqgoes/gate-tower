@@ -6,9 +6,11 @@ import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 
+import { MIN_PLACE_RADIUS_M } from "../arena/ArenaArc";
 import type { TeamId } from "../battle/BattleTypes";
+import type { CombatTarget } from "../battle/CombatTarget";
+import { radialApproachDestination } from "../battle/radialApproach";
 import { TROOP_HEIGHT_M } from "../arena/metrics";
-import type { TowerActor } from "../towers/TowerActor";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
 import { createContactShadow } from "../fx/contactShadow";
 import { IdleBehavior, type IdleBehaviorBounds } from "./idle/IdleBehavior";
@@ -35,6 +37,14 @@ export interface BaseUnitOptions {
     max: number;
     min: number;
   };
+  /**
+   * Carta que gerou esta unidade (id de `CARD_CATALOG`). Guardado porque a
+   * criatura abatida vira carta no album (spec v3 §8): quem avisa e
+   * `CombatEngine.onEnemyDefeatedObservable`, e sem isto o unico caminho seria
+   * decompor o `id`, que carrega sufixos de instancia e ate indice de
+   * esquadrao (`dona-barata-0-...`).
+   */
+  cardId: string;
   contactRange: number;
   displayName: string;
   health: number;
@@ -65,8 +75,27 @@ export interface IdleContext {
   getNeighborPositions: () => Vector3[];
 }
 
-export abstract class BaseUnit {
+/**
+ * Tolerancia, em metros, para considerar que a tropa ja voltou ao ponto de
+ * colocacao. Sem ela a unidade fica tremendo em volta do ponto exato, porque
+ * cada frame anda um passo e passa do alvo.
+ */
+const ANCHOR_ARRIVAL_TOLERANCE_M = 0.02;
+
+/**
+ * Como a unidade atravessa o campo ate o alvo.
+ *
+ * - `direct`: linha reta. E o que a tropa do jogador faz, porque ela ja nasce
+ *   dentro do anel, encostada em quem veio atacar.
+ * - `radial`: mantem o azimute e diminui o raio ate o anel de fechamento, so
+ *   entao fecha no alvo (ver `src/battle/radialApproach.ts`). E o caminho do
+ *   inimigo, e e o que mantem a seta de flanco verdadeira ate o fim.
+ */
+export type UnitNavigation = "direct" | "radial";
+
+export abstract class BaseUnit implements CombatTarget {
   public readonly attackIntervalMs: number;
+  public readonly cardId: string;
   public readonly contactRange: number;
   public readonly displayName: string;
   public readonly id: string;
@@ -80,7 +109,18 @@ export abstract class BaseUnit {
   protected health: number;
   protected nextAttackAt = Number.NEGATIVE_INFINITY;
   protected totalDistanceTravelled = 0;
-  protected targetTower: TowerActor | null = null;
+  protected target: CombatTarget | null = null;
+  // Ponto onde a tropa foi colocada, no espaco da arena. So as unidades do
+  // JOGADOR tem ancora: sem alvo dentro da coleira, a tropa volta para ca em
+  // vez de ficar onde a ultima perseguicao terminou (ver `TROOP_LEASH_RADIUS_M`
+  // em `src/arena/metrics.ts`). Inimigo nao tem ancora — ele veio para chegar
+  // na torre, nao para defender lugar nenhum.
+  protected anchor: Vector3 | null = null;
+  protected navigation: UnitNavigation = "direct";
+  // Reaproveitado por frame: converter o destino radial em Vector3 alocaria um
+  // objeto por unidade por frame, e este loop roda dentro do orcamento de
+  // quadro de uma sessao de RA.
+  private readonly navigationDestination = new Vector3();
   protected readonly healthBar: HealthBarMesh;
   protected readonly visualRoot: TransformNode;
 
@@ -94,6 +134,7 @@ export abstract class BaseUnit {
   public constructor(options: BaseUnitOptions) {
     this.attackIntervalMs = options.attackIntervalMs;
     this.attackIntervalRangeMs = options.attackIntervalRangeMs;
+    this.cardId = options.cardId;
     this.contactRange = options.contactRange;
     this.displayName = options.displayName;
     this.id = options.id;
@@ -186,12 +227,43 @@ export abstract class BaseUnit {
     return this.totalDistanceTravelled;
   }
 
-  public setTargetTower(tower: TowerActor | null): void {
-    this.targetTower = tower;
+  /**
+   * Alvo atual: a torre do jogador (para o inimigo) ou uma unidade inimiga
+   * (para a tropa do jogador). Quem escolhe e o `CombatEngine` — a unidade so
+   * persegue e bate o que recebe.
+   */
+  public setTarget(target: CombatTarget | null): void {
+    this.target = target;
   }
 
-  public getTargetTower(): TowerActor | null {
-    return this.targetTower;
+  public getTarget(): CombatTarget | null {
+    return this.target;
+  }
+
+  /** Ver `UnitNavigation`. Quem escolhe e o `CombatEngine`, na criacao da unidade. */
+  public setNavigation(navigation: UnitNavigation): void {
+    this.navigation = navigation;
+  }
+
+  /** Ponto de colocacao ao qual a tropa volta quando nao ha alvo. `null` desliga o comportamento. */
+  public setAnchor(anchor: Vector3 | null): void {
+    this.anchor = anchor ? anchor.clone() : null;
+  }
+
+  public getAnchor(): Vector3 | null {
+    return this.anchor;
+  }
+
+  // --- CombatTarget: a unidade tambem PODE ser alvo (a tropa do jogador bate
+  // em unidade, nao em torre). Sao adaptadores finos sobre o que ja existia;
+  // a nomenclatura propria evita colidir com `takeDamage`, que continua sendo
+  // o caminho de quem ja conhece a unidade concretamente (a torre atirando).
+  public getCombatPosition(): Vector3 {
+    return this.root.position;
+  }
+
+  public receiveCombatDamage(amount: number): void {
+    this.takeDamage(amount);
   }
 
   /**
@@ -266,7 +338,7 @@ export abstract class BaseUnit {
       return;
     }
 
-    if (!this.isAlive() || !this.targetTower || !this.targetTower.isAlive()) {
+    if (!this.isAlive()) {
       this.updateVisual({
         deltaSeconds,
         didAttack: false,
@@ -277,22 +349,53 @@ export abstract class BaseUnit {
       return;
     }
 
-    const direction = this.targetTower.mesh.position.subtract(this.root.position);
+    const target = this.target && this.target.isAlive() ? this.target : null;
+
+    // Sem alvo: se a unidade tem ancora (tropa do jogador), volta para o ponto
+    // onde foi colocada; sem ancora (inimigo entre alvos), fica parada. E o que
+    // mantem a colocacao sendo uma decisao: a tropa cobre o pedaco do arco que
+    // o jogador escolheu, e nao o pedaco onde a ultima briga terminou.
+    if (!target) {
+      const isReturning = this.moveTowardAnchor(deltaSeconds);
+      this.nextAttackAt = Number.NEGATIVE_INFINITY;
+      this.updateVisual({
+        deltaSeconds,
+        didAttack: false,
+        distanceToTarget: Number.POSITIVE_INFINITY,
+        isMoving: isReturning,
+        nowMs,
+      });
+      return;
+    }
+
+    // O ALVO decide quando atacar; o DESTINO decide para onde andar. Em
+    // navegacao direta os dois sao o mesmo ponto; em navegacao radial o destino
+    // e o proximo ponto da reta que sai do jogador, e so vira o alvo depois do
+    // anel de fechamento.
+    const targetPosition = target.getCombatPosition();
+    const direction = targetPosition.subtract(this.root.position);
     direction.y = 0;
 
     const distanceToTarget = direction.length();
     let isMoving = false;
 
     if (distanceToTarget > this.contactRange) {
+      const destination = this.resolveMovementDestination(targetPosition);
+      const movementDirection = destination.subtract(this.root.position);
+      movementDirection.y = 0;
+
+      const distanceToDestination = movementDirection.length();
       const movementDistance = Math.min(
         this.movementSpeed * deltaSeconds,
-        Math.max(0, distanceToTarget - this.contactRange)
+        // Nao passa do destino, e nao entra dentro do alvo: das duas folgas,
+        // vale a menor.
+        Math.max(0, distanceToTarget - this.contactRange),
+        distanceToDestination
       );
 
       if (movementDistance > 0) {
-        const movementDirection = direction.normalize();
-        const movement = movementDirection.scale(movementDistance);
-        this.root.position.addInPlace(movement);
+        movementDirection.normalize();
+        this.root.position.addInPlace(movementDirection.scale(movementDistance));
         this.totalDistanceTravelled += movementDistance;
         this.root.rotation.y = Math.atan2(movementDirection.x, movementDirection.z);
         isMoving = true;
@@ -321,7 +424,7 @@ export abstract class BaseUnit {
       return;
     }
 
-    this.targetTower.receiveDamage(this.computeAttackDamage());
+    target.receiveCombatDamage(this.computeAttackDamage());
     this.nextAttackAt = nowMs + this.resolveNextAttackIntervalMs();
     this.updateVisual({
       deltaSeconds,
@@ -330,6 +433,56 @@ export abstract class BaseUnit {
       isMoving: false,
       nowMs,
     });
+  }
+
+  /**
+   * Para onde andar neste frame. Em `direct` e o proprio alvo; em `radial` e o
+   * ponto devolvido por `radialApproachDestination` — mesmo azimute, raio
+   * menor — ate o inimigo alcancar o anel de fechamento.
+   */
+  private resolveMovementDestination(targetPosition: Vector3): Vector3 {
+    if (this.navigation === "direct") {
+      return targetPosition;
+    }
+
+    const destination = radialApproachDestination(
+      { x: this.root.position.x, z: this.root.position.z },
+      { x: targetPosition.x, z: targetPosition.z },
+      MIN_PLACE_RADIUS_M
+    );
+
+    this.navigationDestination.set(destination.x, this.root.position.y, destination.z);
+    return this.navigationDestination;
+  }
+
+  /**
+   * Um passo de volta para a ancora. Devolve `true` se de fato andou — o
+   * `updateVisual` usa isso para tocar a animacao de caminhada durante o
+   * retorno, e nao so na perseguicao.
+   */
+  private moveTowardAnchor(deltaSeconds: number): boolean {
+    if (!this.anchor) {
+      return false;
+    }
+
+    const direction = this.anchor.subtract(this.root.position);
+    direction.y = 0;
+
+    const distance = direction.length();
+    if (distance <= ANCHOR_ARRIVAL_TOLERANCE_M) {
+      return false;
+    }
+
+    const movementDistance = Math.min(this.movementSpeed * deltaSeconds, distance);
+    if (movementDistance <= 0) {
+      return false;
+    }
+
+    const movementDirection = direction.normalize();
+    this.root.position.addInPlace(movementDirection.scale(movementDistance));
+    this.totalDistanceTravelled += movementDistance;
+    this.root.rotation.y = Math.atan2(movementDirection.x, movementDirection.z);
+    return true;
   }
 
   public dispose(): void {

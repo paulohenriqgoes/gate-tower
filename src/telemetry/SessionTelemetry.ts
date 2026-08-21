@@ -48,7 +48,7 @@ export type TelemetryEvent =
   | { type: "deploy_cancelled" }
   | { type: "tracking_lost"; status: string }
   | { type: "tracking_recovered"; status: string }
-  | { type: "match_ended"; result: "win" | "loss" | "draw"; playerHpPct: number; enemyHpPct: number };
+  | { type: "match_ended"; result: "win" | "loss"; playerHpPct: number; enemiesDefeated: number };
 
 export interface LoggedEvent {
   atMs: number;

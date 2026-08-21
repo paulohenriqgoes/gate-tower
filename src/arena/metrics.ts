@@ -40,3 +40,33 @@ export const FADE_START_M = 1.2;
 
 /** Distancia em que o objeto esta completamente invisivel (alpha 0). */
 export const FADE_END_M = 0.6;
+
+/**
+ * Alcance de ataque da torre do jogador, em metros (JG-04).
+ *
+ * Era derivado do diametro do chapeu por um multiplicador (`3.9`) calibrado na
+ * arena retangular de 4,4 m, e resultava em ~4,16 m — mais que o DIAMETRO
+ * inteiro do arco. Com a torre no vertice, aquele alcance cobria a arena toda e
+ * a torre vencia a partida sozinha, sem tropa nenhuma.
+ *
+ * 1,0 m e a leitura de design, nao de calibragem fina: a torre se defende de
+ * quem ja chegou perto, e o anel de fora — de `MIN_PLACE_RADIUS_M` (0,9 m) a
+ * `ARENA_RADIUS_M` (2,2 m) — e trabalho da tropa. Numero de tuning: so muda por
+ * playtest.
+ */
+export const TOWER_ATTACK_RANGE_M = 1.0;
+
+/**
+ * Quanto uma tropa do jogador se afasta do ponto onde foi colocada para
+ * engajar, em metros (JG-04).
+ *
+ * A spec §4 diz que "a tropa nasce onde foi colocada" e que ONDE colocar e a
+ * decisao que o giro do celular paga. Uma tropa que persegue o inimigo pelo
+ * arco inteiro apaga essa decisao: qualquer colocacao viraria a mesma coisa
+ * alguns segundos depois. Com a coleira, a tropa cobre um pedaco do arco — e
+ * cobrir os tres flancos volta a exigir tres colocacoes.
+ *
+ * Sem alvo dentro da coleira a tropa volta para o ponto de colocacao. Numero de
+ * tuning: so muda por playtest.
+ */
+export const TROOP_LEASH_RADIUS_M = 0.8;

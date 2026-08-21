@@ -14,6 +14,19 @@ export const ARENA_SECTOR_COUNT = 3;
 export const ARENA_RADIUS_M = 2.2;
 /** Raio minimo de colocacao a partir da torre (spec §4) — sem ele o jogador otimo empilha tudo na base. */
 export const MIN_PLACE_RADIUS_M = 0.9;
+/**
+ * Raio em que a torre do jogador fica, no azimute 0 — logo a frente de quem
+ * segura o celular (JG-04).
+ *
+ * Nao e zero, embora o jogador SEJA o vertice do arco: uma torre de 1,20 m
+ * exatamente na origem poe a camera de RA (que o engine fixa em 1 m de altura)
+ * dentro do chapeu, e o jogador passa a partida vendo o interior da propria
+ * malha. Igual a `MIN_PLACE_RADIUS_M` de proposito: assim a torre ocupa
+ * exatamente a borda interna do anel jogavel e nenhuma colocacao legal cai em
+ * cima dela.
+ */
+export const PLAYER_TOWER_RADIUS_M = MIN_PLACE_RADIUS_M;
+
 /** FOV util do device em retrato (varia por aparelho, este e o valor de referencia). */
 export const DEVICE_FOV_DEG = 60;
 

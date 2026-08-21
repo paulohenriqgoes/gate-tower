@@ -7,6 +7,7 @@ import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
+import { PLAYER_TOWER_RADIUS_M } from "./ArenaArc";
 import { createContactShadow } from "../fx/contactShadow";
 import { applyMatteFinish, PALETTE } from "../fx/materials";
 import { attachProximityFade } from "../fx/proximityFade";
@@ -48,8 +49,6 @@ export interface ArenaLayout {
   maxZ: number;
   minX: number;
   minZ: number;
-  /** Metade do jogador: so da para invocar em z <= este valor. */
-  playerDeploymentMaxZ: number;
   unitGroundY: number;
   /** Centro do caminho unico que liga as duas torres. */
   laneCenterX: number;
@@ -99,8 +98,18 @@ export class ArenaSystem {
 
   /** Meia-largura do caminho central, em metros: cobre 1 tile a cada lado do centro (tiles x em {-1, 0}). */
   private readonly laneHalfWidth = this.tileSize;
-  /** Distancia do centro ate cada torre, no eixo Z, em metros — valor fixo pedido pela Etapa 2. */
-  private readonly towerZ = 2.0;
+  /**
+   * Onde fica a torre INIMIGA, no eixo Z, em metros.
+   *
+   * PROVISORIO, e so por causa da intro antiga: na v3 nao existe torre inimiga
+   * — o jogador defende UMA torre contra ondas (JG-04), e a intro que a JG-10
+   * vai escrever nem sequer tem esta torre. Ate la ela sobrevive como o alvo do
+   * Beat 5 (aproximar/tocar para acordar), e por isso fica FORA do arco
+   * (`ARENA_RADIUS_M` = 2,2 m): dentro dele, ela cairia bem no anel onde os
+   * inimigos nascem, e metade dos nascimentos do setor central sairia de dentro
+   * dela.
+   */
+  private readonly introEnemyTowerZ = 2.6;
 
   public constructor(scene: Scene) {
     this.scene = scene;
@@ -228,8 +237,6 @@ export class ArenaSystem {
         maxZ: halfDepth,
         minX: -halfWidth,
         minZ: -halfDepth,
-        // O jogador ocupa a metade dele: z <= 0 (o rio marca a divisa).
-        playerDeploymentMaxZ: 0,
         unitGroundY: 0.5 * ARENA_DETAIL_SCALE,
         laneCenterX: 0,
         laneHalfWidth: this.laneHalfWidth,
@@ -264,16 +271,32 @@ export class ArenaSystem {
     // aqui so troca a fabrica, o resto (blob de contato, parentesco no
     // `arenaRoot`) continua igual. `root` E o proprio `body`, de proposito:
     // o combate le `mesh.position` esperando a posicao em espaco de arena.
-    const player = createMushroomTower(this.scene, { lane, team: "player", x: 0, z: -this.towerZ });
+    // A torre do jogador saiu do fundo do campo (z = -2) e foi para o VERTICE
+    // do arco, logo a frente de quem joga (JG-04): o jogador e o vertice, "a
+    // torre e o caldeirao ficam junto dele" (spec v3 §1), e e por isso que o
+    // inimigo que nasce na borda e converge para ela esta convergindo para o
+    // JOGADOR. O raio exato vem de `PLAYER_TOWER_RADIUS_M` — ver la por que nao
+    // e zero.
+    const player = createMushroomTower(this.scene, {
+      lane,
+      team: "player",
+      x: 0,
+      z: PLAYER_TOWER_RADIUS_M,
+    });
     player.root.parent = arenaRoot;
     // Blob 1,25x o diametro REAL do chapeu (`CAP_DIAMETER_XZ`, de
     // `MushroomTower.ts`) — antes era o literal solto `2`, que nao acompanhava
     // a torre se `TOWER_HEIGHT_M`/`TOWER_SCALE` mudassem.
-    this.addContactBlob(arenaRoot, 0, -this.towerZ, CAP_DIAMETER_XZ * 1.25);
+    this.addContactBlob(arenaRoot, 0, PLAYER_TOWER_RADIUS_M, CAP_DIAMETER_XZ * 1.25);
 
-    const enemy = createMushroomTower(this.scene, { lane, team: "enemy", x: 0, z: this.towerZ });
+    const enemy = createMushroomTower(this.scene, {
+      lane,
+      team: "enemy",
+      x: 0,
+      z: this.introEnemyTowerZ,
+    });
     enemy.root.parent = arenaRoot;
-    this.addContactBlob(arenaRoot, 0, this.towerZ, CAP_DIAMETER_XZ * 1.25);
+    this.addContactBlob(arenaRoot, 0, this.introEnemyTowerZ, CAP_DIAMETER_XZ * 1.25);
 
     // Fade por proximidade: com 1,20 m de altura, a torre deixou de ser uma
     // peca de maquete que o jogador olha de cima e virou um objeto que ele

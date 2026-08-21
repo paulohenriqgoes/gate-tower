@@ -1,6 +1,6 @@
 # Decisoes fechadas da v3
 
-As onze decisoes que o projeto ja tomou sobre a arena de 180 graus, num lugar so,
+As doze decisoes que o projeto ja tomou sobre a arena de 180 graus, num lugar so,
 para pararem de ser re-litigadas a cada sessao. Cada uma carrega o **motivo** —
 uma decisao sem motivo registrado nao sobrevive ao primeiro desconforto.
 
@@ -20,14 +20,16 @@ decisoes do jogo. Os numeros originais foram preservados, entao `DR-1` e o antig
 
 ## `DR-*` — fundacao de RA
 
-Origem: `docs/specs/08-fundacao-ar.md`, secao "Decisoes tomadas". As tres saem da
-mesma medicao de device de 2026-08-19.
+Origem: `docs/specs/08-fundacao-ar.md`, secao "Decisoes tomadas". As tres
+primeiras saem da mesma medicao de device de 2026-08-19; a `DR-4` e de
+2026-08-20 e e sobre o que **nao** precisa ser medido agora.
 
 | ID | Decisao | Motivo |
 | --- | --- | --- |
 | DR-1 | **Nada induz o jogador a girar para fora do arco.** O `OffscreenIndicator` satura na borda do arco e nunca aponta para tras; som posicional vem de dentro do arco; nao existe spawn, alerta ou recompensa atras do jogador | Medido com laco fechado: girar dentro dos 180 graus custa **0,075 m de deriva mediana**; atravessar as costas num giro de 360 custa **0,78 m**. Como o arco tem 180 graus, +-90 **e** o envelope do jogo — a deriva so vira problema se o jogo pedir o que o design nao precisa |
 | DR-2 | **Reposicionar e um botao, sem medicao de deriva.** Nao existe estimador de deriva no jogo; o jogador decide quando a arena saiu do lugar | Estimar deriva por acumulo de saltos de relocalizacao **falhou em medicao**: media estimada de 0,155 m contra 0,082 m real, com correlacao levemente **negativa**. Nao repita esse ciclo sem sinal novo |
 | DR-3 | **O gesto de reposicionar e caro e precisa parecer caro.** Entra como transicao de fase, com o coaching overlay de volta — nunca como correcao instantanea no meio da acao | `recenter()` **descarta o mapa do SLAM**: cai para `LIMITED`, o overlay volta, e leva mais de 30 s para reconvergir. Oferece-lo como botao barato no meio da partida seria mentir sobre o custo |
+| DR-4 | **O criterio de cinco entradas seguidas em RA deixa de bloquear qualquer unidade.** Ele sai da Onda C e vira **refino**, a ser rodado depois que o game-flow fechar (JG-10 -> JG-11). Nenhuma unidade fica `EM DEVICE` esperando por ele | Decisao do dono do projeto, 2026-08-20. Duas entradas seguidas ja foram vistas em device e provaram o que a RA-F5 existia para provar: a segunda sessao sobe sem recarregar a pagina. As outras tres nao respondem pergunta nova — so medem repeticao — e cada uma custa uma sessao de device, que e serial por natureza. Alem disso o proprio "jogar de novo" da JG-11 exercita a re-entrada de graca: quando o game-flow estiver fechado, cinco entradas seguidas viram consequencia de jogar, e nao um teste a parte. Fazer agora seria pagar caro por um numero que sera remedido de qualquer jeito |
 
 ## `DJ-*` — o jogo
 

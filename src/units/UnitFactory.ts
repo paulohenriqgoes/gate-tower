@@ -25,6 +25,7 @@ export class UnitFactory {
       case "cururu-bombado":
         return [
           new CururuBombado({
+            cardId,
             id: this.createUnitId(cardId),
             scene: this.scene,
             spawnPosition,
@@ -33,10 +34,11 @@ export class UnitFactory {
           }),
         ];
       case "dona-barata":
-        return this.createDonaBarataSquad(spawnPosition, team);
+        return this.createDonaBarataSquad(cardId, spawnPosition, team);
       case "javali-raivoso":
         return [
           new JavaliRaivoso({
+            cardId,
             id: this.createUnitId(cardId),
             scene: this.scene,
             spawnPosition,
@@ -46,6 +48,7 @@ export class UnitFactory {
       case "tatu-bola":
         return [
           new TatuBola({
+            cardId,
             id: this.createUnitId(cardId),
             scene: this.scene,
             spawnPosition,
@@ -57,7 +60,7 @@ export class UnitFactory {
     }
   }
 
-  private createDonaBarataSquad(spawnPosition: Vector3, team: TeamId): BaseUnit[] {
+  private createDonaBarataSquad(cardId: string, spawnPosition: Vector3, team: TeamId): BaseUnit[] {
     // Espacamento do esquadrao: proporcional ao corpo da propria Dona Barata,
     // entao usa o MESMO fator dela (`DONA_BARATA_UNIT_SCALE`) em vez de um
     // numero solto — ver o docblock de escala em `DonaBarata.ts`.
@@ -70,6 +73,7 @@ export class UnitFactory {
     return formationOffsets.map((offset, index) => {
       return new DonaBarata({
         attackRange: this.towerAttackRange * this.donaBarataAttackRangeMultiplier,
+        cardId,
         id: this.createUnitId(`dona-barata-${index}`),
         scene: this.scene,
         spawnPosition: spawnPosition.add(offset),

@@ -8,12 +8,12 @@ import { Scene } from "@babylonjs/core/scene";
 import type { ArSessionController } from "./ar/ArSessionController";
 import { framedSectors } from "./arena/ArenaArc";
 import { ArenaSystem } from "./arena/ArenaSystem";
-import { ENEMY_SCRIPT } from "./battle/EnemyScript";
+import { TOWER_ATTACK_RANGE_M } from "./arena/metrics";
 import { MatchClock } from "./battle/MatchClock";
+import { FIRST_WAVE_CARD_ID } from "./battle/wavePlan";
 import { CARD_CATALOG } from "./cards/cardCatalog";
 import { CardDeckSystem } from "./cards/CardDeckSystem";
 import { CombatEngine } from "./combat/CombatEngine";
-import { DeploymentZone } from "./combat/DeploymentZone";
 import { GameFlow } from "./game/GameFlow";
 import { WorldTapRouter } from "./interaction/WorldTapRouter";
 import { SessionTelemetry } from "./telemetry/SessionTelemetry";
@@ -328,6 +328,10 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	const arena = arenaSystem.buildInitialArena();
 
 	const hudLayer = new HudLayer(scene);
+	// Sem torre inimiga no combate desde a JG-04: o lado direito do topo nao tem
+	// mais o que mostrar. A barra volta a existir quando houver alvo — hoje o
+	// Coelho, que e onda final e nao torre (`DJ-6`).
+	hudLayer.setTowerHealthVisible("enemy", false);
 
 	// Painel de debug so existe com `?debug=1`: em RA o celular nao tem console,
 	// e sem esses numeros nao da para investigar viewport/orientacao/tracking.
@@ -371,11 +375,6 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	const towerCombatSettings = {
 		attackCooldownMs: 900,
 		attackDamage: 35,
-		// Alcance = diametro da torre (1.6) * este multiplicador. Calibrado para
-		// a arena de mesa: as torres ficam a 20 unidades uma da outra, e 6.24 de
-		// alcance cobre ~31% do campo — a unidade ainda tem caminho antes de
-		// entrar na mira. O 5.5 anterior era da arena antiga, 1.4x mais longa.
-		attackRangeMultiplier: 3.9,
 		maxHealth: 1000,
 	};
 
@@ -389,21 +388,13 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	// entrar em partida, para o contador nao correr durante o menu.
 	const cardDeckHud = new CardDeckHud(scene, cardDeckSystem, hudLayer);
 
-	// Alcance das torres resolvido AQUI (era derivado dentro do CombatEngine):
-	// tanto o CombatEngine quanto a UnitFactory precisam do numero, e a fabrica
-	// agora e injetada nos dois lugares que criam criaturas — o combate e a
-	// populacao residente do "mundo vivo".
-	const towerAttackRange = (arena.towerDefinitions[0]?.diameter ?? 0)
-		* towerCombatSettings.attackRangeMultiplier;
+	// Alcance da torre: constante de metrica desde a JG-04, e nao mais um
+	// multiplicador do diametro do chapeu. O multiplicador foi calibrado na
+	// arena retangular e, com a torre no vertice do arco, cobria a arena
+	// inteira. Continua sendo resolvido AQUI porque tambem alimenta a
+	// `UnitFactory` (o alcance de arremesso da Dona Barata deriva dele).
+	const towerAttackRange = TOWER_ATTACK_RANGE_M;
 	const unitFactory = new UnitFactory(scene, towerCombatSettings.maxHealth, towerAttackRange);
-
-	// Overlay da metade do jogador (Etapa 6): filho do MESMO `arena.root` que a
-	// arena, para acompanhar a ancoragem em RA sem calculo extra.
-	const deploymentZone = new DeploymentZone({
-		arenaLayout: arena.arenaLayout,
-		arenaRoot: arena.root,
-		scene,
-	});
 
 	// Relogio de partida (Etapa 7). Construido ANTES do CombatEngine porque
 	// `getRemainingMs` (usado no payload de telemetria `card_deployed`) precisa
@@ -411,19 +402,26 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	// so existe mais abaixo, entao o relogio e injetado nos dois.
 	const matchClock = new MatchClock();
 
+	// So a torre do JOGADOR entra no combate (JG-04): o inimigo nao tem mais
+	// torre para o jogador derrubar — ele vem em ondas. A torre inimiga continua
+	// na cena como cenario do Beat 5 ate a JG-10 reescrever a intro, mas nao e
+	// mais um `TowerActor`: nao ataca, nao apanha e nao decide partida.
+	const playerTowerDefinitions = arena.towerDefinitions.filter(
+		(towerDefinition) => towerDefinition.team === "player"
+	);
+
 	const combatEngine = new CombatEngine({
-		arenaLayout: arena.arenaLayout,
 		arenaRoot: arena.root,
 		cardDeckSystem,
-		deploymentZone,
 		getRemainingMs: () => matchClock.getRemainingMs(),
 		scene,
 		towerAttackCooldownMs: towerCombatSettings.attackCooldownMs,
 		towerAttackDamage: towerCombatSettings.attackDamage,
 		towerAttackRange,
-		towerDefinitions: arena.towerDefinitions,
+		towerDefinitions: playerTowerDefinitions,
 		towerMaxHealth: towerCombatSettings.maxHealth,
 		unitFactory,
+		unitGroundY: arena.arenaLayout.unitGroundY,
 	});
 
 	// Populacao residente (Beat 4): criaturas que so vivem na arena, sem
@@ -529,6 +527,10 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		// matriz por frame, compartilhada. Sem ela a distancia ate a caverna
 		// sairia no espaco de mundo em vez do espaco local do `arenaRoot`.
 		getCameraArenaLocalPosition: getCameraPosition,
+		// Mesma fonte unica de "para onde o jogador olha" que o painel de debug
+		// usa: e por ela que o diretor de ondas nunca nasce um inimigo no flanco
+		// enquadrado.
+		getCameraYawDeg,
 		hudLayer,
 		matchClock,
 		proximityTrigger,
@@ -542,9 +544,9 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 				distanceMeters,
 			});
 		},
-		// Carta que a torre revela ao acordar: a PRIMEIRA carta do script fixo
-		// do inimigo (Etapa 7) — a mesma que vai aparecer primeiro na partida.
-		revealedEnemyCardId: ENEMY_SCRIPT[0].cardId,
+		// Carta que a torre revela ao acordar: a PRIMEIRA do plano de ondas
+		// (JG-04) — a mesma que vai aparecer primeiro na partida.
+		revealedEnemyCardId: FIRST_WAVE_CARD_ID,
 		scene,
 		startScreen,
 		towerWakeup,
@@ -620,7 +622,6 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		startScreen.dispose();
 		diagnosticsOverlay?.dispose();
 		combatEngine.dispose();
-		deploymentZone.dispose();
 		cardDeckHud.dispose();
 		cardDeckSystem.dispose();
 		fullscreenToggle?.dispose();

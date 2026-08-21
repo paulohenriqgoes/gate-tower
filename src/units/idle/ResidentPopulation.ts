@@ -14,7 +14,7 @@ import type { IdleBehaviorBounds } from "./IdleBehavior";
  * jogo existe para responder "a pessoa acredita que apareceu um mundo vivo na
  * mesa dela?", e o beat que responde isso e o jogador olhando criaturas
  * ociosas, sem HUD, sem timer, sem tutorial. Cada residente nasce com
- * `setIdleEnabled(true)`, sem torre-alvo (`setTargetTower(null)`) e nao e
+ * `setIdleEnabled(true)`, sem alvo de combate (`setTarget(null)`) e nao e
  * registrado em nenhum `CombatEngine` — nada aqui ataca ou e atacado.
  *
  * Esta classe so cria e atualiza os residentes; NAO faz wiring em main.ts ou
@@ -72,7 +72,7 @@ export class ResidentPopulation {
       }
 
       unit.root.parent = this.arenaRoot;
-      unit.setTargetTower(null);
+      unit.setTarget(null);
       this.residents.push(unit);
       this.neighborBuffers.set(unit, []);
 

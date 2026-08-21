@@ -1,10 +1,12 @@
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import type { Material } from "@babylonjs/core/Materials/material";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import type { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
 import type { TeamId, TowerLaneId } from "../battle/BattleTypes";
+import type { CombatTarget } from "../battle/CombatTarget";
 import { TOWER_SCALE } from "./MushroomTower";
 import { HealthBarMesh } from "../ui/HealthBarMesh";
 import type { BaseUnit } from "../units/BaseUnit";
@@ -39,7 +41,7 @@ export interface TowerActorOptions {
   team: TeamId;
 }
 
-export class TowerActor {
+export class TowerActor implements CombatTarget {
   public readonly attackCooldownMs: number;
   public readonly attackDamage: number;
   public readonly attackRange: number;
@@ -147,6 +149,17 @@ export class TowerActor {
 
   public getDistanceToUnit(unit: BaseUnit): number {
     return this.mesh.position.subtract(unit.root.position).length();
+  }
+
+  // --- CombatTarget: e assim que a unidade inimiga enxerga a torre desde a
+  // JG-04. `receiveDamage` continua existindo para quem ja tem a torre em
+  // maos (o proprio CombatEngine); estes dois sao a porta generica.
+  public getCombatPosition(): Vector3 {
+    return this.mesh.position;
+  }
+
+  public receiveCombatDamage(amount: number): void {
+    this.receiveDamage(amount);
   }
 
   /**
