@@ -5,6 +5,7 @@ import {
   Rectangle,
   TextBlock,
 } from "@babylonjs/gui";
+import type { Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 
 import { isPortrait, readSafeAreaInsets, type SafeAreaInsets } from "./screenOrientation";
@@ -44,6 +45,37 @@ const TIMER_COLOR = "#f8fafc";
 const TIMER_WARNING_COLOR = "#fca5a5";
 const TIMER_WARNING_THRESHOLD_MS = 60_000;
 
+/**
+ * Vinheta de dano: quatro barras nas bordas da tela que pulsam vermelho quando
+ * o jogador apanha (JG-12).
+ *
+ * Existe porque o alvo deixou de ser uma torre. Enquanto havia uma torre, ela
+ * tinha barra de vida no mundo e o dano acontecia num LUGAR que o jogador podia
+ * olhar. Agora quem apanha e ele: nao ha o que olhar, e o unico sinal seria um
+ * numero encolhendo no topo — que ninguem le no meio de um giro.
+ *
+ * Bordas, e nao um flash de tela cheia: sobre o feed da camera, cobrir o centro
+ * apagaria justamente a informacao que o jogador precisa (onde esta a ameaca)
+ * no frame em que ela mais importa.
+ */
+const DAMAGE_VIGNETTE_COLOR = "#ef4444";
+const DAMAGE_VIGNETTE_THICKNESS = 26;
+const DAMAGE_VIGNETTE_PEAK_ALPHA = 0.5;
+const DAMAGE_VIGNETTE_DURATION_MS = 260;
+
+/**
+ * Reticulo: a cruz fina no centro do quadro, que mostra para onde a fireball
+ * sai e onde o cone de acao esta centrado.
+ *
+ * Fino e curto de proposito. Ele fica aceso a partida inteira, e qualquer coisa
+ * mais pesada que isto vira sujeira permanente em cima do mundo real.
+ */
+const RETICLE_COLOR = "#f8fafc";
+const RETICLE_ARM_LENGTH = 14;
+const RETICLE_ARM_THICKNESS = 2;
+const RETICLE_GAP = 7;
+const RETICLE_ALPHA = 0.75;
+
 const HEALTH_COLOR: Record<TowerTeam, string> = {
   enemy: "#ef4444",
   player: "#38bdf8",
@@ -79,6 +111,14 @@ export class HudLayer {
 
   private readonly playerHealth: TowerHealthControls;
   private readonly enemyHealth: TowerHealthControls;
+  private readonly damageVignette: Rectangle[];
+  private readonly reticle: Rectangle;
+  private readonly scene: Scene;
+
+  // Instante (em `performance.now`) ate o qual a vinheta ainda esta pulsando.
+  // No passado = apagada.
+  private damageFlashUntilMs = 0;
+  private damageFlashObserver: Observer<Scene> | null = null;
   private readonly timerText: TextBlock;
   private readonly arStatusBackground: Rectangle;
 
@@ -93,6 +133,7 @@ export class HudLayer {
   private isBattleHudVisible = false;
 
   public constructor(scene: Scene) {
+    this.scene = scene;
     this.texture = AdvancedDynamicTexture.CreateFullscreenUI("game-hud", true, scene);
     this.texture.useSmallestIdeal = true;
     this.applyIdealResolution();
@@ -120,6 +161,21 @@ export class HudLayer {
     this.texture.addControl(thumb);
 
     this.zones = { thumb, top };
+
+    // A vinheta e o reticulo entram na textura RAIZ, e nao numa zona: a
+    // vinheta cobre as quatro bordas e o reticulo vive no centro exato do
+    // quadro — nenhum dos dois pertence a faixa do topo nem a zona do polegar.
+    // Invariante 6 do quadro: tudo na textura compartilhada, nunca uma segunda
+    // `AdvancedDynamicTexture` de tela cheia.
+    this.damageVignette = this.createDamageVignette();
+    for (const edge of this.damageVignette) {
+      this.texture.addControl(edge);
+    }
+
+    this.reticle = this.createReticle();
+    this.texture.addControl(this.reticle);
+
+    this.registerDamageFlash();
 
     this.playerHealth = this.createTowerHealthControls("player", Control.HORIZONTAL_ALIGNMENT_LEFT);
     this.enemyHealth = this.createTowerHealthControls("enemy", Control.HORIZONTAL_ALIGNMENT_RIGHT);
@@ -178,6 +234,23 @@ export class HudLayer {
   }
 
   /**
+   * Pulso vermelho nas bordas: o jogador acabou de apanhar.
+   *
+   * Chamadas em sequencia REINICIAM o pulso em vez de empilhar — sob uma rajada
+   * de golpes, alphas somados saturariam a tela em vermelho solido e o jogador
+   * pararia de enxergar o mundo bem quando mais precisa. Reiniciar mantem a
+   * borda viva e legivel enquanto o dano continuar chegando.
+   */
+  public flashDamageVignette(): void {
+    this.damageFlashUntilMs = performance.now() + DAMAGE_VIGNETTE_DURATION_MS;
+  }
+
+  /** Mostra/esconde o reticulo de mira. Quem liga e o `GameFlow`, na fase `playing`. */
+  public setReticleVisible(isVisible: boolean): void {
+    this.reticle.isVisible = isVisible;
+  }
+
+  /**
    * Liga/desliga cogumelos + cartas + timer + HP de uma vez. O default e
    * escondido: fora da partida (menu, "mundo vivo") a tela precisa ficar
    * completamente limpa. Tambem forca o texto de posicionamento de RA a
@@ -210,7 +283,7 @@ export class HudLayer {
   }
 
   /** Barra grossa e opaca + numero. Uma de cada lado do topo. */
-  public setTowerHealth(team: TowerTeam, current: number, max: number): void {
+  public setHealth(team: TowerTeam, current: number, max: number): void {
     const controls = team === "player" ? this.playerHealth : this.enemyHealth;
     const ratio = max <= 0 ? 0 : Math.min(1, Math.max(0, current / max));
 
@@ -227,7 +300,7 @@ export class HudLayer {
    * nao participa da partida. Quem desliga e quem monta a cena, uma vez — nao
    * e estado de fase.
    */
-  public setTowerHealthVisible(team: TowerTeam, isVisible: boolean): void {
+  public setHealthVisible(team: TowerTeam, isVisible: boolean): void {
     const controls = team === "player" ? this.playerHealth : this.enemyHealth;
     controls.container.isVisible = isVisible;
   }
@@ -306,7 +379,112 @@ export class HudLayer {
     // Intencionalmente vazio — ver docblock.
   }
 
+  /**
+   * Quatro barras finas, uma por borda. Comecam invisiveis (alpha 0) e sao
+   * acesas pelo pulso.
+   */
+  private createDamageVignette(): Rectangle[] {
+    const edges: Rectangle[] = [];
+
+    const specs: {
+      name: string;
+      width: string;
+      height: string;
+      horizontal: number;
+      vertical: number;
+    }[] = [
+      { name: "top", width: "100%", height: `${DAMAGE_VIGNETTE_THICKNESS}px`, horizontal: Control.HORIZONTAL_ALIGNMENT_CENTER, vertical: Control.VERTICAL_ALIGNMENT_TOP },
+      { name: "bottom", width: "100%", height: `${DAMAGE_VIGNETTE_THICKNESS}px`, horizontal: Control.HORIZONTAL_ALIGNMENT_CENTER, vertical: Control.VERTICAL_ALIGNMENT_BOTTOM },
+      { name: "left", width: `${DAMAGE_VIGNETTE_THICKNESS}px`, height: "100%", horizontal: Control.HORIZONTAL_ALIGNMENT_LEFT, vertical: Control.VERTICAL_ALIGNMENT_CENTER },
+      { name: "right", width: `${DAMAGE_VIGNETTE_THICKNESS}px`, height: "100%", horizontal: Control.HORIZONTAL_ALIGNMENT_RIGHT, vertical: Control.VERTICAL_ALIGNMENT_CENTER },
+    ];
+
+    for (const spec of specs) {
+      const edge = new Rectangle(`hud-damage-${spec.name}`);
+      edge.width = spec.width;
+      edge.height = spec.height;
+      edge.thickness = 0;
+      edge.background = DAMAGE_VIGNETTE_COLOR;
+      edge.horizontalAlignment = spec.horizontal;
+      edge.verticalAlignment = spec.vertical;
+      edge.alpha = 0;
+      // Nunca bloqueia toque: ela cobre as bordas da tela, e a borda inferior e
+      // exatamente onde ficam as cartas.
+      edge.isPointerBlocker = false;
+      edge.isHitTestVisible = false;
+      edges.push(edge);
+    }
+
+    return edges;
+  }
+
+  /** Cruz de quatro bracos com um vao no meio, para nao tapar o alvo mirado. */
+  private createReticle(): Rectangle {
+    const container = new Rectangle("hud-reticle");
+    const span = (RETICLE_GAP + RETICLE_ARM_LENGTH) * 2;
+    container.width = `${span}px`;
+    container.height = `${span}px`;
+    container.thickness = 0;
+    container.background = "#00000000";
+    container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    container.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    container.isPointerBlocker = false;
+    container.isHitTestVisible = false;
+    container.isVisible = false;
+    container.alpha = RETICLE_ALPHA;
+
+    const arms: { name: string; width: number; height: number; left: number; top: number }[] = [
+      { name: "up", width: RETICLE_ARM_THICKNESS, height: RETICLE_ARM_LENGTH, left: 0, top: -(RETICLE_GAP + RETICLE_ARM_LENGTH / 2) },
+      { name: "down", width: RETICLE_ARM_THICKNESS, height: RETICLE_ARM_LENGTH, left: 0, top: RETICLE_GAP + RETICLE_ARM_LENGTH / 2 },
+      { name: "left", width: RETICLE_ARM_LENGTH, height: RETICLE_ARM_THICKNESS, left: -(RETICLE_GAP + RETICLE_ARM_LENGTH / 2), top: 0 },
+      { name: "right", width: RETICLE_ARM_LENGTH, height: RETICLE_ARM_THICKNESS, left: RETICLE_GAP + RETICLE_ARM_LENGTH / 2, top: 0 },
+    ];
+
+    for (const arm of arms) {
+      const bar = new Rectangle(`hud-reticle-${arm.name}`);
+      bar.width = `${arm.width}px`;
+      bar.height = `${arm.height}px`;
+      bar.thickness = 0;
+      bar.background = RETICLE_COLOR;
+      bar.left = `${arm.left}px`;
+      bar.top = `${arm.top}px`;
+      bar.isPointerBlocker = false;
+      bar.isHitTestVisible = false;
+      container.addControl(bar);
+    }
+
+    return container;
+  }
+
+  /**
+   * Um observador de frame so, registrado no construtor, cuidando do decaimento
+   * da vinheta. Ele nao aloca nada e sai cedo enquanto nao ha pulso — o padrao
+   * ja usado pela pulsacao do `ArenaGhost`.
+   */
+  private registerDamageFlash(): void {
+    this.damageFlashObserver = this.scene.onBeforeRenderObservable.add(() => {
+      const remainingMs = this.damageFlashUntilMs - performance.now();
+      const alpha =
+        remainingMs <= 0 ? 0 : (remainingMs / DAMAGE_VIGNETTE_DURATION_MS) * DAMAGE_VIGNETTE_PEAK_ALPHA;
+
+      // Sai sem tocar em nada quando ja esta apagada: o caso comum e "nao levou
+      // dano neste frame", e ele nao pode custar quatro escritas de propriedade.
+      if (alpha === 0 && this.damageVignette[0].alpha === 0) {
+        return;
+      }
+
+      for (const edge of this.damageVignette) {
+        edge.alpha = alpha;
+      }
+    });
+  }
+
   public dispose(): void {
+    if (this.damageFlashObserver) {
+      this.scene.onBeforeRenderObservable.remove(this.damageFlashObserver);
+      this.damageFlashObserver = null;
+    }
+
     this.texture.dispose();
   }
 

@@ -37,18 +37,25 @@ describe("playerYawDeg — a convencao de angulo do modo tela", () => {
   });
 
   it("concorda com `sectorOf` sobre qual flanco o jogador esta encarando", () => {
-    expect(sectorOf(playerYawDeg(lookingAt(1, 0)))).toBe("right");
-    expect(sectorOf(playerYawDeg(lookingAt(-1, 0)))).toBe("left");
+    // +-20 graus (os centros dos flancos), e nao +-90: a arena e o proprio FOV
+    // de 60 graus desde 2026-08-21, entao olhar a 90 cai fora dela. O que
+    // importa aqui e o SINAL — +X do jogador tem de dar o flanco da direita.
+    const rightX = Math.sin((20 * Math.PI) / 180);
+    const forwardZ = Math.cos((20 * Math.PI) / 180);
+
+    expect(sectorOf(playerYawDeg(lookingAt(rightX, forwardZ)))).toBe("right");
+    expect(sectorOf(playerYawDeg(lookingAt(-rightX, forwardZ)))).toBe("left");
     expect(sectorOf(playerYawDeg(lookingAt(0, 1)))).toBe("center");
   });
 
   it("ignora a inclinacao: olhar para o chao nao muda de flanco", () => {
     const lookingDownAndRight: HeadingSource = {
-      getDirection: () => new Vector3(0.5, -0.85, 0.1),
+      getDirection: () => new Vector3(0.3, -0.85, 0.8),
     };
 
-    // A componente Y e descartada, entao o que sobra e um olhar bem para a
-    // direita — e nao um angulo qualquer contaminado pela inclinacao.
+    // A componente Y e descartada, entao o que sobra e um olhar para a direita
+    // DENTRO da arena — e nao um angulo qualquer contaminado pela inclinacao.
+    // Sem descartar o Y, este vetor daria um yaw completamente diferente.
     expect(sectorOf(playerYawDeg(lookingDownAndRight))).toBe("right");
   });
 

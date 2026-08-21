@@ -4,13 +4,21 @@ import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Observable, type Observer } from "@babylonjs/core/Misc/observable";
 import type { Scene } from "@babylonjs/core/scene";
 
-import { evaluatePlacement, toArc, toLocal, type ArcPoint } from "../arena/ArenaArc";
+import { evaluateDeployment, refusalReason, toArc, toLocal, type ArcPoint } from "../arena/ArenaArc";
 import { TROOP_LEASH_RADIUS_M } from "../arena/metrics";
 import type { TeamId } from "../battle/BattleTypes";
 import type { CombatTarget } from "../battle/CombatTarget";
 import { summarizeSectorThreats, type SectorThreat } from "../battle/sectorThreats";
 import { CardDeckSystem } from "../cards/CardDeckSystem";
-import { TowerActor } from "../towers/TowerActor";
+import {
+  FIREBALL_AIM_CONE_DEG,
+  FIREBALL_COST_MUSHROOMS,
+  FIREBALL_DAMAGE,
+  FIREBALL_SPEED_MPS,
+} from "../arena/metrics";
+import { Fireball } from "./Fireball";
+import { pickFireballTarget } from "./fireballAim";
+import { PlayerCore } from "./PlayerCore";
 import type { BaseUnit } from "../units/BaseUnit";
 import { UnitFactory } from "../units/UnitFactory";
 import { playGhostThenMaterialize } from "../fx/spawnAnimation";
@@ -30,17 +38,21 @@ export interface CardDeployedInfo {
 // `playGhostThenMaterialize` em `src/fx/spawnAnimation.ts`.
 const GHOST_DURATION_MS = 200;
 
+/**
+ * Onde a bola nasce, em metros a frente do jogador. Fora da camera de RA (que o
+ * engine fixa a 1 m) e dentro do quadro.
+ */
+const FIREBALL_ORIGIN_RADIUS_M = 0.4;
+
+/**
+ * Ate onde voa um tiro que nao acertou ninguem. Alem do fundo da arena de
+ * proposito: a bola tem de sair de cena, e nao parar no ar no meio do campo.
+ */
+const FIREBALL_MISS_RANGE_M = 2.4;
+
 interface PendingGhostDeployment {
   cancel: () => void;
   unit: BaseUnit;
-}
-
-export interface CombatArenaTowerDefinition {
-  diameter: number;
-  id: string;
-  lane: "left" | "center" | "right";
-  mesh: Mesh;
-  team: TeamId;
 }
 
 export interface CombatEngineOptions {
@@ -55,18 +67,21 @@ export interface CombatEngineOptions {
    * ve a unidade andar o campo inteiro e atacar duas vezes.
    */
   now?: () => number;
-  scene: Scene;
-  towerAttackCooldownMs: number;
-  towerAttackDamage: number;
-  /** Alcance de ataque da torre, em metros (`TOWER_ATTACK_RANGE_M`). */
-  towerAttackRange: number;
   /**
-   * Torres de COMBATE. Desde a JG-04 e uma so — a do jogador. Continua sendo
-   * uma lista porque nada aqui assume cardinalidade 1, e a leitura de HP por
-   * time ja somava varias.
+   * Para onde o celular aponta AGORA, em graus. Injetado, e nunca lido da camera
+   * aqui dentro: e o invariante 1 do quadro (a logica de jogo e independente do
+   * modo de renderizacao), e e o que mantem o modo tela jogavel com o jogador
+   * simulado.
+   *
+   * O combate precisa disto desde 2026-08-21, quando colocar carta passou a
+   * depender do cone de acao — antes, onde da para colocar nao dependia de para
+   * onde se olha.
    */
-  towerDefinitions: CombatArenaTowerDefinition[];
-  towerMaxHealth: number;
+  getCameraYawDeg: () => number;
+  /** Raio do corpo do jogador, em metros (`PLAYER_BODY_RADIUS_M`). */
+  playerBodyRadius: number;
+  playerMaxHealth: number;
+  scene: Scene;
   /**
    * Fabrica de unidades INJETADA. Antes o CombatEngine criava a sua propria,
    * o que impedia a `ResidentPopulation` (o "mundo vivo") de usar a mesma —
@@ -82,10 +97,15 @@ export interface CombatEngineOptions {
  *
  * O que mudou em relacao ao duelo torre-contra-torre da v2:
  *
- * - **Alvo unico.** So existe uma torre de combate, a do jogador. O inimigo
- *   nasce na borda do arco e converge para ela; a tropa do jogador nao tem
- *   torre para atacar — ela defende o pedaco do arco onde foi colocada e bate
- *   nas UNIDADES que chegam (`CombatTarget` cobre os dois casos).
+ * - **Alvo unico, e desde a JG-12 ele e o proprio JOGADOR** (`PlayerCore`).
+ *   Nao existe mais torre de combate: o inimigo nasce na borda do arco e
+ *   converge para a origem, que e onde quem joga esta. A tropa do jogador nao
+ *   tem torre para atacar — ela defende o pedaco do arco onde foi colocada e
+ *   bate nas UNIDADES que chegam (`CombatTarget` cobre os dois casos).
+ * - **Nada do lado do jogador ataca sozinho.** A torre tinha 1,0 m de alcance e
+ *   ataque automatico, e isso resolvia a partida sem o jogador fazer nada — duas
+ *   partidas medidas em device terminaram com 100% e 99,1% de vida. Quem
+ *   defende e carta; o recurso de emergencia e a fireball, que custa cogumelo.
  * - **Colocacao polar.** Quem decide se um ponto e legal e `evaluatePlacement`
  *   do modelo polar (dentro do arco, entre `MIN_PLACE_RADIUS_M` e
  *   `ARENA_RADIUS_M`), e nao mais o retangulo "metade do jogador" da
@@ -100,11 +120,11 @@ export interface CombatEngineOptions {
  */
 export class CombatEngine {
   /**
-   * Torre do jogador levou dano; carrega a posicao de MUNDO da torre. Quem
-   * ouve e o `OffscreenIndicator`, para apontar a seta quando o ataque
-   * acontece fora do quadro da camera.
+   * O jogador levou dano; carrega a posicao de MUNDO de onde ele esta (a origem
+   * da arena). Quem ouve e o `OffscreenIndicator`, para apontar a seta quando o
+   * ataque acontece fora do quadro da camera, e o HUD, para a vinheta.
    */
-  public readonly onPlayerTowerDamagedObservable = new Observable<Vector3>();
+  public readonly onPlayerDamagedObservable = new Observable<Vector3>();
   /** Uma invocacao de fato aconteceu (cogumelo ja debitado). Ver `CardDeployedInfo`. */
   public readonly onCardDeployedObservable = new Observable<CardDeployedInfo>();
   /** Toque fora do anel valido com carta selecionada: selecao cancelada, nada foi gasto. */
@@ -123,35 +143,45 @@ export class CombatEngine {
    */
   public readonly onEnemyDefeatedObservable = new Observable<{ cardId: string }>();
   /**
-   * Uma torre chegou a 0 de vida — dispara UMA vez, no frame em que a torre
-   * morre. Com uma torre de combate so, na pratica isto significa derrota; o
-   * payload de time permanece porque quem decide o resultado e o `GameFlow`,
-   * nao este modulo.
+   * O jogador lancou uma fireball (cogumelo ja debitado). Quem ouve e o HUD, para
+   * o feedback de disparo. Nao carrega alvo de proposito: o tiro sai antes de se
+   * saber se acerta, e e assim que ele e sentido.
    */
-  public readonly onTowerDestroyedObservable = new Observable<TeamId>();
+  public readonly onFireballCastObservable = new Observable<void>();
+  /**
+   * O jogador chegou a 0 de vida — dispara UMA vez, no frame da transicao. E a
+   * derrota (`DJ-5`, que dizia "a torre cair" e desde a JG-12 diz "o jogador
+   * cair"), mas quem decide o resultado da partida continua sendo o `GameFlow`:
+   * este modulo so avisa.
+   */
+  public readonly onPlayerDefeatedObservable = new Observable<void>();
 
   private readonly arenaRoot: TransformNode;
   private readonly cardDeckSystem: CardDeckSystem;
+  private readonly getCameraYawDeg: () => number;
   private readonly getRemainingMs: () => number;
   private readonly now: () => number;
+  private readonly player: PlayerCore;
   private readonly scene: Scene;
-  private readonly towers: TowerActor[];
   private readonly unitFactory: UnitFactory;
   private readonly unitGroundY: number;
 
   private readonly beforeRenderObserver: Observer<Scene>;
   private readonly units: BaseUnit[] = [];
+  // Projeteis em voo. Vivem fora de `units` porque nao sao unidades: nao andam
+  // por navegacao, nao sao alvo, nao contam como ameaca de flanco.
+  private readonly fireballs: { projectile: Fireball; target: BaseUnit | null }[] = [];
   // Unidades entre "cogumelo ja debitado" e "fantasma acabou": ficam de fora
   // de `units` (nao andam, nao atacam, nao sao alvo, nao contam como ameaca de
   // flanco) ate materializar. Ver `beginGhostDeployment`.
   private readonly pendingGhostDeployments: PendingGhostDeployment[] = [];
-  // Vida da rodada anterior por torre do jogador: a queda entre dois frames e
-  // o gatilho de `onPlayerTowerDamagedObservable` (o dano e aplicado direto
-  // pela unidade na TowerActor, sem passar por aqui).
-  private readonly lastPlayerTowerHealth = new Map<TowerActor, number>();
-  // Estado vivo/morta da rodada anterior — a queda de vivo para morta e o
-  // gatilho de `onTowerDestroyedObservable`.
-  private readonly lastTowerAliveState = new Map<TowerActor, boolean>();
+  // Vida do jogador na rodada anterior: a queda entre dois frames e o gatilho
+  // de `onPlayerDamagedObservable` (o dano e aplicado direto pela unidade no
+  // `PlayerCore`, sem passar por aqui).
+  private lastPlayerHealth: number;
+  // Vivo/morto da rodada anterior — a queda de vivo para morto e o gatilho de
+  // `onPlayerDefeatedObservable`.
+  private lastPlayerAlive: boolean;
 
   // Nasce ligado para nao mudar o comportamento de quem ainda nao chama
   // `setActive`; quem desliga fora de partida e o GameFlow.
@@ -160,6 +190,7 @@ export class CombatEngine {
   public constructor(options: CombatEngineOptions) {
     this.arenaRoot = options.arenaRoot;
     this.cardDeckSystem = options.cardDeckSystem;
+    this.getCameraYawDeg = options.getCameraYawDeg;
     this.getRemainingMs = options.getRemainingMs ?? (() => 0);
     this.now = options.now ?? (() => performance.now());
     this.scene = options.scene;
@@ -171,32 +202,63 @@ export class CombatEngine {
     // central que a justificava. O feedback espacial de onde da para colocar
     // volta na JG-06, como anel projetado no ponto mirado — e la que uma
     // assinatura de `onStateChangedObservable` volta a fazer sentido.
-    this.towers = options.towerDefinitions.map((towerDefinition) => {
-      return new TowerActor({
-        attackCooldownMs: options.towerAttackCooldownMs,
-        attackDamage: options.towerAttackDamage,
-        attackRange: options.towerAttackRange,
-        diameter: towerDefinition.diameter,
-        id: towerDefinition.id,
-        lane: towerDefinition.lane,
-        maxHealth: options.towerMaxHealth,
-        mesh: towerDefinition.mesh,
-        scene: this.scene,
-        team: towerDefinition.team,
-      });
+    this.player = new PlayerCore({
+      bodyRadius: options.playerBodyRadius,
+      groundY: this.unitGroundY,
+      maxHealth: options.playerMaxHealth,
     });
 
-    for (const tower of this.towers) {
-      if (tower.team === "player") {
-        this.lastPlayerTowerHealth.set(tower, tower.getHealth());
-      }
-
-      this.lastTowerAliveState.set(tower, tower.isAlive());
-    }
+    this.lastPlayerHealth = this.player.getHealth();
+    this.lastPlayerAlive = this.player.isAlive();
 
     this.beforeRenderObserver = this.scene.onBeforeRenderObservable.add(() => {
       this.update();
     });
+  }
+
+  /**
+   * Lanca uma fireball na direcao em que o celular aponta. Devolve `false` — sem
+   * gastar nada — quando o combate esta parado ou falta cogumelo.
+   *
+   * **O alvo e decidido no disparo, nao no impacto.** O projetil viaja ate onde
+   * o inimigo escolhido estava, e o dano so e aplicado se ele ainda estiver vivo
+   * na chegada. A alternativa — recalcular o alvo no impacto — faria a bola
+   * "curvar" atras de quem se moveu, e o jogador aprenderia que mirar nao
+   * importa. Aqui, errar por atraso e uma consequencia legivel de ter demorado.
+   *
+   * O tiro sai mesmo sem ninguem no cone: voa e apaga. Cobrar o cogumelo por um
+   * tiro perdido e o que faz atirar a esmo custar caro.
+   */
+  public castFireball(): boolean {
+    if (!this.isActive || !this.arenaRoot.isEnabled()) {
+      return false;
+    }
+
+    if (!this.cardDeckSystem.tryConsumeMushrooms(FIREBALL_COST_MUSHROOMS)) {
+      return false;
+    }
+
+    const aimAzimuthDeg = this.getCameraYawDeg();
+    const aliveEnemies = this.units.filter((unit) => unit.team === "enemy" && unit.isAlive());
+    const candidates = aliveEnemies.map((unit) =>
+      toArc({ x: unit.root.position.x, z: unit.root.position.z })
+    );
+
+    const hitIndex = pickFireballTarget(aimAzimuthDeg, candidates, FIREBALL_AIM_CONE_DEG);
+    const target = hitIndex === null ? null : aliveEnemies[hitIndex];
+
+    const from = this.fireballOrigin();
+    const to = target
+      ? target.root.position.clone()
+      : this.toSpawnPosition({ azimuthDeg: aimAzimuthDeg, radiusM: FIREBALL_MISS_RANGE_M });
+
+    const projectile = new Fireball({ from, to, scene: this.scene, speedMps: FIREBALL_SPEED_MPS });
+    projectile.root.parent = this.arenaRoot;
+    this.fireballs.push({ projectile, target });
+
+    this.onFireballCastObservable.notifyObservers();
+
+    return true;
   }
 
   /** Fora da partida o combate nao roda nem responde a toque. */
@@ -205,21 +267,16 @@ export class CombatEngine {
   }
 
   /**
-   * HP atual/maximo somado das torres de um time. Usado pelo HUD
-   * (`hudLayer.setTowerHealth`) e pela telemetria de fim de partida.
+   * HP atual/maximo do JOGADOR. Usado pelo HUD (`hudLayer.setHealth`) e pela
+   * telemetria de fim de partida.
    */
-  public getTowerHealth(team: TeamId): { current: number; max: number } {
-    const teamTowers = this.towers.filter((tower) => tower.team === team);
-
-    return {
-      current: teamTowers.reduce((sum, tower) => sum + tower.getHealth(), 0),
-      max: teamTowers.reduce((sum, tower) => sum + tower.maxHealth, 0),
-    };
+  public getPlayerHealth(): { current: number; max: number } {
+    return { current: this.player.getHealth(), max: this.player.maxHealth };
   }
 
-  /** `getTowerHealth` como percentual (0-100). Vai no `match_ended` da telemetria. */
-  public getTowerHealthPct(team: TeamId): number {
-    const { current, max } = this.getTowerHealth(team);
+  /** `getPlayerHealth` como percentual (0-100). Vai no `match_ended` da telemetria. */
+  public getPlayerHealthPct(): number {
+    const { current, max } = this.getPlayerHealth();
     return max <= 0 ? 0 : (current / max) * 100;
   }
 
@@ -298,10 +355,9 @@ export class CombatEngine {
 
   /**
    * Reseta o combate para uma partida nova: descarta toda unidade da partida
-   * anterior, viva ou presa em fantasma, e devolve as torres a vida cheia. Os
-   * mapas de "ultimo estado" sao reconstruidos depois do reset — sem isso a
-   * proxima partida herdaria vida velha e `notifyTowerDestruction` nunca
-   * dispararia de novo.
+   * anterior, viva ou presa em fantasma, e devolve o jogador a vida cheia. O
+   * "ultimo estado" e reconstruido depois do reset — sem isso a proxima partida
+   * herdaria vida velha e `notifyPlayerDefeat` nunca dispararia de novo.
    *
    * NAO mexe em `isActive`: quem liga o combate de volta e o `GameFlow`.
    */
@@ -317,25 +373,25 @@ export class CombatEngine {
     }
     this.units.length = 0;
 
-    for (const tower of this.towers) {
-      tower.reset();
-
-      if (tower.team === "player") {
-        this.lastPlayerTowerHealth.set(tower, tower.getHealth());
-      }
-
-      this.lastTowerAliveState.set(tower, tower.isAlive());
+    for (const { projectile } of this.fireballs) {
+      projectile.dispose();
     }
+    this.fireballs.length = 0;
+
+    this.player.reset();
+    this.lastPlayerHealth = this.player.getHealth();
+    this.lastPlayerAlive = this.player.isAlive();
   }
 
   public dispose(): void {
     this.scene.onBeforeRenderObservable.remove(this.beforeRenderObserver);
-    this.onPlayerTowerDamagedObservable.clear();
+    this.onPlayerDamagedObservable.clear();
     this.onCardDeployedObservable.clear();
     this.onDeployCancelledObservable.clear();
     this.onEnemyUnitDeployedObservable.clear();
     this.onEnemyDefeatedObservable.clear();
-    this.onTowerDestroyedObservable.clear();
+    this.onFireballCastObservable.clear();
+    this.onPlayerDefeatedObservable.clear();
 
     // Unidades presas no meio do fantasma: cancela o timer pendente (restaura
     // visibilidade, nao deixa o `setTimeout` disparar depois do engine ja
@@ -347,13 +403,14 @@ export class CombatEngine {
     }
     this.pendingGhostDeployments.length = 0;
 
-    for (const tower of this.towers) {
-      tower.dispose();
-    }
-
     for (const unit of this.units) {
       unit.dispose();
     }
+
+    for (const { projectile } of this.fireballs) {
+      projectile.dispose();
+    }
+    this.fireballs.length = 0;
   }
 
   private tryDeploySelectedCardAtWorldPoint(worldPoint: Vector3): boolean {
@@ -369,12 +426,28 @@ export class CombatEngine {
     const localPoint = this.convertWorldToArenaLocal(worldPoint);
     const arcPoint = toArc({ x: localPoint.x, z: localPoint.z });
 
-    // Fora do anel valido: cancela a selecao e NENHUM cogumelo e gasto — este
-    // `return false` acontece antes de qualquer `tryConsumeSelectedCard`. A
-    // regra e a do modelo polar, a MESMA que o `WaveDirector` usa para nascer
-    // inimigo e que o anel da JG-06 vai desenhar: uma fonte de verdade so.
-    if (!evaluatePlacement(arcPoint).ok) {
-      this.cardDeckSystem.clearSelection();
+    // Fora do que da para colocar: NENHUM cogumelo e gasto — este `return
+    // false` acontece antes de qualquer `tryConsumeSelectedCard`. A regra vem do
+    // modelo e tem duas metades: a arena (a mesma que o `WaveDirector` usa para
+    // nascer inimigo) e o CONE DE ACAO, que so vale para o jogador.
+    const verdict = evaluateDeployment(arcPoint, this.getCameraYawDeg());
+
+    if (!verdict.ok) {
+      // **A recusa por cone NAO cancela a selecao.** As duas recusas dizem
+      // coisas diferentes: `fora-da-arena` e erro de mira ("voce apontou para a
+      // parede") e desfaz a intencao; `fora-do-cone` e uma regra do jogo ("gire
+      // para la"), e a carta continua na mao esperando o giro.
+      //
+      // A distincao nao e cosmetica. A telemetria de 2026-08-21 mediu 54% de
+      // recusa de colocacao — 25 recusas contra 21 aceitas, com rajadas de seis
+      // seguidas em 13 segundos — e cada uma delas devolvia o jogador para a
+      // fileira de cartas para escolher de novo. Com o cone de acao a recusa
+      // por direcao passa a ser a MAIS comum de todas, entao cancelar nela
+      // transformaria o recurso escasso do jogo num castigo por usa-lo.
+      if (refusalReason(verdict) !== "fora-do-cone") {
+        this.cardDeckSystem.clearSelection();
+      }
+
       this.onDeployCancelledObservable.notifyObservers();
       return false;
     }
@@ -463,39 +536,33 @@ export class CombatEngine {
       unit.update(deltaSeconds, nowMs);
     }
 
-    for (const tower of this.towers) {
-      if (!tower.isAlive()) {
-        continue;
-      }
+    this.updateFireballs(deltaSeconds);
 
-      const targetUnit = this.findNearestAliveEnemyUnit(tower.team, tower.mesh.position, tower.getAttackRange());
-      if (!targetUnit) {
-        continue;
-      }
-
-      tower.tryAttack(targetUnit, nowMs);
-    }
-
-    this.notifyPlayerTowerDamage();
-    this.notifyTowerDestruction();
+    // Nao ha loop de torre atacando: desde a JG-12 nada do lado do jogador
+    // dispara sozinho. O que defende e a tropa que ele colocou, e a fireball
+    // que ele mira — as duas exigem uma decisao dele.
+    this.notifyPlayerDamage();
+    this.notifyPlayerDefeat();
     this.cleanupDefeatedUnits();
   }
 
   /**
    * Quem esta unidade persegue.
    *
-   * - **Inimigo**: sempre a torre do jogador. Como a torre fica no vertice do
-   *   arco (`PLAYER_TOWER_RADIUS_M`, logo a frente de quem joga) e o inimigo
-   *   nasceu na borda, ir ate ela E convergir radialmente — o inimigo atravessa
-   *   o proprio setor de fora para dentro, que e o que mantem a seta de flanco
-   *   dizendo a verdade ate o fim do trajeto.
+   * - **Inimigo**: sempre o JOGADOR, que e a origem do arco. Como ele nasceu na
+   *   borda, ir ate a origem E convergir radialmente: o inimigo atravessa o
+   *   proprio setor de fora para dentro e nunca troca de flanco no caminho, que
+   *   e o que mantem a seta da JG-05 dizendo a verdade do nascimento ate a
+   *   chegada. Enquanto o alvo era a torre — que ficava a 0,9 m no azimute 0,
+   *   e nao na origem — isso exigia navegacao de duas fases; com o alvo no
+   *   vertice, a reta ate ele ja e a reta radial.
    * - **Tropa do jogador**: a unidade inimiga mais proxima DENTRO da coleira
    *   (`TROOP_LEASH_RADIUS_M` a partir do ponto de colocacao, mais o proprio
    *   alcance de contato). Fora disso ela nao sai do lugar.
    */
   private acquireTargetFor(unit: BaseUnit): CombatTarget | null {
     if (unit.team === "enemy") {
-      return this.findNearestAliveTower("player", unit.root.position);
+      return this.player.isAlive() ? this.player : null;
     }
 
     return this.findEngageableEnemyUnit(unit);
@@ -530,38 +597,75 @@ export class CombatEngine {
   }
 
   /**
-   * Compara a vida das torres do jogador com a do frame anterior e avisa quem
-   * ouve. A comparacao mora aqui (e nao dentro da TowerActor) porque quem
-   * aplica o dano e a propria unidade, chamando `receiveCombatDamage` direto.
+   * Compara a vida do jogador com a do frame anterior e avisa quem ouve. A
+   * comparacao mora aqui (e nao dentro do `PlayerCore`) porque quem aplica o
+   * dano e a propria unidade, chamando `receiveCombatDamage` direto.
    */
-  private notifyPlayerTowerDamage(): void {
-    for (const [tower, previousHealth] of this.lastPlayerTowerHealth) {
-      const currentHealth = tower.getHealth();
+  private notifyPlayerDamage(): void {
+    const currentHealth = this.player.getHealth();
 
-      if (currentHealth >= previousHealth) {
+    if (currentHealth >= this.lastPlayerHealth) {
+      return;
+    }
+
+    this.lastPlayerHealth = currentHealth;
+    this.onPlayerDamagedObservable.notifyObservers(
+      this.convertArenaLocalToWorld(this.player.getCombatPosition())
+    );
+  }
+
+  /**
+   * O jogador acabou de cair. Dispara `onPlayerDefeatedObservable` uma unica
+   * vez, no frame exato da transicao vivo -> morto: sem esta guarda, cada
+   * inimigo ainda em campo faria a derrota disparar de novo a cada frame.
+   */
+  private notifyPlayerDefeat(): void {
+    const isAlive = this.player.isAlive();
+
+    if (!this.lastPlayerAlive || isAlive) {
+      return;
+    }
+
+    this.lastPlayerAlive = false;
+    this.onPlayerDefeatedObservable.notifyObservers();
+  }
+
+  /**
+   * Avanca os projeteis em voo e resolve os que chegaram.
+   *
+   * O alvo pode ter morrido no caminho (uma tropa o abateu antes): nesse caso a
+   * bola apaga sem dano, e nao "procura" outro. O jogador ja pagou pelo tiro que
+   * decidiu dar.
+   */
+  private updateFireballs(deltaSeconds: number): void {
+    for (let index = this.fireballs.length - 1; index >= 0; index -= 1) {
+      const { projectile, target } = this.fireballs[index];
+
+      if (!projectile.update(deltaSeconds)) {
         continue;
       }
 
-      this.lastPlayerTowerHealth.set(tower, currentHealth);
-      this.onPlayerTowerDamagedObservable.notifyObservers(tower.mesh.getAbsolutePosition());
+      if (target && target.isAlive()) {
+        target.takeDamage(FIREBALL_DAMAGE);
+      }
+
+      projectile.dispose();
+      this.fireballs.splice(index, 1);
     }
   }
 
   /**
-   * Uma torre acabou de morrer. Dispara `onTowerDestroyedObservable` uma unica
-   * vez, no frame exato da transicao viva -> morta.
+   * De onde a bola sai: logo a frente do jogador, na altura do chao da arena.
+   *
+   * Nao e a origem exata. Um projetil nascendo em (0,0) sairia de DENTRO da
+   * camera de RA e o jogador so veria o primeiro frame dele ja longe — o
+   * feedback de "o tiro saiu" morre justamente no frame que importa.
    */
-  private notifyTowerDestruction(): void {
-    for (const [tower, wasAlive] of this.lastTowerAliveState) {
-      const isAlive = tower.isAlive();
-
-      if (!wasAlive || isAlive) {
-        continue;
-      }
-
-      this.lastTowerAliveState.set(tower, false);
-      this.onTowerDestroyedObservable.notifyObservers(tower.team);
-    }
+  private fireballOrigin(): Vector3 {
+    return this.toSpawnPosition({
+      azimuthDeg: this.getCameraYawDeg(),
+      radiusM: FIREBALL_ORIGIN_RADIUS_M,
+    });
   }
 
   private cleanupDefeatedUnits(): void {
@@ -606,27 +710,6 @@ export class CombatEngine {
   private toSpawnPosition(point: ArcPoint): Vector3 {
     const { x, z } = toLocal(point);
     return new Vector3(x, this.unitGroundY, z);
-  }
-
-  private findNearestAliveTower(team: TeamId, position: Vector3): TowerActor | null {
-    const aliveTowers = this.towers.filter((tower) => tower.team === team && tower.isAlive());
-
-    if (!aliveTowers.length) {
-      return null;
-    }
-
-    let nearestTower: TowerActor | null = null;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-
-    for (const tower of aliveTowers) {
-      const distance = tower.mesh.position.subtract(position).length();
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestTower = tower;
-      }
-    }
-
-    return nearestTower;
   }
 
   private findNearestAliveEnemyUnit(team: TeamId, position: Vector3, maxRange: number): BaseUnit | null {

@@ -377,9 +377,15 @@ export abstract class BaseUnit implements CombatTarget {
     direction.y = 0;
 
     const distanceToTarget = direction.length();
+    // Onde parar: o proprio alcance de contato MAIS o raio de corpo que o alvo
+    // declarar. Alvo com malha (uma tropa) nao declara nada e vale 0, como
+    // sempre valeu. Quem declara e o `PlayerCore` — sem isso o inimigo pararia
+    // na origem, ou seja, dentro dos pes de quem joga e abaixo do quadro da
+    // camera (JG-12).
+    const stopDistance = this.contactRange + (target.getBodyRadius?.() ?? 0);
     let isMoving = false;
 
-    if (distanceToTarget > this.contactRange) {
+    if (distanceToTarget > stopDistance) {
       const destination = this.resolveMovementDestination(targetPosition);
       const movementDirection = destination.subtract(this.root.position);
       movementDirection.y = 0;
@@ -389,7 +395,7 @@ export abstract class BaseUnit implements CombatTarget {
         this.movementSpeed * deltaSeconds,
         // Nao passa do destino, e nao entra dentro do alvo: das duas folgas,
         // vale a menor.
-        Math.max(0, distanceToTarget - this.contactRange),
+        Math.max(0, distanceToTarget - stopDistance),
         distanceToDestination
       );
 

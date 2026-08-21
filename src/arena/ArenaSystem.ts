@@ -7,7 +7,6 @@ import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 
-import { PLAYER_TOWER_RADIUS_M } from "./ArenaArc";
 import { createContactShadow } from "../fx/contactShadow";
 import { applyMatteFinish, PALETTE } from "../fx/materials";
 import { attachProximityFade } from "../fx/proximityFade";
@@ -36,12 +35,14 @@ export interface ArenaBuildResult {
   towerDefinitions: ArenaTowerDefinition[];
   towerMeshes: Mesh[];
   /**
-   * As torres como cogumelos, indexadas por time. `towerMeshes` continua
-   * entregando so o mesh (e o que o combate precisa); quem precisa acender a
-   * caverna, abrir os olhos ou saber onde fica a boca — o Beat 5 por
-   * aproximacao — precisa do objeto inteiro.
+   * As torres como cogumelos. Desde a JG-12 sobrou UMA — a inimiga, que e a
+   * caverna do Coelho e existe como cenario do Beat 5 (sai na JG-10). A do
+   * jogador foi removida: quem apanha agora e o proprio jogador (`PlayerCore`).
+   *
+   * Quem precisa acender a caverna, abrir os olhos ou saber onde fica a boca
+   * precisa do objeto inteiro, e nao so do mesh.
    */
-  mushroomTowers: Record<TeamId, MushroomTower>;
+  mushroomTowers: { enemy: MushroomTower };
 }
 
 export interface ArenaLayout {
@@ -223,7 +224,7 @@ export class ArenaSystem {
     baseGround.visibility = 0;
 
     const mushroomTowers = this.createTowers(arenaRoot);
-    const towerMeshes = [mushroomTowers.player.body, mushroomTowers.enemy.body];
+    const towerMeshes = [mushroomTowers.enemy.body];
 
     // Limites derivados de verdade da geometria (metade da extensao do grid).
     // Antes eram `±gridX`/`±gridZ`, que so batia por coincidencia com o grid
@@ -246,9 +247,9 @@ export class ArenaSystem {
       towerDefinitions: towerMeshes.map((mesh) => {
         const [, team, lane] = mesh.name.split("-");
         return {
-          // Diametro REAL do chapeu (nao mais um numero solto): `CombatEngine`
-          // deriva alcance de ataque e `TowerActor` a largura da barra de vida
-          // a partir dele.
+          // Diametro REAL do chapeu, nao um numero solto. Ja alimentou o
+          // alcance de ataque do combate e a barra de vida da `TowerActor`; hoje
+          // so descreve a geometria, porque a unica torre que sobrou nao luta.
           diameter: CAP_DIAMETER_XZ,
           id: mesh.name,
           lane: lane as TowerLaneId,
@@ -261,33 +262,22 @@ export class ArenaSystem {
     };
   }
 
-  private createTowers(arenaRoot: TransformNode): Record<TeamId, MushroomTower> {
-    // UMA torre por lado, ambas em x = 0, no fim do caminho central. O nome
-    // do `body` segue `tower-<cor>-<lane>` porque `buildInitialArena` deriva
-    // team/lane dele — `createMushroomTower` cuida disso internamente.
+  private createTowers(arenaRoot: TransformNode): { enemy: MushroomTower } {
+    // UMA torre so, a do INIMIGO: a caverna de onde o Coelho sai, cenario do
+    // Beat 5 ate a JG-10 reescrever a intro. O nome do `body` segue
+    // `tower-<cor>-<lane>` porque `buildInitialArena` deriva team/lane dele.
+    //
+    // **A torre do JOGADOR nao existe mais** (JG-12). Ela nasceu na JG-04, no
+    // vertice do arco, a 0,9 m de quem joga — e a propria spec dela registrou a
+    // pergunta que so o playtest responderia: "se a torre a 0,9 m do rosto
+    // atrapalha em vez de ocluir". A sessao de device de 2026-08-21 respondeu
+    // que sim, por dois caminhos independentes: 57,7% das amostras de distancia
+    // da camera cairam dentro do fade e 6,4% com a torre invisivel de tao perto;
+    // e as duas partidas terminaram com 100% e 99,1% de vida, porque o ataque
+    // automatico dela resolvia a defesa sozinho. Quem apanha agora e o
+    // `PlayerCore`, que nao tem malha nenhuma e por isso nao tem como entrar na
+    // frente da camera.
     const lane: TowerLaneId = "center";
-
-    // Etapa 2: cilindro placeholder virou cogumelo (`MushroomTower.ts`) —
-    // aqui so troca a fabrica, o resto (blob de contato, parentesco no
-    // `arenaRoot`) continua igual. `root` E o proprio `body`, de proposito:
-    // o combate le `mesh.position` esperando a posicao em espaco de arena.
-    // A torre do jogador saiu do fundo do campo (z = -2) e foi para o VERTICE
-    // do arco, logo a frente de quem joga (JG-04): o jogador e o vertice, "a
-    // torre e o caldeirao ficam junto dele" (spec v3 §1), e e por isso que o
-    // inimigo que nasce na borda e converge para ela esta convergindo para o
-    // JOGADOR. O raio exato vem de `PLAYER_TOWER_RADIUS_M` — ver la por que nao
-    // e zero.
-    const player = createMushroomTower(this.scene, {
-      lane,
-      team: "player",
-      x: 0,
-      z: PLAYER_TOWER_RADIUS_M,
-    });
-    player.root.parent = arenaRoot;
-    // Blob 1,25x o diametro REAL do chapeu (`CAP_DIAMETER_XZ`, de
-    // `MushroomTower.ts`) — antes era o literal solto `2`, que nao acompanhava
-    // a torre se `TOWER_HEIGHT_M`/`TOWER_SCALE` mudassem.
-    this.addContactBlob(arenaRoot, 0, PLAYER_TOWER_RADIUS_M, CAP_DIAMETER_XZ * 1.25);
 
     const enemy = createMushroomTower(this.scene, {
       lane,
@@ -296,16 +286,18 @@ export class ArenaSystem {
       z: this.introEnemyTowerZ,
     });
     enemy.root.parent = arenaRoot;
+    // Blob 1,25x o diametro REAL do chapeu (`CAP_DIAMETER_XZ`, de
+    // `MushroomTower.ts`) — antes era o literal solto `2`, que nao acompanhava
+    // a torre se `TOWER_HEIGHT_M`/`TOWER_SCALE` mudassem.
     this.addContactBlob(arenaRoot, 0, this.introEnemyTowerZ, CAP_DIAMETER_XZ * 1.25);
 
     // Fade por proximidade: com 1,20 m de altura, a torre deixou de ser uma
     // peca de maquete que o jogador olha de cima e virou um objeto que ele
     // ENCOSTA. Sem isto o near plane corta o cogumelo ao meio e expoe o
     // interior oco da malha — o jeito mais rapido de matar a ilusao de RA.
-    this.attachTowerFade(player);
     this.attachTowerFade(enemy);
 
-    return { player, enemy };
+    return { enemy };
   }
 
   /**

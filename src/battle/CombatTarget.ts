@@ -18,4 +18,16 @@ export interface CombatTarget {
   getCombatPosition(): Vector3;
   isAlive(): boolean;
   receiveCombatDamage(amount: number): void;
+  /**
+   * Raio do CORPO do alvo, em metros. O atacante para a esta distancia alem do
+   * proprio `contactRange`. Opcional: quem nao implementa vale 0, que e o
+   * comportamento de sempre.
+   *
+   * Existe desde a JG-12, quando o alvo passou a ser o JOGADOR — e ele nao tem
+   * malha. Enquanto o alvo era a torre, a geometria de 1,20 m ocupava o espaco e
+   * ninguem precisava declarar nada; convergindo para um alvo sem corpo, o
+   * inimigo encostaria na origem e bateria de dentro dos pes de quem joga, fora
+   * do quadro da camera.
+   */
+  getBodyRadius?(): number;
 }

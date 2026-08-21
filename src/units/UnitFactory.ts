@@ -1,6 +1,7 @@
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 
+import { DONA_BARATA_ATTACK_RANGE_M, PLAYER_MAX_HEALTH } from "../arena/metrics";
 import type { TeamId } from "../battle/BattleTypes";
 import { BaseUnit } from "./BaseUnit";
 import { CururuBombado } from "./CururuBombado";
@@ -8,16 +9,22 @@ import { DonaBarata, DONA_BARATA_UNIT_SCALE } from "./DonaBarata";
 import { JavaliRaivoso } from "./JavaliRaivoso";
 import { TatuBola } from "./TatuBola";
 
+/**
+ * Fabrica de unidades (padrao Factory, `.github/copilot-instructions.md` §2).
+ *
+ * **Ela deixou de receber parametros de torre na JG-12.** Recebia
+ * `towerMaxHealth` e `towerAttackRange`, e derivava deles a vida do Cururu e o
+ * alcance de arremesso da Dona Barata — uma heranca da epoca em que existia uma
+ * torre de combate de cada lado. Com a torre do jogador removida, os dois
+ * numeros passaram a vir direto de `metrics.ts`, que e a fonte unica de tamanho
+ * fisico do jogo. Encadear atributo de tropa num atributo de torre morta era o
+ * tipo de ligacao que sobrevive a refatoracao e mente depois.
+ */
 export class UnitFactory {
-  private readonly donaBarataAttackRangeMultiplier = 0.88;
   private readonly scene: Scene;
-  private readonly towerAttackRange: number;
-  private readonly towerMaxHealth: number;
 
-  public constructor(scene: Scene, towerMaxHealth: number, towerAttackRange: number) {
+  public constructor(scene: Scene) {
     this.scene = scene;
-    this.towerAttackRange = towerAttackRange;
-    this.towerMaxHealth = towerMaxHealth;
   }
 
   public createUnits(cardId: string, spawnPosition: Vector3, team: TeamId): BaseUnit[] {
@@ -30,7 +37,7 @@ export class UnitFactory {
             scene: this.scene,
             spawnPosition,
             team,
-            towerMaxHealth: this.towerMaxHealth,
+            referenceMaxHealth: PLAYER_MAX_HEALTH,
           }),
         ];
       case "dona-barata":
@@ -72,7 +79,7 @@ export class UnitFactory {
 
     return formationOffsets.map((offset, index) => {
       return new DonaBarata({
-        attackRange: this.towerAttackRange * this.donaBarataAttackRangeMultiplier,
+        attackRange: DONA_BARATA_ATTACK_RANGE_M,
         cardId,
         id: this.createUnitId(`dona-barata-${index}`),
         scene: this.scene,

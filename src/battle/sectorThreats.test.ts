@@ -43,10 +43,10 @@ describe("summarizeSectorThreats", () => {
   });
 
   it("respeita a fronteira de setor do modelo polar", () => {
-    // -30 e o primeiro azimute do setor central (left = [-90, -30)).
+    // -10 e o primeiro azimute do setor central (left = [-30, -10)).
     const threats = summarizeSectorThreats([
-      { azimuthDeg: -30.0001, radiusM: 2 },
-      { azimuthDeg: -30, radiusM: 2 },
+      { azimuthDeg: -10.0001, radiusM: 1.5 },
+      { azimuthDeg: -10, radiusM: 1.5 },
     ]);
 
     expect(threats.find((threat) => threat.sector === "left")?.count).toBe(1);

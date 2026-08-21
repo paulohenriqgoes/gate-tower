@@ -200,6 +200,32 @@ export class CardDeckSystem {
     return selectedCard;
   }
 
+  /**
+   * Gasta `amount` cogumelos SEM carta nenhuma envolvida. Devolve `false` — e
+   * nao gasta nada — quando o estoque nao cobre.
+   *
+   * Existe para a fireball (JG-12): ela custa 1 cogumelo e nao ocupa slot de
+   * carta, entao `tryConsumeSelectedCard` nao serve. E de proposito que ela
+   * disputa o MESMO estoque das cartas: cada tiro e uma carta que o jogador
+   * nao jogou, e e essa a unica coisa que segura a magia de virar a estrategia
+   * principal — ela nao tem cooldown.
+   *
+   * NAO mexe na selecao de carta: atirar no meio de uma escolha nao desfaz a
+   * escolha. Se o gasto deixar o estoque abaixo do custo da carta selecionada,
+   * quem trata e o `emitState` + a checagem de `tryConsumeSelectedCard`, igual
+   * a quando o cogumelo e gasto de qualquer outro jeito.
+   */
+  public tryConsumeMushrooms(amount: number): boolean {
+    if (amount < 0 || this.mushrooms < amount) {
+      return false;
+    }
+
+    this.mushrooms = this.clampMushrooms(this.mushrooms - amount);
+    this.emitState();
+
+    return true;
+  }
+
   public setMushrooms(value: number): void {
     const nextValue = this.clampMushrooms(value);
 

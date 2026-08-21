@@ -8,7 +8,7 @@ import { Scene } from "@babylonjs/core/scene";
 import type { ArSessionController } from "./ar/ArSessionController";
 import { framedSectors } from "./arena/ArenaArc";
 import { ArenaSystem } from "./arena/ArenaSystem";
-import { TOWER_ATTACK_RANGE_M } from "./arena/metrics";
+import { PLAYER_BODY_RADIUS_M, PLAYER_MAX_HEALTH } from "./arena/metrics";
 import { MatchClock } from "./battle/MatchClock";
 import { FIRST_WAVE_CARD_ID } from "./battle/wavePlan";
 import { CARD_CATALOG } from "./cards/cardCatalog";
@@ -330,8 +330,9 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	const hudLayer = new HudLayer(scene);
 	// Sem torre inimiga no combate desde a JG-04: o lado direito do topo nao tem
 	// mais o que mostrar. A barra volta a existir quando houver alvo — hoje o
-	// Coelho, que e onda final e nao torre (`DJ-6`).
-	hudLayer.setTowerHealthVisible("enemy", false);
+	// Coelho, que e onda final e nao torre (`DJ-6`). A da ESQUERDA continua, mas
+	// desde a JG-12 ela mostra a vida do JOGADOR, nao a de uma torre.
+	hudLayer.setHealthVisible("enemy", false);
 
 	// Painel de debug so existe com `?debug=1`: em RA o celular nao tem console,
 	// e sem esses numeros nao da para investigar viewport/orientacao/tracking.
@@ -372,12 +373,6 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 
 	installYawDiagnostics(scene, diagnosticsOverlay, getCameraYawDeg);
 
-	const towerCombatSettings = {
-		attackCooldownMs: 900,
-		attackDamage: 35,
-		maxHealth: 1000,
-	};
-
 	const cardDeckSystem = new CardDeckSystem({
 		cards: CARD_CATALOG,
 		initialMushrooms: 4,
@@ -388,13 +383,10 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	// entrar em partida, para o contador nao correr durante o menu.
 	const cardDeckHud = new CardDeckHud(scene, cardDeckSystem, hudLayer);
 
-	// Alcance da torre: constante de metrica desde a JG-04, e nao mais um
-	// multiplicador do diametro do chapeu. O multiplicador foi calibrado na
-	// arena retangular e, com a torre no vertice do arco, cobria a arena
-	// inteira. Continua sendo resolvido AQUI porque tambem alimenta a
-	// `UnitFactory` (o alcance de arremesso da Dona Barata deriva dele).
-	const towerAttackRange = TOWER_ATTACK_RANGE_M;
-	const unitFactory = new UnitFactory(scene, towerCombatSettings.maxHealth, towerAttackRange);
+	// A fabrica nao recebe mais parametro de torre: desde a JG-12 a vida do
+	// Cururu e o alcance da Dona Barata vem de `metrics.ts`, que e a fonte unica
+	// de tamanho fisico do jogo.
+	const unitFactory = new UnitFactory(scene);
 
 	// Relogio de partida (Etapa 7). Construido ANTES do CombatEngine porque
 	// `getRemainingMs` (usado no payload de telemetria `card_deployed`) precisa
@@ -402,24 +394,21 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 	// so existe mais abaixo, entao o relogio e injetado nos dois.
 	const matchClock = new MatchClock();
 
-	// So a torre do JOGADOR entra no combate (JG-04): o inimigo nao tem mais
-	// torre para o jogador derrubar — ele vem em ondas. A torre inimiga continua
-	// na cena como cenario do Beat 5 ate a JG-10 reescrever a intro, mas nao e
-	// mais um `TowerActor`: nao ataca, nao apanha e nao decide partida.
-	const playerTowerDefinitions = arena.towerDefinitions.filter(
-		(towerDefinition) => towerDefinition.team === "player"
-	);
-
+	// **Nao ha mais torre nenhuma no combate** (JG-12). O inimigo vem em ondas e
+	// converge para o JOGADOR, que e a origem do arco; a torre inimiga continua
+	// na cena como cenario do Beat 5, ate a JG-10 reescrever a intro, mas nunca
+	// foi um ator de combate desde a JG-04.
 	const combatEngine = new CombatEngine({
 		arenaRoot: arena.root,
 		cardDeckSystem,
+		// Mesma fonte unica de "para onde o jogador olha" que o `WaveDirector` e o
+		// painel de debug usam. O combate precisa dela porque colocar carta so vale
+		// dentro do cone de acao.
+		getCameraYawDeg,
 		getRemainingMs: () => matchClock.getRemainingMs(),
+		playerBodyRadius: PLAYER_BODY_RADIUS_M,
+		playerMaxHealth: PLAYER_MAX_HEALTH,
 		scene,
-		towerAttackCooldownMs: towerCombatSettings.attackCooldownMs,
-		towerAttackDamage: towerCombatSettings.attackDamage,
-		towerAttackRange,
-		towerDefinitions: playerTowerDefinitions,
-		towerMaxHealth: towerCombatSettings.maxHealth,
 		unitFactory,
 		unitGroundY: arena.arenaLayout.unitGroundY,
 	});
@@ -478,12 +467,18 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		startScreen.setArAvailable(isAvailable);
 	});
 
-	// A altura escolhida no menu vai para o AR Manager, que e o dono unico de
-	// `origin.y`: e ele que normaliza, persiste e declara ao engine. A tela
-	// inicial so oferece a escolha.
-	const playerHeightObserver = startScreen.onPlayerHeightChangedObservable.add((heightM) => {
-		arManager.setPlayerHeight(heightM);
-	});
+	// **Nao ha mais controle de altura na tela.** Ele existia em dois lugares (o
+	// menu e a fase de setup) e o device de 2026-08-20 derrubou os dois: em
+	// `scale: "absolute"` o 8th Wall SOBRESCREVE `origin.y` para 1 m e ignora o
+	// valor declarado — quatro colocacoes com 1,55 declarado deram distancia
+	// camera-origem de 1,0049 / 0,9797 / 1,0134 / 1,0043. O controle mexia num
+	// numero descartado, e ainda ocupava a zona do polegar.
+	//
+	// A preferencia persistida saiu junto, e `src/ar/playerHeight.ts` com ela: um
+	// numero gravado que nao afeta nada e pior do que numero nenhum — ele
+	// aparecia no painel como `originY` e parecia significar alguma coisa. A
+	// altura declarada agora e `PLAYER_EYE_HEIGHT_M`, a mesma do jogador simulado
+	// do modo tela.
 
 	const enemyTowerMesh = arena.towerDefinitions.find(
 		(towerDefinition) => towerDefinition.team === "enemy"
@@ -562,12 +557,16 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 		telemetry,
 	});
 
-	// Seta de borda apontando para a torre do jogador quando ela apanha fora do
-	// quadro — em RA a arena tem 80 cm e o jogador quase sempre esta com a
-	// camera perto de UMA parte do campo, entao "estao batendo na sua torre" e
-	// justamente o tipo de evento que se perde sem indicador.
-	const towerDamagedObserver = combatEngine.onPlayerTowerDamagedObservable.add((position) => {
+	// Seta de borda apontando para onde o jogador esta apanhando. Desde a JG-12
+	// quem apanha e ele proprio, e o ataque vem de um flanco que ele quase sempre
+	// nao esta enquadrando — dois tercos do arco estao cegos por design. Sem a
+	// seta, "estao batendo em voce" e um numero caindo no topo da tela.
+	const playerDamagedObserver = combatEngine.onPlayerDamagedObservable.add((position) => {
 		offscreenIndicator.point(position, 1400);
+		// A seta diz DE ONDE; a vinheta diz QUE ACONTECEU. As duas juntas porque
+		// nenhuma sozinha resolve: a seta na borda passa despercebida no meio de
+		// um giro, e a vinheta nao aponta para lugar nenhum.
+		hudLayer.flashDamageVignette();
 	});
 
 	// Mesma seta de borda, agora para invocacoes do inimigo (Etapa 7, item 10
@@ -605,8 +604,7 @@ async function createScene(engine: Engine, canvas: HTMLCanvasElement): Promise<G
 
 	scene.onDisposeObservable.add(() => {
 		arManager.onAvailabilityChangedObservable.remove(availabilityObserver);
-		startScreen.onPlayerHeightChangedObservable.remove(playerHeightObserver);
-		combatEngine.onPlayerTowerDamagedObservable.remove(towerDamagedObserver);
+		combatEngine.onPlayerDamagedObservable.remove(playerDamagedObserver);
 		combatEngine.onEnemyUnitDeployedObservable.remove(enemyUnitDeployedObserver);
 		scene.onBeforeRenderObservable.remove(gameFlowUpdateObserver);
 		scene.onBeforeRenderObservable.remove(residentObserver);

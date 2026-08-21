@@ -26,7 +26,13 @@ export interface CururuBombadoOptions extends Omit<
   BaseUnitOptions,
   "attackIntervalMs" | "contactRange" | "displayName" | "health" | "movementSpeed"
 > {
-  towerMaxHealth: number;
+  /**
+   * Vida de referencia da qual a do Cururu deriva. Era a vida da TORRE, de
+   * quando existia uma de cada lado; desde a JG-12 e a vida do JOGADOR
+   * (`PLAYER_MAX_HEALTH`), que e o alvo da partida. O fator ficou igual de
+   * proposito — a JG-12 troca o alvo, nao o balanceamento.
+   */
+  referenceMaxHealth: number;
 }
 
 export class CururuBombado extends BaseUnit {
@@ -52,7 +58,7 @@ export class CururuBombado extends BaseUnit {
       // fator `UNIT_SCALE` do resto do arquivo), nao do tamanho do campo.
       contactRange: 2.55 * UNIT_SCALE,
       displayName: "Cururu Bombado",
-      health: Math.round(options.towerMaxHealth * 0.6),
+      health: Math.round(options.referenceMaxHealth * 0.6),
       // Tanque: o mais lento dos tres. Velocidade escalada pelo mesmo
       // `UNIT_SCALE` do corpo (regra da Etapa 2 para velocidades de unidade) —
       // o tempo de travessia real do campo muda com isso; recalibrar o ritmo

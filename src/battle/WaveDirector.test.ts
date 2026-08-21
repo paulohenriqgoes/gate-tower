@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluatePlacement, framedSectors, type SectorId } from "../arena/ArenaArc";
+import { evaluatePlacement, reachableSectors, sectorCenterDeg, type SectorId } from "../arena/ArenaArc";
 import { WaveDirector, type SpawnOrder } from "./WaveDirector";
 
 /** Gerador deterministico de valores em [0,1), independente de Math.random (mesmo LCG de ArenaArc.test.ts). */
@@ -119,10 +119,11 @@ describe("WaveDirector — contagem por entrada", () => {
 
 describe("WaveDirector — setor re-sorteado por inimigo", () => {
   it("respeita o yaw vigente em cada sorteio dentro da mesma leva, nao um yaw fixo por onda", () => {
-    // yaws escolhidos para que cada leitura enquadre exatamente um unico setor
-    // (fov padrao 60 graus, setores de 60 graus cada): 0 -> so "center",
-    // -90 -> so "left", 90 -> so "right". Ver framedSectors em ArenaArc.
-    const yaws = [0, -90, 90];
+    // yaws escolhidos para que cada leitura ALCANCE exatamente um unico flanco:
+    // sao os centros dos tres. O criterio de spawn e o alcance (o cone de
+    // acao), e nao o enquadramento — com a arena inteira dentro do FOV, "nao
+    // enquadrado" seria quase sempre vazio. Ver `reachableSectors` em ArenaArc.
+    const yaws = [sectorCenterDeg("center"), sectorCenterDeg("left"), sectorCenterDeg("right")];
     let callIndex = 0;
     const getCameraYawDeg = () => {
       const y = yaws[callIndex % yaws.length];
@@ -131,10 +132,10 @@ describe("WaveDirector — setor re-sorteado por inimigo", () => {
     };
 
     // Confere a premissa acima antes de usa-la, para o teste nao depender de uma
-    // suposicao errada sobre framedSectors.
-    expect(framedSectors(0)).toEqual(["center"]);
-    expect(framedSectors(-90)).toEqual(["left"]);
-    expect(framedSectors(90)).toEqual(["right"]);
+    // suposicao errada sobre `reachableSectors`.
+    expect(reachableSectors(yaws[0])).toEqual(["center"]);
+    expect(reachableSectors(yaws[1])).toEqual(["left"]);
+    expect(reachableSectors(yaws[2])).toEqual(["right"]);
 
     const director = new WaveDirector({
       waves: [{ atMs: 0, entries: [{ cardId: "grunt", count: 3 }] }],
@@ -184,7 +185,7 @@ describe("WaveDirector — invariantes de colocacao (varredura)", () => {
           rng: seededRng(seed)
         });
 
-        const framed = new Set<SectorId>(framedSectors(yaw));
+        const framed = new Set<SectorId>(reachableSectors(yaw));
         const free = (["left", "center", "right"] as SectorId[]).filter((s) => !framed.has(s));
         if (free.length === 0) continue; // caso degenerado: sem setor livre, invariante nao se aplica
 

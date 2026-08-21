@@ -57,11 +57,11 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
 <header class="hero">
   <p class="eyebrow">Qimeera · documento de design</p>
   <h1>Tower Gate<br><em>storyboard v3</em></h1>
-  <p class="lede">Fluxo completo da partida. Defesa em arco de 180°, colocação direta no chão, caldeirão como fermentador. O gatilho da partida é enquadrar — a mesma coisa que o jogador fará o tempo todo.</p>
+  <p class="lede">Fluxo completo da partida. Defesa em arco de 90°, colocação direta no chão, caldeirão como fermentador. O gatilho da partida é enquadrar — a mesma coisa que o jogador fará o tempo todo.</p>
   <div class="meta">
     <div>Stack<strong>Babylon.js + 8th Wall</strong></div>
     <div>Orientação<strong>Portrait</strong></div>
-    <div>Arena<strong>180°, raio 2–2,5 m</strong></div>
+    <div>Arena<strong>90°, raio 1,8 m</strong></div>
     <div>Deslocamento<strong>Nenhum — só gira</strong></div>
   </div>
 </header>
@@ -194,7 +194,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <ellipse cx="26" cy="182" rx="10" ry="5" fill="#8FBF3F"/>
       </svg>
       <div class="pbody"><div class="pnum">07</div><div class="ptitle">A arena fecha</div>
-      <p class="pdesc">180° em três flancos ao redor do jogador. Caldeirão ao lado. Daqui em diante, ninguém sai do lugar.</p></div>
+      <p class="pdesc">90° em três flancos de 30° ao redor do jogador. Caldeirão ao lado. Daqui em diante, ninguém sai do lugar.</p></div>
     </div>
 
     <div class="panel">
@@ -216,7 +216,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
 <section class="act">
   <p class="act-tag">Ato 3 · o loop</p>
   <h2>Atenção é o recurso</h2>
-  <p class="act-note">Dois terços do arco estão sempre cegos. Colocar tropa é rápido e acontece olhando para a ameaça. Beber o chá é lento e cega tudo. O jogador escolhe quando pagar esse preço.</p>
+  <p class="act-note">Um terço do arco está sempre cego — e o que você não vê chega em <em>você</em>, não numa torre. Com FOV de 60° num arco de 90°, o celular cobre dois flancos por vez; o terceiro é o que dói. Colocar tropa é rápido e acontece olhando para a ameaça. Beber o chá é lento e cega tudo. O jogador escolhe quando pagar esse preço.</p>
   <div class="grid">
 
     <div class="panel">
@@ -282,6 +282,32 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
     </div>
 
     <div class="panel">
+      <svg viewBox="0 0 150 200" role="img"><title>Fireball</title>
+        <rect x="4" y="4" width="142" height="192" rx="10" fill="#888780"/>
+        <rect x="4" y="104" width="142" height="92" fill="#B4B2A9"/>
+        <ellipse cx="104" cy="150" rx="15" ry="6" fill="#1B1614" opacity=".3"/>
+        <rect x="94" y="124" width="20" height="26" rx="4" fill="#444441"/>
+        <circle cx="100" cy="134" r="2.5" fill="#E23E3E"/>
+        <circle cx="109" cy="134" r="2.5" fill="#E23E3E"/>
+        <path d="M44 178 Q60 156 74 138" stroke="#F0997B" stroke-width="1" stroke-dasharray="4 3" fill="none" opacity=".8"/>
+        <circle cx="80" cy="130" r="10" fill="#F0997B" opacity=".35"/>
+        <circle cx="80" cy="130" r="6" fill="#EF9F27"/>
+        <circle cx="78" cy="128" r="2" fill="#F2EDE4"/>
+        <g stroke="#F2EDE4" stroke-width="1" opacity=".9">
+          <path d="M75 92 v9 M75 111 v9 M56 106 h9 M85 106 h9"/>
+        </g>
+        <circle cx="75" cy="106" r="1.5" fill="#F2EDE4"/>
+        <ellipse cx="24" cy="30" rx="11" ry="8" fill="#8FBF3F"/>
+        <rect x="21" y="30" width="6" height="9" fill="#EAF3DE"/>
+        <text x="42" y="36" font-family="sans-serif" font-size="13" fill="#E23E3E">-1</text>
+        <g transform="rotate(-4 40 184)"><rect x="26" y="168" width="28" height="36" rx="4" fill="#444441" opacity=".45"/></g>
+        <g transform="rotate(4 108 184)"><rect x="94" y="168" width="28" height="36" rx="4" fill="#444441" opacity=".45"/></g>
+      </svg>
+      <div class="pbody"><div class="pnum">13</div><div class="ptitle">Fireball: sem carta na mão</div>
+      <p class="pdesc">Nenhuma carta selecionada? O toque vira magia: mira onde o celular aponta e custa 1 cogumelo. Fraca de propósito — cada tiro é uma carta que você não jogou.</p></div>
+    </div>
+
+    <div class="panel">
       <svg viewBox="0 0 150 200" role="img"><title>Coleta cogumelo verde</title>
         <rect x="4" y="4" width="142" height="192" rx="10" fill="#888780"/>
         <rect x="4" y="104" width="142" height="92" fill="#B4B2A9"/>
@@ -293,7 +319,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <ellipse cx="126" cy="184" rx="15" ry="11" fill="#444441"/>
         <ellipse cx="126" cy="179" rx="12" ry="6" fill="#8FBF3F"/>
       </svg>
-      <div class="pbody"><div class="pnum">13</div><div class="ptitle">Cogumelo verde</div>
+      <div class="pbody"><div class="pnum">14</div><div class="ptitle">Cogumelo verde</div>
       <p class="pdesc">Toca e ele voa sozinho para o caldeirão, acelerando a fermentação. Nasce atrás dos inimigos.</p></div>
     </div>
 
@@ -309,7 +335,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <ellipse cx="126" cy="176" rx="13" ry="7" fill="#8FBF3F" stroke="#173404" stroke-width="1"/>
         <circle cx="121" cy="174" r="2" fill="#EAF3DE"/>
       </svg>
-      <div class="pbody"><div class="pnum">14</div><div class="ptitle">Chá pronto</div>
+      <div class="pbody"><div class="pnum">15</div><div class="ptitle">Chá pronto</div>
       <p class="pdesc">Cartas apagadas = sem poder. Som de torradeira anuncia a poção sem exigir que você olhe.</p></div>
     </div>
 
@@ -325,7 +351,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <polygon points="138,54 124,68 138,82" fill="#F0997B"/>
         <polygon points="66,30 84,30 75,46" fill="#F0997B"/>
       </svg>
-      <div class="pbody"><div class="pnum">15</div><div class="ptitle">Beber cega os três</div>
+      <div class="pbody"><div class="pnum">16</div><div class="ptitle">Beber cega os três</div>
       <p class="pdesc">Restauração instantânea. O custo não é o gesto, é a janela de exposição que ele abre.</p></div>
     </div>
 
@@ -339,7 +365,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <path d="M75 140 L75 156" stroke="#FAC775" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
         <circle cx="60" cy="150" r="2.5" fill="#FAC775"/>
       </svg>
-      <div class="pbody"><div class="pnum">16</div><div class="ptitle">Derrotado vira carta</div>
+      <div class="pbody"><div class="pnum">17</div><div class="ptitle">Derrotado vira carta</div>
       <p class="pdesc">Toda criatura abatida entra no álbum. Vale em vitória e em derrota — sempre.</p></div>
     </div>
 
@@ -363,7 +389,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <ellipse cx="75" cy="136" rx="19" ry="13" fill="#7F5AF0"/>
         <circle cx="68" cy="132" r="3" fill="#EEEDFE"/>
       </svg>
-      <div class="pbody"><div class="pnum">17</div><div class="ptitle">Falência</div>
+      <div class="pbody"><div class="pnum">18</div><div class="ptitle">Falência</div>
       <p class="pdesc">Estoque zerado: nasce um cogumelo roxo que dá uma carta aleatória. Piso de segurança.</p></div>
     </div>
 
@@ -379,7 +405,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <circle cx="80" cy="104" r="2.5" fill="#501313"/>
         <ellipse cx="75" cy="156" rx="30" ry="10" fill="#FAC775" opacity=".35"/>
       </svg>
-      <div class="pbody"><div class="pnum">18</div><div class="ptitle">Recompensa máxima</div>
+      <div class="pbody"><div class="pnum">19</div><div class="ptitle">Recompensa máxima</div>
       <p class="pdesc">Derrotar o Coelho Maluco registra ele no álbum. Só acontece em vitória.</p></div>
     </div>
 
@@ -397,7 +423,7 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
         <rect x="34" y="166" width="82" height="20" rx="10" fill="#444441"/>
         <text x="75" y="180" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#F2EDE4">jogar de novo</text>
       </svg>
-      <div class="pbody"><div class="pnum">19</div><div class="ptitle">Álbum</div>
+      <div class="pbody"><div class="pnum">20</div><div class="ptitle">Álbum</div>
       <p class="pdesc">Único momento 2D do jogo. Os espaços vazios são o motor de retorno.</p></div>
     </div>
 
@@ -428,11 +454,11 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
 
     <table>
       <tr><th>Elemento</th><th>Altura</th><th>Motivo</th></tr>
-      <tr><td>Torre cogumelo</td><td>1,20 m</td><td>Obstrui visão; cabe o Coelho no chapéu</td></tr>
+      <tr><td>Torre cogumelo <em>(inimiga)</em></td><td>1,20 m</td><td>Obstrui visão; cabe o Coelho no chapéu. O jogador <strong>não</strong> tem torre — ele é o alvo</td></tr>
       <tr><td>Coelho Maluco</td><td>0,70 m</td><td>Menor que a torre, o dobro da tropa</td></tr>
       <tr><td>Tropa comum</td><td>0,30–0,40 m</td><td>Personalidade legível a 2 m</td></tr>
       <tr><td>Caldeirão</td><td>0,50 m</td><td>Legível de canto de olho, ao lado do jogador</td></tr>
-      <tr><td>Raio da arena</td><td>2,0–2,5 m</td><td>Cabe em sala; sem necessidade de caminhar</td></tr>
+      <tr><td>Raio da arena</td><td>1,8 m</td><td>Cabe num quarto de 2,6 × 2,9 m. O raio máximo que o jogador usou em 21 colocações medidas foi 1,88 m</td></tr>
     </table>
   </div>
 
@@ -442,7 +468,8 @@ footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--rule);color:v
       <li><strong>Coelho na arena fechada</strong> — onde ele fica? Flanco central fixo torna os laterais decoração; circular obriga perseguição e impede defender.</li>
       <li><strong>Hierarquia de áudio</strong> — alerta de flanco, tropa e torradeira competem, provavelmente em ambiente barulhento.</li>
       <li><strong>Duração da partida</strong> — 3–4 min é o teto com o celular na mão. Define se o Coelho é clímax ou presença constante.</li>
-      <li><strong>Mirar longe vs. ler cartas</strong> — inclinações opostas do celular; definir se as cartas somem durante a mira.</li>
+      <li><strong>A fireball rouba o papel da carta?</strong> — ela existe para que o jogador não fique inerte quando um inimigo vaza, mas 1 cogumelo é o mesmo preço de uma carta barata. Se der para vencer só atirando, o custo sobe ou o dano cai.</li>
+      <li><strong>Mirar longe vs. ler cartas</strong> — <em>fechada (DJ-8)</em>: as cartas fazem fade para 35% enquanto o anel de colocação está ativo, e a carta pressionada nunca faz fade.</li>
       <li><strong>Tuning do cogumelo verde</strong> — nasce atrás dos inimigos para que coletar tenha risco, mas o valor exato precisa de playtest.</li>
       <li><strong>Livro de cartas</strong> — adiado. Substituiria mão e álbum por um objeto único no mundo (direção Greed Island).</li>
     </ul>

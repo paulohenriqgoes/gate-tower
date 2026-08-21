@@ -1,34 +1,111 @@
 /**
- * Modelo polar puro da arena: setor, azimute, raio, o que esta enquadrado e
- * onde e legal colocar tropa. Logica pura, sem Babylon e sem cena — fonte
- * unica de verdade sobre "onde e isso no arco".
+ * Modelo da arena: onde as coisas estao, o que o jogador VE e onde ele consegue
+ * AGIR. Logica pura, sem Babylon e sem cena.
  *
- * Ver Etapa 1 de `docs/guias/tower_gate_v3_plano_etapas.md` e spec v3 §1, §2, §4.
- */
-
-/** Arco total da arena, em graus. Parametrizavel — trocar para 120 nao pode quebrar a logica abaixo. */
-export const ARENA_ARC_DEG = 180;
-/** Numero de setores (flancos) em que o arco e dividido. */
-export const ARENA_SECTOR_COUNT = 3;
-/** Raio da arena, em metros. Ajustavel em [2.0, 2.5] conforme o espaco detectado. */
-export const ARENA_RADIUS_M = 2.2;
-/** Raio minimo de colocacao a partir da torre (spec §4) — sem ele o jogador otimo empilha tudo na base. */
-export const MIN_PLACE_RADIUS_M = 0.9;
-/**
- * Raio em que a torre do jogador fica, no azimute 0 — logo a frente de quem
- * segura o celular (JG-04).
+ * # A virada de 2026-08-21: o recurso escasso deixou de ser ver
  *
- * Nao e zero, embora o jogador SEJA o vertice do arco: uma torre de 1,20 m
- * exatamente na origem poe a camera de RA (que o engine fixa em 1 m de altura)
- * dentro do chapeu, e o jogador passa a partida vendo o interior da propria
- * malha. Igual a `MIN_PLACE_RADIUS_M` de proposito: assim a torre ocupa
- * exatamente a borda interna do anel jogavel e nenhuma colocacao legal cai em
- * cima dela.
+ * A v3 nasceu com um arco de 180 graus e a tese de que "atencao e o recurso
+ * escasso": o FOV de 60 graus cobria exatamente um flanco de tres, e os outros
+ * dois ficavam cegos. Isso funcionava por uma coincidencia geometrica — o arco
+ * era 3x o FOV — e so por causa dela.
+ *
+ * Quando o dono do projeto pediu para encolher o arco para 90 graus (girar ate
+ * +-90 e desconfortavel, e em ambiente pequeno o drift piora), a coincidencia
+ * quebrou: com flancos de 30 graus, um FOV de 60 cobre os TRES ao mesmo tempo, e
+ * nao sobra esconderijo nenhum para o inimigo nascer. Medido: com arco de 90, em
+ * 33% dos angulos possiveis nao existe um unico flanco cego.
+ *
+ * A saida nao foi devolver o arco, foi **trocar o recurso**:
+ *
+ * - **Ver e de graca.** A arena inteira cabe no quadro. O jogador enxerga os
+ *   tres flancos sendo atacados ao mesmo tempo, e isso e proposital — nao ha
+ *   informacao escondida.
+ * - **Agir e caro.** So da para colocar carta (e mirar a fireball) dentro de um
+ *   cone estreito, `DEPLOY_CONE_DEG`, centrado em para onde o celular aponta.
+ *   Sao precisas tres posicoes de mira para cobrir a arena.
+ *
+ * A tensao vira "vejo tres incendios e so consigo apagar um por vez", que e uma
+ * pergunta melhor do que "o que esta acontecendo atras de mim" — e sobrevive a
+ * qualquer tamanho de arena, porque nao depende de o FOV ter a largura exata de
+ * um flanco.
+ *
+ * # A forma
+ *
+ * A arena e um RETANGULO a frente do jogador, dimensionado para caber inteiro no
+ * FOV: `ARENA_WIDTH_M` x `ARENA_DEPTH_M`. Os flancos continuam sendo divisoes
+ * ANGULARES (o azimute e o que o giro do celular muda), e por isso o par
+ * azimute/raio continua sendo a linguagem do modelo.
+ *
+ * Ver spec v3 §1, §2, §4 e `docs/specs-arena-180/decisoes.md` (`DJ-9`).
  */
-export const PLAYER_TOWER_RADIUS_M = MIN_PLACE_RADIUS_M;
 
 /** FOV util do device em retrato (varia por aparelho, este e o valor de referencia). */
 export const DEVICE_FOV_DEG = 60;
+
+/**
+ * Profundidade da arena, em metros: do jogador ate o fundo.
+ *
+ * Era um RAIO de 2,2 m. Caiu para 1,8 m pela telemetria de 2026-08-21: em 21
+ * colocacoes medidas numa sessao de device, o raio MAIOR que o jogador usou foi
+ * 1,88 m e a mediana foi 1,12 m. Os 2,2 m nunca existiram na pratica — o que
+ * existia era arena atravessando parede.
+ */
+export const ARENA_DEPTH_M = 1.8;
+
+/**
+ * Largura da arena, em metros — DERIVADA, nunca digitada.
+ *
+ * E exatamente a largura que o FOV cobre na profundidade do fundo, e e isso que
+ * garante a propriedade de design que o dono do projeto pediu: "ele ve tudo, nao
+ * tem problema". Os cantos do fundo caem em +-`DEVICE_FOV_DEG / 2` de azimute,
+ * ou seja, na borda exata do quadro. Digitar 2,1 aqui deixaria os cantos um
+ * triz fora do FOV, e o jogador perderia justamente o pedaco da arena onde nao
+ * consegue agir sem girar.
+ */
+export const ARENA_WIDTH_M = 2 * ARENA_DEPTH_M * Math.tan((DEVICE_FOV_DEG / 2) * (Math.PI / 180));
+
+/**
+ * O arco de referencia que divide a arena em flancos. Igual ao FOV de
+ * proposito: os cantos do fundo estao na borda do quadro, entao TODO ponto da
+ * arena cai dentro deste arco.
+ *
+ * Era 180 (`DJ-7`), passou por 90, e parou em 60 quando o recurso escasso deixou
+ * de ser a visao — ver o docblock do modulo. Os tres flancos agora sao tres
+ * ZONAS DE ACAO de 20 graus, e nao tres pedacos de mundo escondidos.
+ */
+export const ARENA_ARC_DEG = DEVICE_FOV_DEG;
+/** Numero de setores (flancos) em que o arco e dividido. */
+export const ARENA_SECTOR_COUNT = 3;
+
+/**
+ * O cone em que o jogador consegue AGIR: colocar carta e mirar a fireball. E o
+ * recurso escasso do jogo (`DJ-9`, 2026-08-21).
+ *
+ * Igual a largura de UM flanco (`ARENA_ARC_DEG / ARENA_SECTOR_COUNT`), e nao por
+ * coincidencia: e o que faz cobrir a arena custar exatamente tres posicoes de
+ * mira, mantendo "onde colocar" como a decisao que o giro do celular paga.
+ *
+ * Ele e um CONE, entao alcanca pouco perto do jogador e muito longe dele: 0,35 m
+ * de largura a 1,0 m de distancia, 0,63 m a 1,8 m. Foi assim que o dono do
+ * projeto o descreveu antes de existir — "um cone que vai ficando bem largo
+ * quanto mais longe do player".
+ */
+export const DEPLOY_CONE_DEG = ARENA_ARC_DEG / ARENA_SECTOR_COUNT;
+
+/**
+ * Distancia minima do jogador, em metros — sem ela o jogador otimo empilha tudo
+ * em cima de si mesmo, e a tropa nasceria dentro da camera.
+ *
+ * Era 0,9 m, e esse numero nao era sobre colocacao: ele era igual a
+ * `PLAYER_TOWER_RADIUS_M` de proposito, para a torre do jogador ocupar
+ * exatamente a borda interna do anel e nenhuma colocacao legal cair em cima
+ * dela. **A JG-12 removeu a torre, e o motivo evaporou junto.**
+ *
+ * Caiu para 0,5 m porque a sessao de device de 2026-08-21 mostrou o custo dele:
+ * 25 colocacoes recusadas contra 21 aceitas — 54% de recusa, com rajadas de seis
+ * recusas seguidas em 13 segundos.
+ */
+export const MIN_PLACE_RADIUS_M = 0.5;
 
 export type SectorId = "left" | "center" | "right";
 
@@ -55,7 +132,28 @@ export interface ArcPoint {
 
 export type PlacementVerdict =
   | { ok: true }
-  | { ok: false; reason: "fora-do-arco" | "perto-demais" | "longe-demais" };
+  | { ok: false; reason: "fora-da-arena" | "perto-demais" };
+
+/**
+ * Veredito de COLOCACAO, que e mais estrito que o de arena: alem de estar dentro
+ * do campo, o ponto precisa cair no cone de acao. `fora-do-cone` e a recusa nova
+ * e a mais comum — ela e o proprio recurso escasso do jogo, nao um defeito.
+ */
+export type DeployRefusalReason = "fora-da-arena" | "perto-demais" | "fora-do-cone";
+
+export type DeployVerdict = { ok: true } | { ok: false; reason: DeployRefusalReason };
+
+/**
+ * A razao da recusa, ou `null` quando o veredito aprova.
+ *
+ * Existe porque o projeto compila com `strict: false` (ver `tsconfig.json`), e
+ * sem `strictNullChecks` o TypeScript nao estreita uniao discriminada por
+ * `if (!verdict.ok)` — ler `verdict.reason` la dentro nao compila. O cast fica
+ * aqui, uma vez, com o motivo escrito, em vez de espalhado por cada chamador.
+ */
+export function refusalReason(verdict: DeployVerdict): DeployRefusalReason | null {
+  return verdict.ok ? null : (verdict as { ok: false; reason: DeployRefusalReason }).reason;
+}
 
 // Setores em ordem left -> right por azimute crescente. Fixa em 3 elementos
 // porque SectorId e uma uniao fechada de 3 valores; ARENA_SECTOR_COUNT existe
@@ -76,8 +174,13 @@ function radToDeg(rad: number): number {
   return (rad * 180) / Math.PI;
 }
 
-/** Normaliza um angulo em graus para o intervalo (-180, +180]. */
-function normalizeAngleDeg(deg: number): number {
+/**
+ * Normaliza um angulo em graus para o intervalo (-180, +180].
+ *
+ * Exportada porque quem mede DIFERENCA de angulo precisa dela para nao ser
+ * mordido pelo wrap — a mira da fireball (`fireballAim.ts`) e o caso vivo.
+ */
+export function normalizeAngleDeg(deg: number): number {
   let a = deg % 360;
   if (a <= -180) a += 360;
   if (a > 180) a -= 360;
@@ -177,23 +280,90 @@ export function toLocal(p: ArcPoint): ArenaPoint2D {
 }
 
 /**
- * Avalia se um ponto polar e um lugar legal para colocar tropa.
+ * O raio da BORDA da arena num dado azimute, em metros.
  *
- * Ordem de recusa, deterministica: fora do arco vem antes de perto demais,
- * que vem antes de longe demais. Um ponto fora do arco nunca reporta raio —
- * a pergunta "esse raio serve?" so faz sentido depois de confirmar que o
- * azimute cai dentro de algum setor.
+ * A arena e retangular, entao a borda nao esta a uma distancia constante: no
+ * azimute 0 o fundo esta a `ARENA_DEPTH_M`, e nos cantos (+-30 graus) esta a
+ * 2,08 m. Quem faz inimigo nascer "na borda" precisa deste numero, e nao de um
+ * raio fixo — com um raio fixo, um nascimento no flanco cairia dentro do campo e
+ * um nascimento no centro cairia fora dele.
+ *
+ * Fora do arco o conceito nao existe, e a funcao devolve 0: quem chama ja
+ * validou o azimute (o `WaveDirector` sorteia entre setores, e todo setor esta
+ * dentro do arco por construcao).
+ */
+export function arenaEdgeRadiusAt(azimuthDeg: number): number {
+  if (sectorOf(azimuthDeg) === null) {
+    return 0;
+  }
+
+  return ARENA_DEPTH_M / Math.cos(degToRad(azimuthDeg));
+}
+
+/**
+ * O ponto esta DENTRO da arena? Geometria pura do campo — o retangulo mais a
+ * folga minima em volta do jogador. Nao diz nada sobre o jogador conseguir agir
+ * ali; para isso e `evaluateDeployment`.
+ *
+ * Quem usa esta versao e o nascimento de INIMIGO: ele pode nascer em qualquer
+ * canto do campo, inclusive num que o jogador nao alcanca sem girar — alias, e
+ * exatamente esse o ponto.
+ *
+ * Ordem de recusa, deterministica: fora da arena vem antes de perto demais.
  */
 export function evaluatePlacement(p: ArcPoint): PlacementVerdict {
+  const { x, z } = toLocal(p);
+
+  // O campo e a INTERSECAO do retangulo com o arco de flancos, e nao o
+  // retangulo cru. Os dois nao coincidem: perto do jogador o retangulo se
+  // estende para os lados muito alem de +-30 graus (no limite, ate 90), e um
+  // ponto ali nao pertence a flanco nenhum.
+  //
+  // O device de 2026-08-21 mostrou o custo de esquecer isso: quatro colocacoes
+  // foram ACEITAS em azimutes de 59,9, 61,4, 30,7 e 30,9 graus. Uma tropa la
+  // fica fora de `sectorOf`, some da contagem de `getSectorThreats` e nao e
+  // coberta por mira nenhuma — um pedaco de campo jogavel que a mecanica de
+  // flancos nao enxerga.
   if (sectorOf(p.azimuthDeg) === null) {
-    return { ok: false, reason: "fora-do-arco" };
+    return { ok: false, reason: "fora-da-arena" };
+  }
+
+  if (Math.abs(x) > ARENA_WIDTH_M / 2 + EPS || z > ARENA_DEPTH_M + EPS || z < -EPS) {
+    return { ok: false, reason: "fora-da-arena" };
   }
   if (p.radiusM < MIN_PLACE_RADIUS_M) {
     return { ok: false, reason: "perto-demais" };
   }
-  if (p.radiusM > ARENA_RADIUS_M) {
-    return { ok: false, reason: "longe-demais" };
+  return { ok: true };
+}
+
+/**
+ * O jogador consegue colocar uma carta neste ponto, apontando o celular para
+ * `cameraYawDeg`?
+ *
+ * E `evaluatePlacement` mais o **cone de acao**: o ponto tem de estar dentro de
+ * `DEPLOY_CONE_DEG` centrado na mira. Este cone e o recurso escasso do jogo
+ * (`DJ-9`) — ver o azimute inteiro e de graca, agir nele nao e.
+ *
+ * A recusa por cone vem POR ULTIMO de proposito. As outras duas sao erro de
+ * mira ("voce apontou para fora do campo"); esta e uma regra do jogo ("voce
+ * precisa virar para la"), e a UI da JG-06 responde a elas de formas
+ * diferentes: as duas primeiras nao desenham anel nenhum, e a terceira desenha
+ * o anel em cinza, dizendo onde ele ficaria se voce girasse.
+ */
+export function evaluateDeployment(p: ArcPoint, cameraYawDeg: number): DeployVerdict {
+  const placement = evaluatePlacement(p);
+
+  if (!placement.ok) {
+    return placement;
   }
+
+  const offsetFromAim = Math.abs(normalizeAngleDeg(p.azimuthDeg - cameraYawDeg));
+
+  if (offsetFromAim > DEPLOY_CONE_DEG / 2 + EPS) {
+    return { ok: false, reason: "fora-do-cone" };
+  }
+
   return { ok: true };
 }
 
@@ -223,7 +393,14 @@ function coneOverlapsSector(yawDeg: number, fovDeg: number, sectorStart: number,
   return false;
 }
 
-/** Setores que o celular cobre agora. Vazio quando o jogador olha para fora do arco. */
+/**
+ * Setores que o celular cobre agora. Vazio quando o jogador olha para fora do
+ * arco.
+ *
+ * Com o `fovDeg` default isto responde "o que eu VEJO" — e desde 2026-08-21 a
+ * resposta e quase sempre "a arena toda", de proposito. Para "onde eu consigo
+ * AGIR", que e a pergunta cara, use `reachableSectors`.
+ */
 export function framedSectors(cameraYawDeg: number, fovDeg: number = DEVICE_FOV_DEG): SectorId[] {
   const yaw = normalizeAngleDeg(cameraYawDeg);
   const result: SectorId[] = [];
@@ -237,20 +414,41 @@ export function framedSectors(cameraYawDeg: number, fovDeg: number = DEVICE_FOV_
 }
 
 /**
- * Setor de spawn. NUNCA um setor enquadrado, salvo se todos estiverem — nesse
- * caso degenerado sorteia entre todos em vez de travar sem opcao.
+ * Setores que o jogador ALCANCA agora — aqueles em que ele conseguiria colocar
+ * uma carta sem girar o celular. E `framedSectors` medido com o cone de acao em
+ * vez do FOV.
  *
- * `fovDeg` e opcional so para teste do caso degenerado (forcar um cone maior
- * que o arco inteiro); o codigo de produto chama so com `(cameraYawDeg, rng)`
- * e usa `DEVICE_FOV_DEG`.
+ * Com `DEPLOY_CONE_DEG` valendo exatamente a largura de um flanco, a resposta e
+ * um setor na maior parte dos angulos, e dois quando a mira cai em cima de uma
+ * fronteira. Nunca os tres — e essa a garantia que sustenta o jogo: sempre
+ * existe pelo menos um flanco que voce ve e nao alcanca.
+ */
+export function reachableSectors(cameraYawDeg: number): SectorId[] {
+  return framedSectors(cameraYawDeg, DEPLOY_CONE_DEG);
+}
+
+/**
+ * Setor de spawn. NUNCA um setor que o jogador ALCANCE, salvo no caso
+ * degenerado em que todos estejam alcancaveis — ai sorteia entre todos em vez de
+ * travar sem opcao.
+ *
+ * **O criterio mudou em 2026-08-21**: era "nunca um setor ENQUADRADO". Enquanto
+ * o arco tinha 180 graus e o FOV cobria exatamente um flanco, as duas coisas
+ * davam no mesmo. Com a arena inteira dentro do quadro, "nao enquadrado" passou
+ * a ser um conjunto quase sempre vazio, e o inimigo nascia a vista sem opcao —
+ * o teste de `wavePlan` pegou isso na hora. O que continua escasso, e portanto o
+ * que o spawn evita, e o ALCANCE.
+ *
+ * `coneDeg` e opcional so para teste do caso degenerado (forcar um cone maior
+ * que o arco inteiro); o codigo de produto chama so com `(cameraYawDeg, rng)`.
  */
 export function pickSpawnSector(
   cameraYawDeg: number,
   rng: () => number,
-  fovDeg: number = DEVICE_FOV_DEG
+  fovDeg: number = DEPLOY_CONE_DEG
 ): SectorId {
-  const framed = new Set(framedSectors(cameraYawDeg, fovDeg));
-  const free = SECTOR_IDS.filter((sector) => !framed.has(sector));
+  const reachable = new Set(framedSectors(cameraYawDeg, fovDeg));
+  const free = SECTOR_IDS.filter((sector) => !reachable.has(sector));
   const pool = free.length > 0 ? free : SECTOR_IDS;
   const idx = Math.min(pool.length - 1, Math.max(0, Math.floor(rng() * pool.length)));
   return pool[idx];

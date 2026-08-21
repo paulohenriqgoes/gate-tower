@@ -8,7 +8,7 @@
  */
 
 import {
-  ARENA_RADIUS_M,
+  arenaEdgeRadiusAt,
   evaluatePlacement,
   pickSpawnSector,
   sectorCenterDeg,
@@ -34,9 +34,9 @@ export interface SpawnOrder {
 }
 
 /**
- * Quanto o raio de nascimento pode variar para dentro a partir da borda do
- * arco (`ARENA_RADIUS_M`). Pequeno o bastante para continuar lendo como "veio
- * da borda", grande o bastante para uma leva de N inimigos nao empilhar no
+ * Quanto o raio de nascimento pode variar para dentro a partir da borda da
+ * arena (`arenaEdgeRadiusAt`). Pequeno o bastante para continuar lendo como
+ * "veio da borda", grande o bastante para uma leva de N inimigos nao empilhar no
  * mesmo ponto exato.
  */
 const RADIUS_JITTER_M = 0.15;
@@ -55,14 +55,22 @@ interface PendingWave {
   fired: boolean;
 }
 
-/** Gera um ponto polar dentro de `sector`, na borda do arco com pequena variacao. */
+/**
+ * Gera um ponto polar dentro de `sector`, na borda da arena com pequena
+ * variacao.
+ *
+ * O raio da borda vem de `arenaEdgeRadiusAt(azimute)`, e nao de uma constante:
+ * a arena e RETANGULAR desde 2026-08-21, entao o fundo esta a 1,8 m no azimute 0
+ * e a 2,08 m nos cantos. Com um raio fixo, metade dos nascimentos de flanco
+ * cairia dentro do campo e metade dos nascimentos centrais cairia fora dele.
+ */
 function pickPointInSector(sector: SectorId, rng: () => number): ArcPoint {
   const [start, end] = sectorRangeDeg(sector);
   const width = end - start;
   const margin = width * AZIMUTH_EDGE_MARGIN_FACTOR;
   const usableWidth = Math.max(0, width - 2 * margin);
   const azimuthDeg = start + margin + rng() * usableWidth;
-  const radiusM = ARENA_RADIUS_M - rng() * RADIUS_JITTER_M;
+  const radiusM = arenaEdgeRadiusAt(azimuthDeg) - rng() * RADIUS_JITTER_M;
   return { azimuthDeg, radiusM };
 }
 
@@ -78,7 +86,11 @@ function spawnPointInSector(sector: SectorId, rng: () => number): ArcPoint {
   if (evaluatePlacement(candidate).ok) {
     return candidate;
   }
-  const fallback: ArcPoint = { azimuthDeg: sectorCenterDeg(sector), radiusM: ARENA_RADIUS_M - RADIUS_JITTER_M / 2 };
+  const centerAzimuth = sectorCenterDeg(sector);
+  const fallback: ArcPoint = {
+    azimuthDeg: centerAzimuth,
+    radiusM: arenaEdgeRadiusAt(centerAzimuth) - RADIUS_JITTER_M / 2,
+  };
   return fallback;
 }
 

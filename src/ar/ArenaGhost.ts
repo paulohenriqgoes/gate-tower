@@ -7,8 +7,10 @@ import type { Scene } from "@babylonjs/core/scene";
 
 import {
   ARENA_ARC_DEG,
-  ARENA_RADIUS_M,
+  ARENA_DEPTH_M,
+  ARENA_WIDTH_M,
   MIN_PLACE_RADIUS_M,
+  arenaEdgeRadiusAt,
   sectorRangeDeg,
   toLocal,
   type SectorId,
@@ -34,6 +36,7 @@ const BAR_HEIGHT_M = 0.006;
 // continua sobre o feed de camera compete com as juntas do piso real; o ritmo
 // do tracejado e o que faz o olho ler "isto e sobreposicao grafica".
 const OUTER_DASH_COUNT = 18;
+const SIDE_DASH_COUNT = 14;
 const INNER_DASH_COUNT = 10;
 const DASH_FILL_RATIO = 0.62;
 
@@ -166,23 +169,44 @@ export class ArenaGhost {
   /**
    * Monta as barras do contorno e as funde num mesh so.
    *
-   * Nada aqui e literal: o raio externo, o raio interno e a abertura vem de
-   * `ArenaArc`, e as fronteiras de setor vem de `sectorRangeDeg`. Trocar
-   * `ARENA_ARC_DEG` para 120 (decisao D7 do plano) tem que redesenhar o
-   * contorno sozinho — um numero copiado aqui faria o preview mentir sobre a
-   * arena que vai fechar, que e o unico jeito de este componente ser pior do
-   * que nao existir.
+   * **A borda externa e RETANGULAR desde 2026-08-21**, e nao mais um arco: a
+   * arena virou um retangulo a frente do jogador, dimensionado para caber
+   * inteiro no FOV. A borda INTERNA continua sendo um arco, porque ela nao e
+   * uma parede — e a folga em volta do corpo de quem joga, e folga de corpo e
+   * radial.
+   *
+   * Nada aqui e literal: largura, profundidade e a folga interna vem de
+   * `ArenaArc`, e as fronteiras de setor de `sectorRangeDeg`. Trocar qualquer
+   * uma dessas constantes tem que redesenhar o contorno sozinho — um numero
+   * copiado aqui faria o preview mentir sobre a arena que vai fechar, que e o
+   * unico jeito de este componente ser pior do que nao existir.
    */
   private buildOutline(): Mesh {
-    const half = ARENA_ARC_DEG / 2;
+    const halfWidth = ARENA_WIDTH_M / 2;
 
     const bars: Mesh[] = [
-      ...this.buildDashedArc("outer", ARENA_RADIUS_M, OUTER_DASH_COUNT),
+      // Fundo: uma linha tracejada reta, de canto a canto.
+      ...this.buildDashedLine(
+        "back",
+        { x: -halfWidth, z: ARENA_DEPTH_M },
+        { x: halfWidth, z: ARENA_DEPTH_M },
+        OUTER_DASH_COUNT
+      ),
+      // Laterais: do jogador ate o fundo, nos dois limites de largura.
+      ...this.buildDashedLine(
+        "side-left",
+        { x: -halfWidth, z: 0 },
+        { x: -halfWidth, z: ARENA_DEPTH_M },
+        SIDE_DASH_COUNT
+      ),
+      ...this.buildDashedLine(
+        "side-right",
+        { x: halfWidth, z: 0 },
+        { x: halfWidth, z: ARENA_DEPTH_M },
+        SIDE_DASH_COUNT
+      ),
+      // A folga em volta do jogador continua sendo um arco.
       ...this.buildDashedArc("inner", MIN_PLACE_RADIUS_M, INNER_DASH_COUNT),
-      // As duas pontas fechando o arco: barras radiais do raio minimo ao
-      // externo, nos limites laterais.
-      this.buildRadialBar("edge-left", -half, MIN_PLACE_RADIUS_M, ARENA_RADIUS_M),
-      this.buildRadialBar("edge-right", half, MIN_PLACE_RADIUS_M, ARENA_RADIUS_M),
       ...this.buildSectorTicks(),
     ];
 
@@ -239,7 +263,18 @@ export class ArenaGhost {
     );
   }
 
-  /** Um tracinho radial em cada fronteira INTERNA entre setores. */
+  /**
+   * Um tracinho radial em cada fronteira INTERNA entre flancos, encostado na
+   * borda do fundo.
+   *
+   * Eles importam mais do que antes: os tres flancos deixaram de ser pedacos de
+   * mundo escondidos e viraram as tres ZONAS DE ACAO do cone de deploy. Estes
+   * tracinhos sao a unica pista, no chao, de onde uma zona acaba e a outra
+   * comeca.
+   *
+   * O raio de cada tique vem de `arenaEdgeRadiusAt`, e nao de uma constante: com
+   * a borda retangular, a distancia ate o fundo depende do azimute.
+   */
   private buildSectorTicks(): Mesh[] {
     const half = ARENA_ARC_DEG / 2;
     const sectors: SectorId[] = ["left", "center", "right"];
@@ -248,18 +283,54 @@ export class ArenaGhost {
     for (const sector of sectors) {
       const [startDeg] = sectorRangeDeg(sector);
 
-      // A fronteira externa esquerda ja e a barra `edge-left`; so as internas
-      // ganham tique.
+      // A fronteira externa esquerda ja e a lateral do retangulo; so as
+      // internas ganham tique.
       if (Math.abs(startDeg + half) < 1e-6) {
         continue;
       }
 
+      const edgeRadius = arenaEdgeRadiusAt(startDeg);
       bars.push(
-        this.buildRadialBar(
-          `tick-${sector}`,
-          startDeg,
-          ARENA_RADIUS_M - SECTOR_TICK_LENGTH_M,
-          ARENA_RADIUS_M
+        this.buildRadialBar(`tick-${sector}`, startDeg, edgeRadius - SECTOR_TICK_LENGTH_M, edgeRadius)
+      );
+    }
+
+    return bars;
+  }
+
+  /**
+   * Uma linha RETA tracejada entre dois pontos do piso. E o que desenha a borda
+   * retangular; o `buildDashedArc` continua existindo para a folga interna, que
+   * e curva.
+   */
+  private buildDashedLine(
+    name: string,
+    from: { x: number; z: number },
+    to: { x: number; z: number },
+    dashCount: number
+  ): Mesh[] {
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const lengthM = Math.hypot(dx, dz);
+    const dashLengthM = (lengthM / dashCount) * DASH_FILL_RATIO;
+    // Angulo da linha medido na MESMA convencao do azimute (`atan2(x, z)`), para
+    // a rotacao das barras concordar com o resto do modelo.
+    const rotationY = Math.atan2(dx, dz);
+
+    const bars: Mesh[] = [];
+
+    for (let i = 0; i < dashCount; i += 1) {
+      // Centro do traco no meio de cada celula: o tracejado fica simetrico nas
+      // duas pontas da linha.
+      const t = (i + 0.5) / dashCount;
+      bars.push(
+        this.buildBarAt(
+          `arena-ghost-${name}-${i}`,
+          from.x + dx * t,
+          from.z + dz * t,
+          BAR_THICKNESS_M,
+          dashLengthM,
+          rotationY
         )
       );
     }
@@ -293,6 +364,27 @@ export class ArenaGhost {
     const { x, z } = toLocal({ azimuthDeg, radiusM });
     bar.position.set(x, BAR_HEIGHT_M / 2, z);
     bar.rotation.y = azimuthDeg * DEG_TO_RAD;
+
+    return bar;
+  }
+
+  /** Como `buildBar`, mas posicionada em coordenadas do piso em vez de polares. */
+  private buildBarAt(
+    name: string,
+    x: number,
+    z: number,
+    widthM: number,
+    depthM: number,
+    rotationY: number
+  ): Mesh {
+    const bar = MeshBuilder.CreateBox(
+      name,
+      { width: widthM, height: BAR_HEIGHT_M, depth: depthM },
+      this.scene
+    );
+
+    bar.position.set(x, BAR_HEIGHT_M / 2, z);
+    bar.rotation.y = rotationY;
 
     return bar;
   }

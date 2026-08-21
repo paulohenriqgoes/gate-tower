@@ -12,16 +12,10 @@ import { ArenaGhost } from "./ArenaGhost";
 import { ARENA_FACING_FORWARD, headingDegFromForward } from "./arenaHeading";
 import { attachCoachingOverlay, detachCoachingOverlay } from "./coachingOverlay";
 import { addedSince } from "./observerLeak";
-import {
-  browserPlayerHeightStorage,
-  normalizePlayerHeightM,
-  readPlayerHeightM,
-  writePlayerHeightM,
-} from "./playerHeight";
+import { PLAYER_EYE_HEIGHT_M } from "../camera/arenaFraming";
 import { playSpawnScaleIn } from "../fx/spawnAnimation";
 import { DiagnosticsOverlay } from "../ui/DiagnosticsOverlay";
-import { HeightStepper } from "../ui/HeightStepper";
-import type { HudLayer } from "../ui/HudLayer";
+import { THUMB_ZONE_HEIGHT_FRACTION, type HudLayer } from "../ui/HudLayer";
 
 const XR8_LOAD_TIMEOUT_MS = 15000;
 // Teto de frames aguardando a viewport estabilizar depois do fullscreen.
@@ -145,14 +139,6 @@ export class EighthWallARManager implements ArSessionController {
   /** Etapas do ciclo de vida da sessao corrente, na ordem em que dispararam. */
   private lifecycleTrace: string[] = [];
 
-  /**
-   * Altura declarada do jogador — o `origin.y` que poe o piso em zero. Nasce da
-   * preferencia persistida e so muda por `setPlayerHeight`, que e o dono unico
-   * deste numero em todo o projeto.
-   */
-  private playerHeightM = readPlayerHeightM(browserPlayerHeightStorage());
-  /** Controle de altura da fase de setup. Existe so com a sessao no ar. */
-  private heightStepper: HeightStepper | null = null;
 
   public constructor(
     scene: Scene,
@@ -174,43 +160,6 @@ export class EighthWallARManager implements ArSessionController {
   /** Engine carregado e device compativel com a RA do 8th Wall. */
   public isARAvailable(): boolean {
     return this.isXR8Ready && this.isARSupported;
-  }
-
-  /** A altura declarada em vigor, ja normalizada. */
-  public getPlayerHeight(): number {
-    return this.playerHeightM;
-  }
-
-  /**
-   * Declara a altura do jogador — e, com ela, onde fica o piso.
-   *
-   * Este e o dono unico de `origin.y`. Ele normaliza, persiste, atualiza o
-   * controle da sessao e, se a sessao estiver no ar, REDECLARA a origem ao
-   * engine na hora: a arena sobe e desce contra o piso real sem reiniciar nada.
-   *
-   * A correcao com a sessao no ar e a razao de esta unidade existir. A origem e
-   * capturada no `onAttach`, quando o celular esta na pose de apertar um botao
-   * e nao na de jogar; medido em device, isso deu `delta` de -0,49 a -0,92 m
-   * numa sessao em que o jogador entrou com a mao levantada. Sem recalibrar
-   * depois do attach, todo o resto da sessao herda o offset.
-   */
-  public setPlayerHeight(heightM: number): void {
-    // Normaliza ANTES de gravar o campo: `origin` nao-finito contamina o frame
-    // do engine de forma permanente, e o campo alimenta tambem a criacao da
-    // camera. Nenhum valor cru pode entrar aqui.
-    const next = normalizePlayerHeightM(heightM);
-
-    if (next === this.playerHeightM) {
-      return;
-    }
-
-    this.playerHeightM = next;
-    writePlayerHeightM(browserPlayerHeightStorage(), next);
-    this.heightStepper?.setValue(next);
-
-    if (this.isInAR) {
-      this.redeclareOriginHeight();
-    }
   }
 
   /**
@@ -391,41 +340,11 @@ export class EighthWallARManager implements ArSessionController {
     ui.addControl(prompt);
     this.placePrompt = prompt;
 
-    this.createHeightStepperUI();
-
     this.scene.onBeforeRenderObservable.add(() => {
       if (this.spinnerRotator && this.loaderPanel?.isVisible) {
         this.spinnerRotator.rotation += 0.09;
       }
     });
-  }
-
-  /**
-   * Controle de altura da fase de setup, no terco inferior (zona do polegar).
-   *
-   * Ele fica ao lado do prompt de confirmacao, e nao na tela inicial apenas,
-   * porque o erro que ele conserta so aparece DEPOIS de entrar: a origem e
-   * capturada no `onAttach`, com o celular na pose de apertar um botao. Quem
-   * entra com a mao levantada declara um piso alto demais, e sem corrigir com a
-   * sessao no ar a partida inteira herda o offset.
-   *
-   * Tocar nele nao confirma a arena: o GUI marca `skipOnPointerObservable`, e o
-   * `WorldTapRouter` nem chega a ver o toque.
-   */
-  private createHeightStepperUI(): void {
-    const stepper = new HeightStepper("ar-height", "Sua altura", this.playerHeightM);
-
-    stepper.root.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    stepper.root.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    stepper.root.top = "-40px";
-    stepper.root.isVisible = false;
-
-    stepper.onChangedObservable.add((heightM) => {
-      this.setPlayerHeight(heightM);
-    });
-
-    this.hud.getTexture().addControl(stepper.root);
-    this.heightStepper = stepper;
   }
 
   /**
@@ -453,13 +372,6 @@ export class EighthWallARManager implements ArSessionController {
 
     if (this.placePrompt) {
       this.placePrompt.isVisible = ready;
-    }
-
-    // O controle de altura acompanha a fase de setup inteira, e nao so o
-    // momento `ready`: quem entra com a mao levantada precisa poder corrigir
-    // enquanto o tracking ainda converge, olhando a arena contra o piso.
-    if (this.heightStepper) {
-      this.heightStepper.root.isVisible = inPlacement && !settling;
     }
 
     // O texto do topo e MUDO por padrao. Ele so aparece quando ha um aviso
@@ -493,7 +405,15 @@ export class EighthWallARManager implements ArSessionController {
     panel.background = "#111827d9";
     panel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-    panel.top = "-22px";
+    // ACIMA da zona do polegar, e nao encostado na borda de baixo. Em device
+    // (2026-08-21) este painel cobria duas cartas inteiras — Tatu Bola e Dona
+    // Barata ficavam intocaveis enquanto o `?debug=1` estivesse ligado.
+    //
+    // A margem vem de `THUMB_ZONE_HEIGHT_FRACTION`, e nao de um numero solto:
+    // e a mesma fonte que o `OffscreenIndicator` usa para nao prender a seta em
+    // cima das cartas. Se a zona do polegar mudar de tamanho, este painel
+    // acompanha sozinho.
+    panel.top = `-${THUMB_ZONE_HEIGHT_FRACTION * 100 + 3}%`;
     panel.isVisible = false;
 
     const stack = new StackPanel("arena-setup-stack");
@@ -793,7 +713,7 @@ export class EighthWallARManager implements ArSessionController {
       // Zerar aqui virou OBRIGATORIO quando a camera passou a sobreviver a
       // sessao: sem isso a segunda entrada declararia como origem a pose em que
       // o jogador largou o celular na primeira, e o arco nasceria girado.
-      camera.position.set(0, this.playerHeightM, 0);
+      camera.position.set(0, PLAYER_EYE_HEIGHT_M, 0);
       camera.rotation.setAll(0);
       this.scene.activeCamera = camera;
 
@@ -886,7 +806,7 @@ export class EighthWallARManager implements ArSessionController {
       return this.arCamera;
     }
 
-    const camera = new FreeCamera("ar-camera", new Vector3(0, this.playerHeightM, 0), this.scene);
+    const camera = new FreeCamera("ar-camera", new Vector3(0, PLAYER_EYE_HEIGHT_M, 0), this.scene);
     camera.minZ = 0.01;
     camera.maxZ = 1000;
     this.arCamera = camera;
@@ -988,63 +908,38 @@ export class EighthWallARManager implements ArSessionController {
 
     const origin = this.declaredOrigin();
 
-    if (!origin) {
-      return;
-    }
-
     xr8.XrController.updateCameraProjectionMatrix({
       origin,
       facing: ARENA_FACING_FORWARD,
     });
 
-    this.diagnostics?.setField("originY", this.playerHeightM.toFixed(2));
+    this.diagnostics?.setField("originY", `${PLAYER_EYE_HEIGHT_M.toFixed(2)} (o engine sobrescreve)`);
   }
 
   /**
-   * Redeclara SO a altura da origem, com a sessao no ar. E o que faz a arena
-   * subir e descer contra o piso real em tempo real.
+   * A origem declarada ao engine.
    *
-   * `facing` fica de fora de proposito, e a ausencia e o ponto: ele e a
-   * orientacao da origem, e reenvia-lo giraria o mundo inteiro debaixo de uma
-   * arena que nao tem rotacao para compensar. Ajustar a altura nao pode mexer
-   * em para onde o arco olha — quem faz isso e o gesto da RA-F4.
+   * **O `y` daqui e descartado pelo 8th Wall, e isso esta medido.** Em
+   * `scale: "absolute"` ele sobrescreve `origin.y` para 1 m: quatro colocacoes
+   * com 1,55 declarado deram distancia camera-origem de 1,0049 / 0,9797 /
+   * 1,0134 / 1,0043 (device, 2026-08-20). O piso cai em `y = 0` porque o engine
+   * assume o celular a 1 m do chao no instante da colocacao — nunca por causa do
+   * numero que este projeto declarava.
    *
-   * `updateRecenterPoint: true` nao e detalhe: ele leva o ponto de `recenter()`
-   * junto com a origem nova. Sem ele, o gesto de colocacao da RA-F4 devolveria
-   * o jogador a altura antiga e desfaria este ajuste.
+   * A chamada continua obrigatoria pelo `facing`, que NAO e ignorado: e ele que
+   * mantem o azimute 0 no +Z do mundo. O `y` vai junto porque a assinatura pede
+   * uma origem completa, e usa `PLAYER_EYE_HEIGHT_M` — a mesma altura do jogador
+   * simulado do modo tela — para os dois modos nascerem com a camera na mesma
+   * altura.
+   *
+   * Ate 2026-08-21 este numero vinha de uma preferencia persistida, ajustavel
+   * por dois `HeightStepper` na tela. Os controles sairam quando o device
+   * provou que o engine descarta o valor; a preferencia saiu junto, porque um
+   * numero gravado que nao afeta nada e pior do que numero nenhum — ele aparecia
+   * no painel de diagnostico como `originY` e parecia significar alguma coisa.
    */
-  private redeclareOriginHeight(): void {
-    const xr8 = window.XR8;
-    const origin = this.declaredOrigin();
-
-    if (!xr8 || !origin) {
-      return;
-    }
-
-    xr8.XrController.updateCameraProjectionMatrix({ origin, updateRecenterPoint: true });
-
-    this.diagnostics?.setField("originY", this.playerHeightM.toFixed(2));
-  }
-
-  /**
-   * A origem declarada, ou `null` quando a altura nao presta.
-   *
-   * Blindagem obrigatoria e centralizada: `origin` nao-finito contamina o frame
-   * do engine de forma PERMANENTE — nao existe caminho de volta sem reiniciar a
-   * sessao. `setPlayerHeight` ja normaliza antes de gravar o campo, entao na
-   * pratica isto nunca dispara; e justamente por isso ele fica, e nao porque
-   * hoje ha um caminho conhecido ate aqui.
-   */
-  private declaredOrigin(): { x: number; y: number; z: number } | null {
-    if (!Number.isFinite(this.playerHeightM)) {
-      console.error(
-        `[EighthWallARManager] altura de jogador nao-finita (${this.playerHeightM}); origem nao declarada.`
-      );
-
-      return null;
-    }
-
-    return { x: 0, y: this.playerHeightM, z: 0 };
+  private declaredOrigin(): { x: number; y: number; z: number } {
+    return { x: 0, y: PLAYER_EYE_HEIGHT_M, z: 0 };
   }
 
   /**

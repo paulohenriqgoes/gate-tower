@@ -15,6 +15,8 @@ import type { CombatEngine } from "../combat/CombatEngine";
 import { dissolveArena } from "../fx/arenaDissolve";
 import type { WorldTapRouter } from "../interaction/WorldTapRouter";
 import type { MushroomTower } from "../towers/MushroomTower";
+import { toArc } from "../arena/ArenaArc";
+import { FramingTrigger } from "../towers/FramingTrigger";
 import type { ProximityTrigger, WakeStage } from "../towers/ProximityTrigger";
 import type { TowerWakeup } from "../towers/TowerWakeup";
 import type { CardDeckHud } from "../ui/CardDeckHud";
@@ -175,12 +177,23 @@ export class GameFlow {
   // escala de ~0.033 junto e faria a distancia sair em metros no meio de uma
   // conta em unidades autorais.
   private readonly caveMouthArenaLocal: Vector3;
+  /**
+   * O gatilho do Beat 5 desde 2026-08-21: **mirar a caverna**, e nao andar ate
+   * ela nem tocar nela. E o que o storyboard sempre pediu (quadro 04, "1-2 s de
+   * enquadramento continuo dispara") e o que o jogo nao fazia.
+   *
+   * Construido aqui, e nao injetado, de proposito: ele nao tem configuracao que
+   * venha de fora e nenhuma outra parte do jogo precisa dele. O
+   * `ProximityTrigger` continua sendo injetado porque os limiares dele saem de
+   * telemetria de device.
+   */
+  private readonly framingTrigger = new FramingTrigger();
   private lastWakeStage: WakeStage = "asleep";
 
   private readonly modeSelectedObserver: Observer<GameMode>;
   private readonly arenaClosedObserver: Observer<ArenaClosedReport>;
   private readonly sessionFailedObserver: Observer<string>;
-  private readonly towerDestroyedObserver: Observer<TeamId>;
+  private readonly playerDefeatedObserver: Observer<void>;
   private readonly enemyDefeatedObserver: Observer<{ cardId: string }>;
   private readonly matchExpiredObserver: Observer<void>;
   private readonly finalMinuteObserver: Observer<void>;
@@ -211,9 +224,10 @@ export class GameFlow {
       this.handleSessionFailed(message);
     });
 
-    // Derrota imediata: a torre do jogador caiu (`DJ-5`).
-    this.towerDestroyedObserver = options.combatEngine.onTowerDestroyedObservable.add((destroyedTeam) => {
-      this.handleTowerDestroyed(destroyedTeam);
+    // Derrota imediata: o jogador caiu. `DJ-5` dizia "a torre cair"; desde a
+    // JG-12, que removeu a torre do jogador, o alvo e ele proprio.
+    this.playerDefeatedObserver = options.combatEngine.onPlayerDefeatedObservable.add(() => {
+      this.handlePlayerDefeated();
     });
 
     // Contagem de abatidos da partida. A carta que cada um vira e trabalho da
@@ -286,11 +300,11 @@ export class GameFlow {
 
     hudLayer.setMatchTimer(matchClock.getRemainingMs());
 
-    // So o HP da torre do jogador: a torre inimiga deixou de ser participante
-    // do combate na JG-04 (ela sobrevive como cenario da intro ate a JG-10),
-    // entao nao ha segunda barra para preencher.
-    const playerHealth = combatEngine.getTowerHealth("player");
-    hudLayer.setTowerHealth("player", playerHealth.current, playerHealth.max);
+    // So o HP do JOGADOR. A torre inimiga deixou de participar do combate na
+    // JG-04 (sobrevive como cenario da intro ate a JG-10) e a do jogador foi
+    // removida na JG-12 — quem apanha agora e ele.
+    const playerHealth = combatEngine.getPlayerHealth();
+    hudLayer.setHealth("player", playerHealth.current, playerHealth.max);
   }
 
   public dispose(): void {
@@ -318,7 +332,7 @@ export class GameFlow {
     this.options.startScreen.onModeSelectedObservable.remove(this.modeSelectedObserver);
     this.options.arManager.onArenaClosedObservable.remove(this.arenaClosedObserver);
     this.options.arManager.onSessionFailedObservable.remove(this.sessionFailedObserver);
-    this.options.combatEngine.onTowerDestroyedObservable.remove(this.towerDestroyedObserver);
+    this.options.combatEngine.onPlayerDefeatedObservable.remove(this.playerDefeatedObserver);
     this.options.combatEngine.onEnemyDefeatedObservable.remove(this.enemyDefeatedObserver);
     this.options.matchClock.onExpiredObservable.remove(this.matchExpiredObserver);
     this.options.matchClock.onFinalMinuteObservable.remove(this.finalMinuteObserver);
@@ -334,7 +348,7 @@ export class GameFlow {
    * assinavam o ponteiro cada um por si e se guardavam com flags.
    */
   private registerWorldTapHandlers(): void {
-    const { arManager, combatEngine, worldTapRouter } = this.options;
+    const { arManager, cardDeckSystem, combatEngine, worldTapRouter } = this.options;
 
     worldTapRouter.setHandler("ar-setup", () => {
       arManager.tryCloseArenaAtPlayer();
@@ -350,10 +364,23 @@ export class GameFlow {
       this.handleWorldAliveTap(pickedMesh);
     });
 
-    // Ponto de extensao da etapa de invocacao em dois toques: ela reescreve o
-    // miolo do deploy no CombatEngine, sem precisar mexer em quem roteia.
+    // O toque na partida faz UMA de duas coisas, e quem decide qual e a carta
+    // na mao — nunca o codigo de retorno do deploy, que hoje da `false` por
+    // quatro motivos diferentes:
+    //
+    //   ha carta selecionada? -> colocacao (o gesto de `DJ-2`, intacto)
+    //   nao ha?               -> fireball
+    //
+    // A fireball nao precisa do ponto tocado: ela sai na direcao em que o
+    // celular aponta, e nao no lugar em que o dedo encostou. Sao gestos
+    // diferentes de proposito — colocar e "aqui", atirar e "para la".
     worldTapRouter.setHandler("playing", (pickedPoint) => {
       if (arManager.tryCloseArenaAtPlayer()) {
+        return;
+      }
+
+      if (!cardDeckSystem.getSelectedCard()) {
+        combatEngine.castFireball();
         return;
       }
 
@@ -430,7 +457,7 @@ export class GameFlow {
    * comportamento que a demo existe para medir.
    */
   private updateEnemyProximity(): void {
-    const { enemyTower, getCameraArenaLocalPosition, proximityTrigger } = this.options;
+    const { enemyTower, getCameraArenaLocalPosition, getCameraYawDeg, proximityTrigger } = this.options;
     const cameraLocal = getCameraArenaLocalPosition();
 
     if (!cameraLocal) {
@@ -440,7 +467,21 @@ export class GameFlow {
     const nowMs = performance.now();
     const distanceUnits = Vector3.Distance(cameraLocal, this.caveMouthArenaLocal);
     const stage = proximityTrigger.update(distanceUnits, nowMs);
-    const approach = proximityTrigger.getGlowIntensity();
+
+    // **O gatilho e a MIRA.** O azimute da caverna sai da posicao dela no
+    // espaco da arena (que, com o `arenaRoot` na origem, e o espaco do mundo), e
+    // a diferenca para o yaw do celular e o quanto ela esta fora do centro do
+    // quadro.
+    const caveAzimuthDeg = toArc({
+      x: this.caveMouthArenaLocal.x,
+      z: this.caveMouthArenaLocal.z,
+    }).azimuthDeg;
+    const framingStage = this.framingTrigger.update(caveAzimuthDeg - getCameraYawDeg(), nowMs);
+
+    // O brilho segue o MAIOR dos dois: a mira e o caminho oficial, mas quem
+    // chegar perto tambem ve a caverna responder. Continuo, nunca em degrau —
+    // e o que ensina o gesto sem uma linha de texto.
+    const approach = Math.max(proximityTrigger.getGlowIntensity(), this.framingTrigger.getProgress());
 
     // Respiracao somada ao brilho de aproximacao, e nao multiplicada: pulso
     // proporcional sumiria justo quando a caverna esta apagada, que e quando
@@ -456,7 +497,7 @@ export class GameFlow {
       this.options.onWakeStageChanged?.(stage, distanceUnits);
     }
 
-    if (stage === "leaping") {
+    if (framingStage === "triggered" || stage === "leaping") {
       this.awakenEnemy();
     }
   }
@@ -518,8 +559,8 @@ export class GameFlow {
     this.options.combatEngine.deployEnemyAtArcPoint(order.cardId, order.point);
   }
 
-  /** Torre destruida encerra na hora. So existe a do jogador, entao e derrota (`DJ-5`). */
-  private handleTowerDestroyed(_destroyedTeam: TeamId): void {
+  /** O jogador caiu: derrota na hora (`DJ-5`). */
+  private handlePlayerDefeated(): void {
     if (this.phase !== "playing") {
       return;
     }
@@ -528,7 +569,7 @@ export class GameFlow {
   }
 
   /**
-   * Tempo esgotado com a torre em pe: vitoria. Nao ha mais desempate por HP —
+   * Tempo esgotado com o jogador em pe: vitoria. Nao ha mais desempate por HP —
    * a torre inimiga saiu do combate na JG-04, e sobreviver aos 3 minutos passou
    * a ser a condicao de vitoria inteira. Enquanto o Coelho nao entra como onda
    * final (`DJ-6`, JG-11), este e o unico caminho de vitoria do jogo.
@@ -546,7 +587,7 @@ export class GameFlow {
       return;
     }
 
-    const playerHpPct = this.options.combatEngine.getTowerHealthPct("player");
+    const playerHpPct = this.options.combatEngine.getPlayerHealthPct();
 
     this.setPhase("match-over");
     // Telemetria PRIMEIRO, antes do HUD sumir ou da arena comecar a se
@@ -560,7 +601,7 @@ export class GameFlow {
 
     // Beat 7: HUD fica congelado por um instante curto, DEPOIS a arena
     // comeca a se desfazer. Sem essa espera a dissolucao comecaria no MESMO
-    // frame em que a torre morre, cortando o resultado antes de o jogador
+    // frame em que a partida acaba, cortando o resultado antes de o jogador
     // conseguir ler o ultimo estado do HUD.
     this.matchOverHoldTimeoutHandle = window.setTimeout(() => {
       this.matchOverHoldTimeoutHandle = null;
@@ -671,6 +712,7 @@ export class GameFlow {
         // TERMINAL depois do salto, entao sem isto a segunda partida da mesma
         // sessao comecaria ja disparada.
         this.options.proximityTrigger.reset();
+        this.framingTrigger.reset();
         this.lastWakeStage = "asleep";
 
         // Em RA quem ancorou a arena foi o ArSessionController; reabilitar
@@ -698,6 +740,10 @@ export class GameFlow {
         this.setWorldHealthBarsVisible(true);
         cardDeckHud.setVisible(true);
         hudLayer.setStatusVisible(true);
+        // O reticulo so existe DURANTE a partida: fora dela nao ha o que mirar,
+        // e uma cruz permanente no meio do quadro vira sujeira sobre o mundo
+        // real — o oposto do que o Beat 4 pede (tela completamente limpa).
+        hudLayer.setReticleVisible(true);
         cardDeckSystem.startRegeneration();
         combatEngine.setActive(true);
 
@@ -728,6 +774,7 @@ export class GameFlow {
         // `menu` (`finishMatchOver`).
         this.options.matchClock.stop();
         combatEngine.setActive(false);
+        hudLayer.setReticleVisible(false);
         // Volta a taxa normal de cogumelo (efeito colateral documentado de
         // `stopRegeneration`) — sem efeito pratico ja que a economia nao
         // roda mais, mas mantem o estado interno coerente caso algo ainda

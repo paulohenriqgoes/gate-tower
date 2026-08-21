@@ -112,15 +112,26 @@ describe("heading do mundo e azimute da arena sao o MESMO numero", () => {
   });
 
   it("olhar para a direita seleciona o setor da direita", () => {
-    expect(sectorOf(headingDegFromForward(1, 0))).toBe("right");
-    expect(sectorOf(headingDegFromForward(-1, 0))).toBe("left");
+    // As direcoes sao os CENTROS dos flancos (+-20 graus), e nao +-90: desde
+    // 2026-08-21 a arena e o proprio FOV de 60 graus, entao um olhar a 90 cai
+    // fora dela. O que o teste prova continua sendo o sinal — virar para o +X
+    // do jogador tem de dar o flanco da direita.
+    const right = { x: Math.sin((20 * Math.PI) / 180), z: Math.cos((20 * Math.PI) / 180) };
+
+    expect(sectorOf(headingDegFromForward(right.x, right.z))).toBe("right");
+    expect(sectorOf(headingDegFromForward(-right.x, right.z))).toBe("left");
     expect(sectorOf(headingDegFromForward(0, 1))).toBe("center");
   });
 
+  it("olhar para os lados, alem da arena, nao seleciona setor nenhum", () => {
+    expect(sectorOf(headingDegFromForward(1, 0))).toBeNull();
+    expect(sectorOf(headingDegFromForward(-1, 0))).toBeNull();
+  });
+
   it("olhar para tras nao seleciona setor nenhum", () => {
-    // D1 da spec 08: nada induz o jogador a girar para fora do arco. O arco tem
-    // 180 graus, entao as costas dele sao terra de ninguem — e precisam ser
-    // reportadas como `null`, e nao como o setor mais proximo.
+    // `DR-1`: nada induz o jogador a girar para fora da arena. Tudo o que nao e
+    // o campo a frente e terra de ninguem — e precisa ser reportado como
+    // `null`, e nao como o setor mais proximo.
     expect(sectorOf(headingDegFromForward(0, -1))).toBeNull();
   });
 });

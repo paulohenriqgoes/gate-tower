@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluatePlacement, framedSectors } from "../arena/ArenaArc";
+import { ARENA_ARC_DEG, evaluatePlacement, reachableSectors } from "../arena/ArenaArc";
 import { CARD_CATALOG } from "../cards/cardCatalog";
 import { WaveDirector } from "./WaveDirector";
 import { FIRST_WAVE_CARD_ID, WAVE_PLAN } from "./wavePlan";
@@ -76,12 +76,19 @@ describe("WAVE_PLAN rodando no WaveDirector", () => {
     let spawned = 0;
 
     for (let elapsedMs = 0; elapsedMs <= 180_000; elapsedMs += 250) {
-      cameraYawDeg = -90 + ((elapsedMs / 250) % 145);
-      const framed = new Set(framedSectors(cameraYawDeg));
+      // Varre a arena inteira de ponta a ponta, com passo que nao e divisor da
+      // largura do arco — assim as leituras nao caem sempre nas mesmas
+      // fronteiras de setor.
+      const half = ARENA_ARC_DEG / 2;
+      cameraYawDeg = -half + ((elapsedMs / 250) % (ARENA_ARC_DEG + 7));
+      const reachable = new Set(reachableSectors(cameraYawDeg));
 
       for (const order of director.update(elapsedMs)) {
         spawned += 1;
-        expect(framed.has(order.sector)).toBe(false);
+        // O inimigo nunca nasce onde o jogador CONSEGUE AGIR agora. Ele pode
+        // nascer a vista — ver e de graca desde 2026-08-21 —, mas nunca dentro
+        // do cone que o jogador ja esta cobrindo.
+        expect(reachable.has(order.sector)).toBe(false);
         expect(evaluatePlacement(order.point).ok).toBe(true);
       }
     }
