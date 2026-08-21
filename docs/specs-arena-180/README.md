@@ -4,7 +4,7 @@
 na v3.** Se outro documento do repositorio afirmar estado de uma etapa, ele esta
 desatualizado e o certo e o que esta aqui.
 
-Ultima reconciliacao contra o codigo: **2026-08-20**.
+Ultima reconciliacao contra o codigo: **2026-08-21**.
 
 ## Para que serve, e o que NAO mora aqui
 
@@ -57,7 +57,7 @@ diz qual em cada caso.
 | Unidade | Nome | Estado | Evidencia / o que falta |
 | --- | --- | --- | --- |
 | RA-F2 | a arena vive na origem; o piso e declarado | `VALIDADA` | `066a5d7`. Partida completa jogada e **vencida** em device 2026-08-19 (Android/Chrome, testada pelo autor), telemetria `tower-gate-sessao-1787184130010.json`: `arena_placed` NORMAL aos 33,1 s, `match_ended` win aos 128,7 s, zero `tracking_lost`. O criterio de cinco entradas seguidas **deixou de ser exigido aqui** por `DR-4` (decisao do dono do projeto, 2026-08-20): ele virou refino de depois do game-flow |
-| RA-F3 | a altura do jogador e `origin.y` | `SUPERADA` | Pelo **device de 2026-08-20** mais decisao do dono do projeto. O engine **ignora** a altura declarada: em `scale: "absolute"` ele fixa `origin.y` em 1 m, e as quatro colocacoes com 1,55 declarado deram distancia camera-origem de 1,0049 / 0,9797 / 1,0134 / 1,0043. O controle mexia num numero descartado, e alem disso nao deve ser campo de tela. **Pendente**: remover os dois `HeightStepper`, anotado na JG-07. `src/ar/playerHeight.ts` fica como guarda de valor nao-finito |
+| RA-F3 | a altura do jogador e `origin.y` | `SUPERADA` | Pelo **device de 2026-08-20** mais decisao do dono do projeto. O engine **ignora** a altura declarada: em `scale: "absolute"` ele fixa `origin.y` em 1 m, e as quatro colocacoes com 1,55 declarado deram distancia camera-origem de 1,0049 / 0,9797 / 1,0134 / 1,0043. O controle mexia num numero descartado, e alem disso nao deve ser campo de tela. **Pendente parcial (2026-08-21)**: `613ae10` removeu o `HeightStepper` da tela inicial; o de `src/ar/EighthWallARManager.ts` continua la. Anotado na JG-07. `src/ar/playerHeight.ts` fica como guarda de valor nao-finito |
 | RA-F4 | `recenter()` e a colocacao | `EM DEVICE` | `confirmArenaHere()` chama `recenter()` e entra como transicao de fase. Rodou em device 2026-08-20 e **confirmou a `DR-3`**: `arena_placed` 54,4 s -> `tracking_lost LIMITED` 54,6 s, e de novo 252,1 s -> 252,5 s. **Dois defeitos abertos**: (1) o portao da transicao fecha no `NORMAL` velho do frame seguinte ao `recenter()`, e a arena aparece antes de o SLAM cair (painel mostra `arena: confirmada` com `trackingStatus: LIMITED`); (2) com a partida em andamento o gesto recoloca a arena e `handleArenaClosed` ignora, porque a fase nao e `ar-setup` — ver JG-11 |
 | RA-F5 | segunda sessao (a `reconfigureSession` saiu do titulo) | `VALIDADA` | Device 2026-08-20 (Android/Chrome, testado pelo autor): `lifecycle` leu `s1 …recenter>detach>remove` no menu e depois `s2 enter>start>attach>update` com coaching overlay e arco fantasma, sem recarregar a pagina, com arena no chao nas duas. `xr8Observers: 2` nas duas sessoes. A premissa da spec tinha caido antes — `reconfigureSession` lanca depois de `XR8.stop()`; a causa era o vazamento de observers de render do `attach` do `xrCameraBehavior`. O criterio original pedia **cinco** entradas; `DR-4` (2026-08-20) o reduziu as **duas** ja vistas e mandou as outras tres para o refino de depois do game-flow |
 | RA-F6 | adotar o que o `xrextras` ja resolve | `ABERTA` | — |
@@ -72,12 +72,12 @@ diz qual em cada caso.
 | JG-02 | escala de sala: 1 unidade = 1 metro | `IMPLEMENTADA` | `96c364e`. `AR_ARENA_SCALE` nao existe mais; `src/arena/metrics.ts` e a fonte de tamanho. **Falta o device**: o fade de proximidade a menos de 0,6 m nunca foi visto em RA — e agora tem um caso novo para olhar, porque a torre do jogador passou a viver a 0,9 m do jogador (JG-04) |
 | JG-03 | ancoragem egocentrica | `SUPERADA` | Por **RA-F2**. Nao existe mais ancoragem: a arena e autorada na origem e nunca se move, entao nao ha posicao para ancorar. `ArenaAnchor`, `closeArenaAtPlayer` e o gate de colocacao sairam do projeto |
 | JG-04 | diretor de ondas e convergencia ao jogador | `IMPLEMENTADA` | `WaveDirector` fiado no `GameFlow` com o `WAVE_PLAN` novo; `CombatEngine` reescrito para alvo unico (so a torre do jogador), colocacao validada pelo modelo polar, `getSectorThreats()` e `onEnemyDefeatedObservable`; `EnemyScript` e `DeploymentZone` removidos. Navegacao **radial** de verdade (`src/battle/radialApproach.ts`): o inimigo mantem o azimute ate o anel de fechamento, entao a seta de flanco nao mente no meio do trajeto. Convergencia, dano na torre, abate e coleira da tropa estao provados em `NullEngine` (`src/combat/CombatEngine.test.ts`). **Falta**: rodar no modo tela e ver a partida inteira (`npm run dev`) — ninguem jogou isto ainda |
-| JG-05 | alertas de flanco e audio espacial | `ABERTA` | `FlankAlert`, `visibilityRaycast` e `SpatialCues` nao existem. O projeto continua **sem modulo de audio**. O insumo ja esta pronto: `combatEngine.getSectorThreats()` entrega os tres setores com contagem e distancia do mais proximo (JG-04) |
+| JG-05 | alertas de flanco e audio espacial | `ABERTA` | `FlankAlert`, `visibilityRaycast` e `SpatialCues` nao existem. O projeto continua **sem modulo de audio**. O insumo ja esta pronto: `combatEngine.getSectorThreats()` entrega os tres setores com contagem e distancia do mais proximo (JG-04). **A premissa desta unidade mudou com a `DJ-9` (2026-08-21) e a spec ainda nao acompanhou**: os flancos nao escondem mais nada, entao o alerta deixa de existir para revelar o que esta cego e passa a existir para dar **folga de tempo** — a unica alavanca conhecida contra o limite de rotacao rapida (hipotese 10). Isso a promove de conforto a mitigacao de limite de hardware |
 | JG-06 | colocacao direta no chao | `ABERTA` | `PlacementRing` nao existe |
 | JG-07 | cartas presas ao jogador; o HUD 2D morre | `ABERTA` | `HandCards3D` nao existe; `CardDeckHud.ts` continua vivo. **Ganhou escopo em 2026-08-20**: remover os dois `HeightStepper` junto com o HUD 2D (a RA-F3 caiu por device + decisao) |
 | JG-08 | caldeirao fermentador | `ABERTA` | Nao existe `src/world/` |
 | JG-09 | economia de cartas: derrotado vira carta | `ABERTA` | `CardAlbum` e `CardStock` nao existem. O gatilho ja existe: `combatEngine.onEnemyDefeatedObservable` dispara com o `cardId` de cada criatura abatida (JG-04), e o `GameFlow` ja conta os abatidos no payload de fim de partida |
-| JG-10 | a intro: o gatilho e enquadrar | `ABERTA` | `FramingTrigger` e `FloorCrack` nao existem; `ProximityTrigger` continua sendo o gatilho. `GamePhase` tem 5 fases e esta etapa pede 7 |
+| JG-10 | a intro: o gatilho e enquadrar | `PARCIAL` | `613ae10`. `src/towers/FramingTrigger.ts` existe, tem teste (`FramingTrigger.test.ts`) e **rodou em device** 2026-08-21 (Android/Chrome, autor). **Falta**: `FloorCrack` nao existe, `GamePhase` continua com 5 fases (esta unidade pede 7), `ProximityTrigger` ainda esta no projeto, e o **criterio de aceite nao foi registrado** — varredura de raspao nao dispara, ~1,5 s no centro dispara, reacao gradual legivel. Sem esse registro nao sobe para `EM DEVICE` com criterio cumprido |
 | JG-11 | fim de partida e album | `ABERTA` | `AlbumScreen` nao existe. O ciclo de vida da sessao de RA migrou para RA-F5, mas em 2026-08-20 ela **ganhou o bug do replay**: da terceira partida seguida em diante o lado do jogo emudece e a maquina de estado nao acompanha (hipotese 9 do diario). E o unico defeito que hoje impede teste longo em device. A JG-04 mudou o payload de fim de partida: saiu o `enemyHpPct` (nao ha torre inimiga), entrou `enemiesDefeated` — que e o que o album vai mostrar |
 
 ### Verificar com
@@ -86,7 +86,7 @@ Todo estado acima e falsificavel. Rode este bloco inteiro da raiz do repositorio
 e confira contra a coluna `Estado` — se divergir, o quadro e que esta errado.
 
 ```bash
-# a suite nao se move enquanto so documentacao muda: 201 testes, 19 arquivos
+# a suite nao se move enquanto so documentacao muda: 236 testes, 21 arquivos (2026-08-21)
 npx tsc --noEmit && npm run test
 
 # RA-F2 e RA-F7.a commitadas
@@ -136,10 +136,11 @@ npx vitest run src/combat/CombatEngine.test.ts
 # JG-05 a JG-11 ABERTA: nenhum dos modulos previstos existe
 ls src/ui/FlankAlert.ts src/fx/visibilityRaycast.ts src/audio/ src/interaction/PlacementRing.ts \
    src/ui/HandCards3D.ts src/world/ src/cards/CardAlbum.ts src/cards/CardStock.ts \
-   src/towers/FramingTrigger.ts src/fx/FloorCrack.ts src/ui/AlbumScreen.ts 2>&1
+   src/fx/FloorCrack.ts src/ui/AlbumScreen.ts 2>&1
 
-# JG-10 ABERTA: GamePhase ainda tem 5 fases
-grep -n "GamePhase" src/game/GameTypes.ts
+# JG-10 PARCIAL: o gatilho novo existe, a fenda e as 7 fases nao
+ls src/towers/FramingTrigger.ts && ls src/fx/FloorCrack.ts 2>&1
+grep -n "GamePhase" src/game/GameTypes.ts   # ainda 5 fases
 ```
 
 Os greps das unidades `ABERTA` devem sair **vazios**; os `ls` devem dizer que o
@@ -204,6 +205,15 @@ perda de tempo.
 - **Oclusao real nao existe** neste stack (spec v3 §11). A oclusao da JG-05 e
   **geometrica contra a torre virtual**, nunca contra moveis reais. O binario nao
   tem meshing de sala, depth, nem classificacao de superficie.
+- **Rotacao rapida derruba o tracking, em qualquer amplitude** (visto em device
+  2026-08-21, build `613ae10`, Android/Chrome, pelo autor). Motion blur e perda de
+  correspondencia de features entre frames derrubam o VIO para dead reckoning por
+  IMU; o salto e a correcao voltando de uma vez. **O parametro e velocidade
+  angular, nao angulo** — a `DJ-9` encolheu a troca de mira para 20 graus entre
+  cones vizinhos e a arena saltou assim mesmo. Nao ha conserto na camada do app.
+  O que ha e design: **nenhuma mecanica pode exigir mais que N graus por segundo**,
+  e **N ainda nao foi medido** — a medicao e a hipotese 10 do diario. Cuidado ao
+  ler a hipotese 2: ela mediu amplitude com giro lento e nao cobre este eixo.
 - **Salto de relocalizacao do SLAM e mitigavel, nunca eliminavel** — o binario nao
   expoe anchor persistente por objeto. Ficar parado e a maior mitigacao
   disponivel, e a v3 nao pede deslocamento, entao ela e de graca.

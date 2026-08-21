@@ -1,9 +1,17 @@
 # Tower Gate
 
 Jogo de cartas em Realidade Aumentada (RA), jogado de pe, com o celular na mao:
-o jogador e o vertice de um arco de 180 graus e defende tres flancos com um campo
-de visao que cobre so um deles por vez. **Atencao — para onde o celular esta
-apontado — e o recurso escasso.**
+o jogador e o vertice da arena e defende tres flancos. **Atencao — para onde o
+celular esta apontado — e o recurso escasso.**
+
+**O que "atencao" significa mudou em 2026-08-21 (`DJ-9`).** Ate entao o recurso
+era **ver**: um arco de 180 graus contra um FOV de 60, com dois tercos sempre
+cegos. Hoje a arena e um retangulo a frente do jogador que **cabe inteiro no
+quadro** — ver e de graca — e o recurso caro e **agir**: colocar carta e mirar a
+fireball so acontecem dentro de um cone de 20 graus centrado na mira. A tensao e
+*"vejo tres incendios e so consigo apagar um por vez"*. A decisao esta em
+[`decisoes.md`](docs/specs-arena-180/decisoes.md) (`DJ-9`), e a fonte e o docblock
+de `src/arena/ArenaArc.ts`.
 
 A leitura de campo do Clash Royale continua sendo a referencia de origem, mas as
 lanes sairam de escopo na v3: nao ha caminho, e a tropa nasce onde o jogador
@@ -15,8 +23,9 @@ apontou.
 A [spec v3](docs/guias/tower_gate_spec_v3.md) (2026-08-17) parte de um
 diagnostico duro do prototipo atual: travando a camera e trocando por uma camera
 3D comum, **o jogo nao muda** — nada no gameplay depende da pose do dispositivo,
-e a RA e cenografia cara. A v3 transforma enquadramento em recurso escasso: ~60
-graus de campo de visao para cobrir um arco de 180, com dois tercos sempre cegos.
+e a RA e cenografia cara. A v3 transforma enquadramento em recurso escasso.
+*Cuidado ao ler a spec v3 e o storyboard: os dois descrevem o arco de 180 (e o de
+90) com flancos cegos, que a `DJ-9` superou — ver a abertura deste arquivo.*
 
 Com isso morrem a arena de mesa, o caminho unico central e o HUD 2D de combate.
 
@@ -46,9 +55,11 @@ A demo do mundo vivo foi **encerrada por mudanca de direcao**, nao por resposta:
 a pergunta dela nunca chegou a ser medida com alguem de fora, e o palco em que
 ela media saiu de escopo.
 
-### Bloqueadores conhecidos (2026-08-20, vistos em device)
+### Bloqueadores conhecidos (2026-08-21, vistos em device)
 
-Leia isto antes de mexer em qualquer coisa:
+Leia isto antes de mexer em qualquer coisa. **O mais novo e o item 6, e ele
+restringe design, nao codigo** — a numeracao e estavel, entao ele entrou no fim
+mesmo sendo o mais importante para a proxima sessao.
 
 1. **RESOLVIDO em 2026-08-20 — a segunda sessao de RA sobe sem recarregar a
    pagina.** Confirmado em device (Android/Chrome): o painel de `?debug=1` leu
@@ -110,6 +121,22 @@ Leia isto antes de mexer em qualquer coisa:
    so, num comodo que nao cabe.
 5. **Colocar a arena numa mesa/bancada** ficou **sem veredito para sempre**: a v3
    aposentou a pergunta, porque a arena nasce no chao ao redor do jogador.
+6. **Movimento brusco quebra o SLAM e a arena salta — em qualquer amplitude**
+   (novo, visto em device em 2026-08-21 no build `613ae10`, Android/Chrome, pelo
+   autor). **O parametro e velocidade angular, nao angulo**: a `DJ-9` encolheu a
+   troca de mira para 20 graus entre cones vizinhos e a arena saltou assim mesmo.
+   Nao ha conserto na camada do app — motion blur e perda de correspondencia de
+   features derrubam o VIO para dead reckoning por IMU, e o salto e a correcao
+   voltando de uma vez.
+
+   **Cuidado ao ler o paragrafo "deixou de ser bloqueador" abaixo:** os 7,5 cm de
+   mediana foram medidos por laco fechado, que exige giro **lento** para ser
+   medida. Ele vale, e vale so para rotacao lenta. O eixo de velocidade nunca foi
+   medido, e a medicao esta na hipotese 10 de
+   [`arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md): registrar
+   graus por segundo junto com `trackingStatus` ate sair um numero `N`, contra o
+   qual o design vira verificavel — *nenhuma mecanica pode exigir mais que N
+   graus por segundo*. Enquanto `N` nao existir, isto e observacao, nao restricao.
 
 **Fechados pela F2 (2026-08-19), com uma partida completa em device por cima
 deles:** a ordem de carregamento do `window.BABYLON` (o `xr.js` saiu do
@@ -133,7 +160,7 @@ O historico completo esta em
 
 ### Entregue
 
-Compila, com **204 testes** de logica pura passando. Ela foi de 253 (antes da F2)
+Compila, com **236 testes** em 21 arquivos passando (2026-08-21). Ela foi de 253 (antes da F2)
 para 180 — queda esperada, porque o que morreu testava medicao de piso e
 suavizacao da pose do preview — e voltou a subir com a RA-F3/F4/F5, que trouxeram
 o diff de observers de render, a normalizacao da altura declarada e a

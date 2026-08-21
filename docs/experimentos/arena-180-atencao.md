@@ -14,7 +14,7 @@ pe esta cada unidade vive em
 moravam aqui juntas, elas divergiram — o diario chegou a dizer "sem commit" para
 trabalho ja commitado.
 
-Ultima atualizacao: **2026-08-20**.
+Ultima atualizacao: **2026-08-21**.
 
 ## Objetivo
 
@@ -542,6 +542,98 @@ assentou no chao real com 1,55 m declarado e a melhor calibracao deu `delta 0.00
 Ou o bundle minificado foi lido errado, ou o 1,55 estava agindo por outro caminho.
 Virou a **hipotese 8** abaixo, e o criterio de aceite da RA-F3 a decide de graca.
 
+### (sem commit) — o processo, e a velocidade angular que a hipotese 2 nao mediu (2026-08-21)
+
+**Feito:** sessao sem uma linha de codigo. Auditoria do processo a pedido do dono
+do projeto, motivada por tres sintomas relatados: spec detalhada produz trabalho
+longo cujo resultado nao se parece com um jogo; a RA sai amadora; e as ultimas
+sessoes deram voltas, com ajustes pedidos que nao chegaram ao lugar certo.
+
+**Provou:**
+
+*A hipotese 2 mediu amplitude, e o que quebra o tracking e velocidade.* O veredito
+de 2026-08-19 ("nao derruba dentro do arco: 0,075 m de mediana") saiu de medicao
+por laco fechado, que exige giro lento e deliberado para poder ser medida. O jogo
+produz o movimento oposto: o alerta dispara e o jogador chicoteia o celular.
+Motion blur e funcao de velocidade angular vezes tempo de exposicao, nao de angulo
+total — um giro de 20 graus arrebenta o tracking igual a um de 90, se for rapido o
+bastante. O device desta sessao mostra isso com a arena ja retangular, onde trocar
+de cone de mira custa 20 graus. **A hipotese 2 nao esta errada; esta limitada a
+rotacao lenta**, e o eixo que falta virou a hipotese 10.
+
+*O `DJ-9` trocou o recurso central do jogo e existe so num comentario de codigo.*
+O docblock de `src/arena/ArenaArc.ts` (linhas 1-38) registra a virada: com arco de
+90 e flancos de 30, um FOV de 60 cobre os tres ao mesmo tempo e nao sobra
+esconderijo nenhum, entao **ver** passou a ser de graca e **agir** virou o recurso
+caro, dentro do `DEPLOY_CONE_DEG` de 20 graus centrado na mira. O comentario cita
+`DJ-9` em `decisoes.md`, e `DJ-9` **nao existe la** — o arquivo para no `DJ-8`, e o
+`DJ-7` ainda afirma `ARENA_ARC_DEG = 180`. O `README.md`, o quadro de estado e o
+storyboard tambem continuam descrevendo a tese antiga dos dois tercos cegos. Quem
+chega ao projeto le o fragmento em que esbarrar primeiro, e isso aconteceu nesta
+sessao — ver "Nao resolveu".
+
+*A troca de recurso do `DJ-9` nao reduziu a pressao sobre o tracking; mudou o tipo
+dela.* Com tudo em quadro some a pressao de **informacao** (nao e mais preciso
+varrer para descobrir) e entra a pressao de **acao** (o flanco vai furar agora e a
+mira precisa estar la). Pressao de informacao se atende quando o jogador quer;
+pressao de acao se atende imediatamente. A arena retangular reduziu a amplitude
+dos giros e pode ter aumentado a velocidade deles — que e exatamente o eixo que
+nunca foi medido.
+
+*O storyboard e o documento de design mais forte do repositorio, e o processo o
+arquivou como leitura opcional.* Sao 21 paineis desenhados (85 `rect`, 45
+`ellipse`, 35 `circle`, 16 `path`), com tabela de escala comparativa e pontas
+soltas nomeadas. A tabela "Para que serve" do quadro de estado o classifica como
+"o que o jogo e — design, nao execucao | atemporal", e com isso nenhuma spec ficou
+obrigada a le-lo: das sete specs abertas, **cinco tem painel correspondente e
+citam o storyboard zero vezes** (JG-05 e o painel 09, JG-06 o 11, JG-07 o 08,
+JG-08 o 07/14/15, JG-11 o 20). Some a isso que todo criterio de aceite do quadro e
+`npm run build`, `npm run test` ou `grep`: nenhum deles pode reprovar "nao e o
+painel 08".
+
+*O storyboard ja tinha diagnosticado o amadorismo visual, antes desta sessao.* A
+secao "Referencia de escala" diz: "o erro do prototipo atual e escala — os objetos
+leem como maquete sobre o piso; a torre precisa obstruir a visao para virar
+presenca", e prescreve tropa de 0,30 a 0,40 m. `TROOP_HEIGHT_M` caiu para 0,245 em
+2026-08-21, **abaixo do piso do storyboard**, e nem a tabela dele nem o comentario
+de `JavaliRaivoso.ts:15` (que ainda afirma 0,35 m) acompanharam. Um pedido, tres
+lugares onde o numero mora, um atualizado.
+
+*O pipeline de arte tem um passo sem dono, e o codigo preencheu o vazio.* O
+`guideline_personagens.md` §9 lista conceito escrito, imagem gerada, teste de
+silhueta, **modelo 3D low poly** e comportamento em codigo. O repo tem zero `.glb`
+proprio, zero textura e zero arquivo de som: os passos 2 a 4 nunca rodaram uma vez.
+Passo sem dono declarado nao fica pendente — e preenchido pelo que estiver
+disponivel, e o disponivel era montar primitivas do Babylon em TypeScript. O
+visual do jogo e o resultado disso, e nao de falta de spec.
+
+*Erro de posicionamento e testavel sem tela.* Os erros espaciais em spike e em ator
+novo nao vem de falta de skill: toda posicao e escrita por dead reckoning
+aritmetico, sem nenhuma forma de perceber que a malha caiu dentro de outra, atras
+da camera ou abaixo do piso — e a cena canhota, o azimute 0 em `+Z` via
+`atan2(x, z)` e a origem da camera de RA multiplicam as chances de erro de sinal,
+que e invisivel em review e obvio na tela. O `MushroomTower.ts` ja documenta esse
+erro exato ("erro que ja aconteceu uma vez na construcao deste arquivo"). O projeto
+ja tem `src/testing/nullEngineScene.ts`, e o invariante 3 ja admite `NullEngine`
+para fiacao; a mesma porta serve para **geometria** — asserir posicao de mundo,
+contencao de bounding box, frente da camera e piso.
+
+**Nao resolveu:** a recomendacao de arco desta sessao nasceu de leitura parcial e
+foi descartada. Ler `ARENA_ARC_DEG = DEVICE_FOV_DEG` (linha 76) e o fragmento da
+linha 72 ("era 180, passou por 90, e parou em 60") **sem** o docblock do modulo
+produziu o diagnostico errado de que o `60` tinha matado a tese por engano. Nao
+tinha: o `60` e o FOV virando referencia porque a arena inteira cabe no quadro, e a
+decisao foi coerente. Ninguem precisa refazer esse caminho — o docblock de
+`ArenaArc.ts` e a fonte, e ele ainda nao chegou a `decisoes.md`.
+
+**Resultado em device:** Android/Chrome, build `613ae10` (arena retangular,
+`FramingTrigger` no ar), testado pelo autor. **Movimento brusco quebra o SLAM e a
+arena salta**, mesmo com a troca de mira entre cones vizinhos custando 20 graus —
+o que sustenta a hipotese 10 e escopa a 2. O `FramingTrigger` **rodou em device**;
+o criterio de aceite dele (varredura de raspao nao dispara, ~1,5 s no centro
+dispara, reacao gradual legivel) nao foi reportado nesta sessao e continua por
+registrar.
+
 ## Hipoteses
 
 O progresso de validacao do experimento — o que ja foi respondido, o que foi
@@ -551,7 +643,7 @@ decide; hipotese sem teste e opiniao.
 | # | Hipotese | Situacao |
 |---|---|---|
 | 1 | a tese central pode simplesmente nao ser divertida | **VIVA** — sem nenhuma evidencia, a favor ou contra |
-| 2 | girar no lugar derruba o tracking | **RESPONDIDA** (2026-08-19) — nao derruba dentro do arco: 0,075 m de mediana |
+| 2 | girar no lugar derruba o tracking | **RESPONDIDA** (2026-08-19), **escopada a rotacao lenta** (2026-08-21) — nao derruba dentro do arco a giro deliberado: 0,075 m de mediana. Velocidade e outro eixo, ver 10 |
 | 3 | `DJ-6` (o Coelho trocando de setor) pode nao resolver nada | **VIVA** — so playtest responde |
 | 4 | a torre de 1,20 m pode intimidar crianca em festa | **VIVA** — nunca testada com crianca |
 | 5 | o cogumelo verde pode nao ter tuning viavel | **VIVA** — nao instrumentado |
@@ -559,6 +651,7 @@ decide; hipotese sem teste e opiniao.
 | 7 | a arena e grande demais para o comodo tipico | **VIVA** — uma medicao so, e num comodo que nao cabe |
 | 8 | em `scale: "absolute"` o engine ignora a altura declarada | **RESPONDIDA** (2026-08-20) — ignora mesmo: `origin.y` e fixado em 1 m, medido em device |
 | 9 | o jogo nao reseta a partir da terceira partida seguida | **VIVA** (2026-08-20) — visto em device; o lado do jogo emudece e o da RA continua |
+| 10 | existe um limiar de velocidade angular acima do qual o SLAM perde, e o jogo obriga o jogador a cruza-lo | **VIVA** (2026-08-21) — visto em device no build `613ae10`, nunca medido em graus por segundo |
 
 Ordenadas por suspeita, nao por ordem de descoberta. **A numeracao e estavel de
 proposito** — o README e as specs citam "hipotese 2" e "hipotese 6" pelo numero,
@@ -591,6 +684,14 @@ renumerar tudo.
    amostras nao decidem.
    **Teste:** entrar, marcar, fazer so varredura de flanco por 3 minutos, e medir
    o laco fechado a cada minuto.
+
+   **Cuidado ao ler esta hipotese (2026-08-21): ela mediu amplitude, nao
+   velocidade.** O laco fechado exige giro lento e deliberado para ser medida, e
+   por isso o veredito vale so para rotacao lenta. Em 2026-08-21 o autor viu, em
+   device, movimento **brusco** quebrar o SLAM e a arena saltar no build
+   `613ae10` — com a arena ja retangular, onde trocar de cone de mira custa 20
+   graus. O veredito acima continua de pe no escopo dele; o eixo que falta e a
+   hipotese 10.
 
 3. **`DJ-6` (o Coelho trocando de setor) pode nao resolver nada.** Foi escolhida para
    evitar dois defeitos conhecidos, sem evidencia de que a terceira opcao nao tem
@@ -741,3 +842,29 @@ renumerar tudo.
    o alvo e quem chama `clear()`. Conserto declarado na
    [JG-11](../specs-arena-180/JG-11-fim-album.md), que e a dona do replay.
 
+10. **Existe um limiar de velocidade angular acima do qual o SLAM perde, e o jogo
+    obriga o jogador a cruza-lo** (suspeita alta — entra logo depois da 1 na
+    ordem, porque ela condiciona a resposta da 1: se o jogo so e divertido acima
+    do limiar, a tese nao fecha neste stack). Visto em device em 2026-08-21, no
+    build `613ae10`, Android/Chrome, pelo autor: movimento brusco quebra o
+    tracking e a arena salta.
+
+    O mecanismo nao e novidade e nao tem conserto na camada do app: motion blur
+    e perda de correspondencia de features entre frames derrubam o VIO para
+    dead reckoning por IMU, e o salto e a correcao voltando de uma vez quando as
+    features reaparecem. O que **e** novidade e que isso acontece dentro do
+    envelope atual do jogo — o `DJ-9` encolheu a amplitude para 20 graus entre
+    cones vizinhos, e mesmo assim quebrou. Logo o parametro nao e o angulo.
+
+    Ha uma leitura de design junto: o `DJ-9` tirou a pressao de **informacao** e
+    pos no lugar a pressao de **acao**, que e atendida imediatamente em vez de
+    quando o jogador quer. Pode ter reduzido a amplitude e aumentado a
+    velocidade.
+
+    **Teste:** registrar por frame, na telemetria ja existente, a velocidade
+    angular da camera junto com `trackingStatus` e o delta de pose entre frames;
+    jogar duas sessoes e achar o percentil em que `LIMITED` e os saltos aparecem.
+    A saida e um numero em graus por segundo, proprio do aparelho, contra o qual
+    o design passa a ser verificavel: nenhuma mecanica pode exigir mais que N
+    graus por segundo. Enquanto esse numero nao existir, "movimento brusco
+    quebra" e observacao, nao restricao.
