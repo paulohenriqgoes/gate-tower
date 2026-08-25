@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Spike — pet sandbox</title>
+    <!--
+      O xr.js NAO e carregado aqui de proposito. `XR8.Babylonjs` e construido
+      EAGER no load do engine (`Babylonjs: mQ()`), e a fabrica so cria os
+      temporarios internos se `window.BABYLON` ja existir naquele instante.
+      Quem injeta o script, depois de instalar o shim, e o spike.ts.
+    -->
+    <script src="/coaching-overlay/coaching-overlay.js" async crossorigin="anonymous"></script>
+    <style>
+      /*
+        REGRA DE OURO DESTA TELA: o feed da camera e o objeto de teste.
+        A primeira versao cobria 60% da tela com painel de metricas e o resto
+        com botoes — sobrava uma faixa de camera, e o spike ficou impossivel de
+        testar. Toda informacao de diagnostico agora mora na gaveta do "···".
+        O que fica sempre visivel: uma pilula de estado, um chip de escala, e a
+        barra contextual com o que se pode fazer AGORA.
+      */
+      :root {
+        --superficie: rgba(250, 249, 246, 0.94);
+        --superficie-forte: rgba(250, 249, 246, 0.98);
+        --tinta: #1c1917;
+        --tinta-fraca: #6b6560;
+        --acento: #7fae97;
+        --acento-tinta: #14342a;
+        --alerta: #e8a33d;
+        --sombra: 0 2px 10px rgba(0, 0, 0, 0.28);
+        --raio: 14px;
+      }
+
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #05080c; }
+      #renderCanvas { width: 100%; height: 100%; touch-action: none; display: block; }
+
+      /*
+        A camada de HUD nao intercepta toque — quem pega toque e o canvas, que
+        e onde o pet e colocado. Só os controles reativam `pointer-events`.
+        Sem isso o HUD inteiro viraria uma tampa sobre a cena.
+      */
+      #hud {
+        position: fixed; inset: 0; z-index: 20; pointer-events: none;
+        font: 14px/1.35 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--tinta);
+        padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+        display: flex; flex-direction: column;
+      }
+
+      #topo { display: flex; align-items: flex-start; gap: 8px; }
+
+      #status {
+        background: var(--superficie); border-radius: 999px; padding: 7px 14px;
+        box-shadow: var(--sombra); font-size: 13px; white-space: nowrap;
+      }
+      #status.andando { background: var(--alerta); }
+      #status .ponto {
+        display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+        background: var(--acento); margin-right: 7px; vertical-align: middle;
+      }
+      #status.ruim .ponto { background: #d97757; }
+
+      #btn-debug {
+        margin-left: auto; pointer-events: auto;
+        width: 42px; height: 42px; border-radius: 50%; border: 0;
+        background: var(--superficie); box-shadow: var(--sombra);
+        color: var(--tinta-fraca); font-size: 18px; line-height: 1;
+        touch-action: manipulation;
+      }
+
+      #meio { flex: 1; display: flex; align-items: center; justify-content: center; }
+      #escala {
+        background: var(--superficie); border-radius: 999px; padding: 5px 13px;
+        box-shadow: var(--sombra); font-size: 13px; font-variant-numeric: tabular-nums;
+      }
+
+      #baixo { display: flex; flex-direction: column; gap: 8px; }
+
+      #dica {
+        background: var(--superficie); border-radius: var(--raio); padding: 12px 14px;
+        box-shadow: var(--sombra); font-size: 13px; color: var(--tinta-fraca);
+      }
+      #barra { height: 4px; border-radius: 2px; background: rgba(0, 0, 0, 0.1); margin-top: 9px; }
+      #barra > i { display: block; height: 100%; border-radius: 2px; background: var(--acento); width: 0%; }
+
+      .chips { display: flex; gap: 8px; pointer-events: auto; }
+      .chips > button {
+        flex: 1; appearance: none; border: 0; border-radius: var(--raio);
+        background: var(--superficie-forte); color: var(--tinta);
+        box-shadow: var(--sombra); font: inherit; font-size: 13px;
+        /* 48px de altura: o spike e testado EM PE e com UMA MAO. */
+        min-height: 48px; padding: 0 8px; touch-action: manipulation;
+      }
+      .chips > button:active { background: #eae7e1; }
+      .chips > button.ativo { background: var(--acento); color: var(--acento-tinta); }
+      .chips > button.armado { background: var(--alerta); color: var(--acento-tinta); }
+      .chips > button[disabled] { opacity: 0.4; }
+
+      #btn-enter {
+        pointer-events: auto; appearance: none; border: 0; border-radius: var(--raio);
+        background: var(--superficie-forte); color: var(--tinta); box-shadow: var(--sombra);
+        font: inherit; font-size: 15px; min-height: 56px; width: 100%;
+        touch-action: manipulation;
+      }
+
+      .oculto { display: none !important; }
+
+      /* Gaveta de diagnostico: tudo que era painel, agora atras de um toque. */
+      #gaveta {
+        position: fixed; inset: 0; z-index: 30; pointer-events: auto;
+        background: rgba(5, 8, 12, 0.94); color: #e8f0f8;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+        overflow-y: auto; white-space: pre-wrap;
+      }
+      #gaveta b { color: #7dd3fc; font-weight: normal; }
+      .warn { color: #fbbf24; }
+      .bad { color: #f87171; }
+      .good { color: #4ade80; }
+      .dim { color: #94a3b8; }
+      #gaveta .acoes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 14px 0; }
+      #gaveta .acoes button {
+        appearance: none; border: 1px solid rgba(160, 200, 255, 0.35); border-radius: 10px;
+        background: rgba(15, 26, 40, 0.92); color: #e8f0f8; font: inherit;
+        min-height: 48px; touch-action: manipulation;
+      }
+      #gaveta .acoes button.largo { grid-column: span 2; }
+    </style>
+  </head>
+  <body>
+    <canvas id="renderCanvas"></canvas>
+
+    <div id="hud">
+      <div id="topo">
+        <div id="status"><span class="ponto"></span>carregando</div>
+        <button id="btn-debug" aria-label="diagnostico">···</button>
+      </div>
+
+      <div id="meio">
+        <div id="escala" class="oculto">100%</div>
+      </div>
+
+      <div id="baixo">
+        <div id="dica">Toque em ENTRAR para ligar a câmera<div id="barra" class="oculto"><i></i></div></div>
+        <button id="btn-enter">ENTRAR EM RA</button>
+        <div class="chips oculto" id="chips-escala">
+          <button id="btn-mesa">Mesa</button>
+          <button id="btn-chao">Chão</button>
+          <button id="btn-real">1:1</button>
+        </div>
+        <div class="chips oculto" id="chips-acao">
+          <button id="btn-mode">mover: tocar</button>
+          <button id="btn-food">comida</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="gaveta" class="oculto">
+      <div id="metricas">—</div>
+      <div class="acoes">
+        <button id="btn-floor-down">chão −5 cm</button>
+        <button id="btn-floor-up">chão +5 cm</button>
+        <button id="btn-mark">MARCAR aqui</button>
+        <button id="btn-back">VOLTEI AO PONTO</button>
+        <button id="btn-reset">zerar estatísticas</button>
+        <button id="btn-fechar" class="largo">fechar</button>
+      </div>
+    </div>
+
+    <script type="module" src="/spike/pet-sandbox/spike.ts"></script>
+  </body>
+</html>

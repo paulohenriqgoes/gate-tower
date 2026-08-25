@@ -31,3 +31,6 @@ pnpm-debug.log*
 
 # OS files
 .DS_Store
+
+# Pack kenny
+kenney_cube-pets_1.0/

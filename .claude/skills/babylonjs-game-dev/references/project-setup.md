@@ -1,78 +1,36 @@
-# Setup de Projeto — Babylon.js + TypeScript + Vite
+# Setup e estrutura de um projeto WebAR
 
-## Por que Vite
-
-Vite é hoje a opção recomendada pela própria documentação do Babylon.js para novos projetos: dev server com hot-reload rápido, config simples e build otimizado (tree-shaking real) para produção. Webpack ainda funciona, mas exige configuração manual maior sem trazer vantagem para a maioria dos jogos.
-
-## Criando o projeto
+## Criar
 
 ```bash
-npm create vite@latest meu-jogo -- --template vanilla-ts
-cd meu-jogo
-npm install @babylonjs/core
+npm create vite@latest meu-ar -- --template vanilla-ts
+cd meu-ar
+npm install @babylonjs/core @8thwall/engine-binary
+npm install @babylonjs/loaders            # glTF/GLB
+npm install @babylonjs/gui                # HUD
+npm install @8thwall/coaching-overlay     # calibração de escala absoluta
+npm install -D @babylonjs/inspector
 ```
 
-Pacotes adicionais conforme a necessidade do jogo (não instale tudo de uma vez — cada um aumenta o bundle):
+Copie os artefatos do engine para a pasta pública (script `postinstall` ou plugin de
+cópia do Vite): `node_modules/@8thwall/engine-binary/dist` → `public/external/xr`.
 
-```bash
-npm install @babylonjs/loaders   # importar glTF/GLB, OBJ, STL, splat...
-npm install @babylonjs/havok     # física (WebAssembly)
-npm install @babylonjs/gui       # UI 2D/3D (menus, HUD)
-npm install @babylonjs/materials # materiais extras (grid, water, etc.)
-npm install @babylonjs/inspector --save-dev # debug layer, só em dev
-```
-
-## Estrutura de pastas sugerida
-
-Uma estrutura que separa "engine/infra" de "conteúdo de jogo" escala bem à medida que o projeto cresce:
-
-```
-meu-jogo/
-├── public/                # assets estáticos servidos como estão (modelos, texturas, áudio)
-│   └── assets/
-│       ├── models/
-│       ├── textures/
-│       └── audio/
-├── src/
-│   ├── main.ts             # ponto de entrada: cria Engine, inicia o primeiro State
-│   ├── core/                # infraestrutura reutilizável entre jogos
-│   │   ├── Game.ts          # classe raiz: Engine, canvas, render loop
-│   │   ├── StateManager.ts  # máquina de estados (ver architecture.md)
-│   │   └── AssetLoader.ts   # wrapper de carregamento de assets
-│   ├── states/               # cada estado do jogo (menu, gameplay, pause...)
-│   │   ├── MenuState.ts
-│   │   └── GameplayState.ts
-│   ├── entities/              # personagens, inimigos, itens
-│   └── systems/                # física, input, áudio, câmera
-├── index.html
-├── tsconfig.json
-└── vite.config.ts
-```
-
-Assets pesados (modelos 3D, texturas, áudio) vão em `public/`, não são importados como módulos TypeScript — isso evita nomes de arquivo ofuscados pelo bundler e mantém o carregamento assíncrono simples via URL relativa.
-
-## `vite.config.ts` mínimo
+## `vite.config.ts`
 
 ```ts
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  root: "./",
   publicDir: "public",
-  build: {
-    outDir: "dist",
-    emptyOutDir: true,
-    target: "es2020",
-  },
-  server: {
-    host: true, // permite testar no celular na mesma rede
-  },
+  build: { outDir: "dist", emptyOutDir: true, target: "es2020" },
+  server: { host: true },   // testar no celular na mesma rede
 });
 ```
 
-## `tsconfig.json`
+Fora de `localhost` a câmera exige HTTPS: `ngrok http <porta>` apontando para o dev
+server.
 
-Pontos que importam especificamente para Babylon.js:
+## `tsconfig.json` — o que importa aqui
 
 ```jsonc
 {
@@ -83,63 +41,85 @@ Pontos que importam especificamente para Babylon.js:
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "isolatedModules": true,
-    "resolveJsonModule": true
+    "isolatedModules": true
   },
   "include": ["src"]
 }
 ```
 
-`strict: true` vale a pena desde o início — a tipagem do Babylon.js é rica (vetores, matrizes, meshes tipados) e pega bastante erro de coordenadas/eixos trocados em tempo de compilação.
+`strict: true` pega bastante erro de coordenada/eixo trocado em tempo de compilação.
 
-## Imports: modular vs UMD
+## Imports
 
-Com bundler, sempre prefira os imports por caminho específico do `@babylonjs/core` em vez do pacote UMD global (`babylonjs`). Isso é o que permite ao Vite remover do bundle final tudo que o jogo não usa (física, GUI, loaders específicos etc.):
+Sempre por caminho específico — é o que dá tree-shaking real e derruba o tamanho do
+bundle, que em AR compete com o download do próprio engine:
 
 ```ts
-// Preferido em projetos com bundler
 import { Engine } from "@babylonjs/core/Engines/engine";
-import { Scene } from "@babylonjs/core/scene";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
-import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
-import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
-
-// Evitar em produção (importa o pacote inteiro, quebra tree-shaking)
-// import * as BABYLON from "@babylonjs/core";
+// Evitar: import * as BABYLON from "@babylonjs/core";
 ```
 
-Para os loaders (glTF etc.), prefira registrar dinamicamente em vez de importar tudo estaticamente — o Babylon.js já expõe uma função para isso que só baixa o loader específico quando o primeiro modelo daquele tipo é carregado (ver `gameplay-systems.md`).
-
-## `main.ts` de entrada
+Loaders: registre dinamicamente, em vez de importar tudo.
 
 ```ts
-import { Engine } from "@babylonjs/core/Engines/engine";
-import { Game } from "./core/Game";
-
-const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-const engine = new Engine(canvas, true, { powerPreference: "high-performance" });
-
-const game = new Game(engine, canvas);
-game.start();
-
-window.addEventListener("resize", () => engine.resize());
+import { registerBuiltInLoaders } from "@babylonjs/loaders/dynamic";
+registerBuiltInLoaders();
 ```
 
-`powerPreference: "high-performance"` pede ao navegador para usar a GPU dedicada (quando existir) em vez da integrada — vale a pena em jogos, já que o consumo de bateria é uma troca aceitável por FPS estável.
+Assets pesados (`.glb`, texturas, áudio) vão em `public/` e são carregados por URL —
+não importados como módulos. Um `.glb` que referencia textura externa (`"uri":
+"Textures/x.png"`) precisa da pasta **ao lado** do arquivo em `public/`.
 
-## Debug layer (Inspector)
+### Imports de efeito colateral: a classe de bug mais cara
 
-Importe o Inspector só em desenvolvimento (ele é pesado e não deve ir para produção):
+Parte da API do Babylon não vive na classe — é **anexada ao protótipo** por um
+módulo que você tem que importar só pelo efeito colateral. Com imports granulares
+ninguém traz esses módulos junto, e o resultado é sempre o mesmo: `tsc --noEmit`
+limpo, `npm run build` limpo, e explosão em runtime na primeira interação — em
+device, a dez metros de casa.
 
 ```ts
-if (import.meta.env.DEV) {
-  import("@babylonjs/inspector").then(() => {
-    scene.debugLayer.show();
-  });
+import "@babylonjs/core/Culling/ray";   // scene.pick, scene.createPickingRay
+```
+
+Sem ele, **todo toque** lança `Ray needs to be imported before as it contains a
+side-effect required by your code`. Se o picking é o mecanismo de colocação do
+seu jogo (chão digital, ver `SKILL.md` §2a), isso é o app inteiro.
+
+Nenhuma checagem estática pega isso. O que pega é um teste que afirma que a linha
+continua no arquivo — feio, e mais barato que uma sessão de device perdida.
+
+## Estados do jogo
+
+Um jogo de AR tem pelo menos três fases distintas: **pré-AR** (tela de permissão/
+instruções), **calibração** (coaching overlay até `NORMAL`), **jogo**. Cada uma tem seus
+recursos para liberar.
+
+```ts
+export abstract class GameState {
+  abstract enter(): Promise<void> | void;
+  abstract update(deltaMs: number): void;
+  abstract exit(): void;
 }
 ```
 
-## Deploy
+A regra que muda em AR: **o estado de AR não cria a própria `Scene`/câmera** — ele recebe
+as duas de `XR8.Babylonjs.xrScene()` e as guarda. E o `exit()` dele precisa de
+`XR8.stop()` além de `scene.dispose()`, porque a câmera do dispositivo continua ligada.
+Os estados não-AR seguem o padrão normal (`new Scene(engine)` no `enter()`,
+`scene.dispose()` no `exit()`).
 
-`npm run build` gera `dist/` — é um site estático, então qualquer host de arquivos estáticos serve (GitHub Pages, Netlify, Vercel, Cloudflare Pages). Não há servidor/backend necessário a menos que o jogo tenha multiplayer ou leaderboard.
+Movimento e timers sempre multiplicados por `engine.getDeltaTime()` (ms) — nunca assuma
+60 fps, que em AR mobile é justamente o que não acontece.
+
+## Inspector
+
+```ts
+if (import.meta.env.DEV) {
+  import("@babylonjs/inspector").then(() => scene.debugLayer.show());
+}
+```
+
+Só em dev. No device ele não substitui logar na própria tela: celular não tem console
+acessível.

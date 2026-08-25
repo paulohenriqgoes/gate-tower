@@ -62,6 +62,7 @@ descartado.
 | Diário | Assunto |
 | --- | --- |
 | [`arena-180-atencao.md`](docs/experimentos/arena-180-atencao.md) | Ativo: a v3 e se a RA dá para ser mecânica em vez de cenografia |
+| [`pet-sandbox.md`](docs/experimentos/pet-sandbox.md) | Ativo: coerência espacial de dois objetos, e o chão digital que substituiu o `hitTest` |
 | [`demo-mundo-vivo.md`](docs/experimentos/demo-mundo-vivo.md) | Encerrado: histórico de RA — calibração, gate de colocação, armadilhas de GUI |
 | [`ra-e-paisagem.md`](docs/experimentos/ra-e-paisagem.md) | Estabilidade da arena e orientação de tela |
 | [`ferramental-de-sessao.md`](docs/experimentos/ferramental-de-sessao.md) | Como o projeto registra o próprio progresso entre sessões |

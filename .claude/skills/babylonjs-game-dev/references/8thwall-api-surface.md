@@ -1,42 +1,18 @@
 # Superfície de API real do 8th Wall (engine binário self-hosted)
 
-Este documento descreve o que existe de fato em `@8thwall/engine-binary` — não o que os
-tutoriais dizem, não o que a doc promete, mas o que os bundles executam. É referência de
-API, não guia de troubleshooting: para drift, grounding, orientação de tela e as
-lições de campo de AR, ver `ar-xr-8thwall.md` (que cobre outro terreno e está sendo
-reescrito separadamente — não copie exemplos de código daqui para lá nem o contrário sem
-reconferir).
+O que `@8thwall/engine-binary` executa de fato — não o que os tutoriais dizem nem o que a
+doc promete. Referência de API; para drift, grounding e orientação de tela ver
+`ar-drift-e-grounding.md`.
 
-## Como ler este documento
+Citações no formato `` `arquivo.js` char N `` são offsets de caractere em
+`fs.readFileSync(arquivo, "utf8")` — reproduza com `s.slice(N-100, N+200)`. Código
+minificado citado em bloco foi reindentado para legibilidade; identificadores de uma/duas
+letras são os do bundle. Offsets valem para `@8thwall/engine-binary@1.0.0` e mudam a cada
+upgrade do engine.
 
-Toda afirmação aqui carrega uma de três procedências:
-
-1. **Trecho do bundle**, citado como `` `arquivo.js` char N `` — N é o offset de caractere
-   em `s = fs.readFileSync("arquivo.js", "utf8")`, achado com a receita do `node -e` +
-   `indexOf` (ver exemplo no início da sessão que gerou este documento). Bundles
-   minificados não têm quebras de linha úteis, então offset de caractere é o endereço que
-   sobra — reproduza com `s.slice(N-100, N+200)`. Código minificado citado em bloco foi
-   **reformatado com quebras de linha e indentação para legibilidade** — identificadores
-   de uma/duas letras (`A`, `g`, `xA`) foram mantidos exatamente como no bundle, só o
-   espaçamento mudou. Nada de semântica foi alterado.
-2. **Arquivo de exemplo oficial**, citado com caminho relativo ao clone (`studio-world-effects-example/src/tap-to-place.ts`, `threejs-world-effects-example/src/threejs-scene-init.js`) ou ao clone do monorepo (`packages/xrextras/src/...`).
-3. **URL da doc** (`8thwall.org/docs/...`), buscada via WebFetch. **Ressalva importante:**
-   WebFetch não devolve o HTML bruto — passa o conteúdo por um resumidor de IA antes de
-   devolver. Toda citação de doc aqui é "o que o WebFetch reportou da página", não a
-   transcrição literal do HTML. Onde isso importa (ex.: a assinatura de `XR8.run()`
-   reportada com argumentos posicionais, que contradiz todo código-exemplo real), o
-   documento sinaliza a suspeita explicitamente em vez de tratar o retorno como verdade
-   absoluta.
-
-Sem uma dessas três, a afirmação não entra. Onde bundle e doc divergem, os dois ficam
-registrados — ver a tabela final.
-
-**Fingerprint dos bundles usados nesta mineração** (eles vão mudar em upgrades do
-engine; se os offsets acima não baterem, é isso): `public/8thwall/xr.js` — 1.036.695
-bytes, sha256 `b397393686...`; `public/8thwall/xr-slam.js` — 5.538.007 bytes, sha256
-`398f675c92...`. Ambos vêm do pacote npm `@8thwall/engine-binary@1.0.0` (o range no
-`package.json` do projeto é `^1.0.0`; essa é a versão de fato instalada em
-`node_modules`).
+Onde bundle e doc divergem, os dois ficam registrados — ver a tabela final. A doc oficial
+não é fonte canônica: ela se contradiz internamente em pelo menos um ponto
+(`imageTargets` vs `imageTargetData`).
 
 ## `XR8` — o global
 
@@ -642,7 +618,7 @@ onAttach: ({ canvasWidth: g, canvasHeight: I }) => {
 Ou seja: **o `origin`/`facing` usados não são o default `{x:0,y:2,z:0}`** — são a
 posição/rotação reais da câmera Babylon no momento exato do `attach()`. `leftHandedAxes`
 vem de `!scene.useRightHandedSystem` — o motor lê a lateralidade da cena, não escolhe
-por você (confirma o que `ar-xr-8thwall.md` já registrava, agora com a linha exata).
+por você (confirma a regra de lateralidade do `SKILL.md`, agora com a linha exata).
 
 **`onUpdate`** — a cada frame, lê `processCpuResult.reality` (ou `.facecontroller`),
 extrai `rotation`/`position`/`intrinsics`, e:
@@ -733,14 +709,12 @@ de um jogo de sala.
   de pose é a baseline de `recenter()` (`p`/`f`, ver `updateCameraProjectionMatrix`
   acima) — um ponto só, para a cena inteira, não por objeto. O mecanismo mais próximo de
   "anchor real" é wayspot/VPS, e esse está bloqueado em modo standalone (ver abaixo).
-- **O motor do Studio (`packages/ecs`) não é uma saída de emergência.** No clone raso do
-  monorepo (commit `1eec666c5273cb8c971b15584c2ce75c1e9484cc`, `git ls-tree -r HEAD
-  --name-only` — comando que ignora qualquer filtro de sparse-checkout e lista o que o
-  commit realmente contém), `packages/ecs/` tem só `LICENSE`, `README.md`,
-  `RELEASING.md`, `package.json`, `tools/entry.js`, `tools/prepare.sh`. O `package.json`
-  declara `"license": "MIT"` e descreve o pacote como "The game engine behind 8th Wall
-  Studio" — mas **o código-fonte real não está no repositório público**, só o
-  empacotamento. A licença MIT não ajuda se o código não está lá para ler.
+- **O motor do Studio (`packages/ecs`) não é uma saída de emergência.** No monorepo
+  público, `packages/ecs/` tem só `LICENSE`, `README.md`, `RELEASING.md`,
+  `package.json`, `tools/entry.js`, `tools/prepare.sh`. O `package.json` declara
+  `"license": "MIT"` e descreve o pacote como "The game engine behind 8th Wall Studio" —
+  mas **o código-fonte real não está no repositório público**, só o empacotamento. A
+  licença MIT não ajuda se o código não está lá para ler.
 - **Semantics/Sky reconhece uma classe: `"sky"`.** `xr.js` char 861277:
   `const yC = ["sky"]` — literal, ao lado da struct `FrameworkSemanticsResponse`. As
   chamadas WASM relacionadas (`_c8EmAsm_initSemanticsRenderer`,
@@ -852,3 +826,46 @@ engine-específicos de outros frameworks e não se aplicam.
 | `XR8.Babylonjs.xrCameraBehavior` config | `webgl2` default `false` (via WebFetch) | Behavior não define `webgl2` — herda o default de `XR8.run()`, que é `true`; só `verbose:false` e `ownRunLoop:false` são de fato hardcoded pelo behavior | `ownRunLoop:false` bate exatamente entre doc e bundle; `webgl2:false` não tem base no código lido — tratado como possível ruído do resumo do WebFetch |
 | `XR8.Babylonjs` | Doc (`xrCameraBehavior`) não menciona `pipelineModule()`/`xrScene()` para Babylon | Bundle confirma: esses dois métodos **não existem** em `XR8.Babylonjs` (existem em `XR8.Threejs`/`XR8.CloudStudioThreejs`) | Busca negativa de string inteira no arquivo — 0 ocorrências de `"Babylonjs.xrScene"`/`"Babylonjs.pipelineModule"` |
 | `XrDevice` | 5 membros documentados | 7 no bundle | Faltam `deviceInfo`, `compatibilities` |
+
+
+## Como o engine consome orientação de tela
+
+Comportamento relevante para o esticamento da cena ao girar o aparelho — ver as
+recomendações práticas em `ar-drift-e-grounding.md`.
+
+- **Não é lido uma vez por sessão.** A cada frame o `frameStartResult` é remontado com
+  `orientation: K()`, e `K()` lê `screen.orientation.angle` ao vivo. Esse valor vai a cada
+  frame para o WASM via `_c8EmAsm_stageFrame(textureName, texW, texH, orientation, alpha,
+  beta, gamma, qw, qx, qy, qz, videoTime, frameTime, now, lat, lon, acc)`. Não existe
+  cache — "travar cedo e esperar a viewport estabilizar" não é uma hipótese viável.
+- **`K()` mapeia `angle`:** `0→0`, `90→90`, `180→180`, `270→-90`. As duas variantes de
+  paisagem dão valores **diferentes**. O engine nunca lê `screen.orientation.type`, só
+  `angle`. Em desktop (device não reconhecido como MOBILE) o retorno é fixo em `90`.
+- **O IMU é repassado cru.** `deviceorientation` (alpha/beta/gamma) vira um quaternion ZXY
+  em JS sem compensação pelo ângulo de tela e sem troca de eixos X/Y; `devicemotion` vai
+  direto ao WASM. A compensação para paisagem é 100% do WASM, usando o argumento
+  `orientation` — **se o `orientation` reportado discordar da pose física real, o IMU
+  inteiro entra girado**. É o ponto único de falha.
+- **Três canais atualizam o estado do WASM, e um é assimétrico:**
+
+  | Canal | Chamada | Leva `orientation`? |
+  |---|---|---|
+  | `onVideoSizeChange` | `_c8EmAsm_engineVideoSizeChange(videoW, videoH, orientation)` | sim |
+  | `onDeviceOrientationChange` | `_c8EmAsm_engineOrientationChange(videoW, videoH, orientation)` | sim |
+  | `onCanvasSizeChange` | só atualiza `pixelRectWidth/pixelRectHeight` | **não** |
+
+- **As constraints do `getUserMedia` são fixas e sempre em formato paisagem**
+  (`{width:{exact:1280},height:{exact:720}}` e fallbacks), sem relação com a orientação da
+  tela. O vídeo chega em coordenadas de sensor; não há re-request de stream ao girar.
+- **`camera.fov`/`camera.aspectRatio` do Babylon não são usados em AR.** A matriz de
+  projeção inteira é injetada por frame a partir das intrinsics do WASM via
+  `camera.freezeProjectionMatrix(matrix)`. O `pixelRect` que gera essas intrinsics é
+  gravado uma vez no `onAttach` (`pixelRectWidth || (pixelRectWidth = canvasWidth)` — só
+  grava se ainda for `0`) e depois só muda por `onCanvasSizeChange`, o canal que **não**
+  leva `orientation`. Canvas com aspecto novo contra intrinsics com aspecto velho é
+  exatamente o que estica a cena.
+- **O engine detecta resize de canvas sozinho:** compara as dimensões do canvas com um
+  cache a cada frame no `pre-render` e dispara `onCanvasSizeChange`. Chamar
+  `engine.resize()` do Babylon durante a sessão é redundante para o tracking — mas não é
+  inofensivo, e é o único gatilho de `engine.onResizeObservable`, do qual o GUI fullscreen
+  depende (ver `ui-e-texto-em-ar.md`).

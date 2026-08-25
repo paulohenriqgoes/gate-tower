@@ -132,7 +132,7 @@ Skill nova e o destino mais caro deste documento porque ela entra no contexto
 de toda sessao futura cuja `description` bater com o gatilho — uma skill sobre
 um caso unico e ruido permanente, nao ajuda. Na duvida, prefira editar uma
 skill existente (ex.: acrescentar uma secao em
-`ar-xr-8thwall.md`) a criar uma pasta nova.
+`ar-drift-e-grounding.md`) a criar uma pasta nova.
 
 ## 5. Como propor uma alteracao
 
@@ -145,7 +145,7 @@ Formato de cada proposta:
 
 ```
 Alvo: <arquivo, ex. memoria landscape-ar-incompativel ou
-       skill .claude/skills/babylonjs-game-dev/references/ar-xr-8thwall.md>
+       skill .claude/skills/babylonjs-game-dev/references/ar-drift-e-grounding.md>
 
 O que esta la hoje:
   <citacao literal da afirmacao atual>
@@ -187,7 +187,7 @@ o padrao deste repo, exemplificado por
   carrega o material tecnico extenso.
 - **Material longo em `references/`, carregado sob demanda**: cada arquivo
   cobre um subdominio (`project-setup.md`, `architecture.md`,
-  `gameplay-systems.md`, `performance.md`, `ar-xr-8thwall.md`) e so e lido
+  `ui-e-texto-em-ar.md`, `8thwall-api-surface.md`, `ar-drift-e-grounding.md`) e so e lido
   quando a tarefa cai naquele subdominio — este proprio arquivo que voce esta
   lendo segue o mesmo padrao dentro de `encerrar-sessao/references/`.
 
